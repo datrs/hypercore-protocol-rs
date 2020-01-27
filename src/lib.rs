@@ -5,6 +5,7 @@ use std::io::Result;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub mod noise;
 pub mod protocol;
 pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));

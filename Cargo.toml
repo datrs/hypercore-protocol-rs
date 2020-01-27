@@ -10,9 +10,12 @@ edition = "2018"
 simple-message-channels = "0.1.1"
 async-std = "1.4.0"
 futures = "0.3.1"
-snow = "0.6.2"
+# snow = { path = "../snow" }
+snow = { git = "https://github.com/Frando/snow.git", branch = "xchachapoly" }
 prost = "0.6.1"
 bytes = "0.5.4"
+varinteger = "1.0.6"
+rand = "0.7.3"
 
 [build-dependencies]
 prost-build = "0.6.1"
