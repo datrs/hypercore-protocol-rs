@@ -1,3 +1,4 @@
+use async_std::future;
 use bytes::Bytes;
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use futures::stream::TryStreamExt;
@@ -5,7 +6,6 @@ use prost::Message as ProstMessage;
 use simple_message_channels::{Message, Reader, Writer};
 use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
-use async_std::future;
 
 use crate::schema;
 

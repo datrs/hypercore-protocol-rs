@@ -1,7 +1,7 @@
-use async_std::net::{TcpStream};
+use async_std::net::TcpStream;
 use async_std::task::{Context, Poll};
 use futures::io::{AsyncRead, AsyncWrite};
-use std::io::{Result};
+use std::io::Result;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ pub async fn create_from_tcp_stream(stream: TcpStream, is_initiator: bool) -> Re
 }
 
 #[derive(Clone)]
-struct CloneableStream(Arc<TcpStream>);
+pub(crate) struct CloneableStream(Arc<TcpStream>);
 impl AsyncRead for CloneableStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<Result<usize>> {
         Pin::new(&mut &*self.0).poll_read(cx, buf)

@@ -1,8 +1,8 @@
-use async_std::net::{TcpStream,TcpListener};
+use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
-use std::io::{ErrorKind, Result};
 use std::env;
+use std::io::{ErrorKind, Result};
 
 use simple_hypercore_protocol::create_from_tcp_stream;
 
