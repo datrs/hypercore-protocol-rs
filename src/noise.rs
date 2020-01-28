@@ -39,7 +39,8 @@ pub async fn handshake(
     stream: TcpStream,
     is_initiator: bool,
 ) -> std::result::Result<(), SnowError> {
-    eprintln!("[init] initiator {}", is_initiator);
+    eprintln!("start handshaking");
+    eprintln!("initiator: {}", is_initiator);
     let stream = CloneableStream(Arc::new(stream));
     let mut reader = BufReader::new(stream.clone());
     let mut writer = BufWriter::new(stream.clone());
@@ -53,6 +54,8 @@ pub async fn handshake(
     let nonce_msg = encode_nonce_msg(local_nonce);
     // let mut nonce_sent = false;
     // let nonce_msg = [];
+    
+    eprintln!("---------");
 
     if is_initiator {
         let result = noise.write_message(&nonce_msg, &mut buf_tx);
@@ -87,13 +90,15 @@ pub async fn handshake(
         }
     }
 
-    eprintln!("handshake finished successfully!");
+    eprintln!("---------");
+    eprintln!("handshake complete!");
     eprintln!("remote pubkey: {:x?}", noise.get_remote_static().unwrap());
     eprintln!("remote payload len: {}", remote_payload_len);
     let remote_nonce = decode_nonce_msg(&buf_rx[..remote_payload_len]).unwrap();
     eprintln!("remote nonce: {:x?}", remote_nonce);
     eprintln!("handshake hash len: {}", noise.get_handshake_hash().len());
     eprintln!("handshake hash: {:x?}", noise.get_handshake_hash());
+    eprintln!("---------");
 
     // The following is a basic example on how to send messages with transport
     // encryption. This will not work with a hypercore-protocol stream
@@ -105,32 +110,26 @@ pub async fn handshake(
     if is_initiator == true {
         let msg = b"very secret";
         let len = noise_transport.write_message(msg, &mut out_buf).unwrap();
+        eprintln!("send msg: {}", String::from_utf8_lossy(msg));
+        eprintln!("send msg: msg len {} ciphertext len: {}", msg.len(), len);
         send(&mut writer, &out_buf[..len]).await.unwrap();
-        eprintln!("sent: {}", String::from_utf8_lossy(msg));
-        eprintln!("sent enc len: {}", len);
 
         let msg = b"hello!";
         let len = noise_transport.write_message(msg, &mut out_buf).unwrap();
+        eprintln!("send msg: {}", String::from_utf8_lossy(msg));
+        eprintln!("send msg: msg len {} ciphertext len: {}", msg.len(), len);
         send(&mut writer, &out_buf[..len]).await.unwrap();
-        eprintln!("sent: {}", String::from_utf8_lossy(msg));
-        eprintln!("sent enc len: {}", len);
     } else {
         let mut out_buf = vec![0u8; 200];
         let msg = recv(&mut reader).await.unwrap();
         let len = noise_transport.read_message(&msg, &mut out_buf).unwrap();
-        eprintln!(
-            "[read deciphered]: len {} '{}'",
-            len,
-            String::from_utf8_lossy(&out_buf[..len])
-        );
+        eprintln!("read msg: ciphertext len {}, msg len {}", msg.len(), len);
+        eprintln!("read msg: {}", String::from_utf8_lossy(&out_buf[..len]));
 
         let msg = recv(&mut reader).await.unwrap();
         let len = noise_transport.read_message(&msg, &mut out_buf).unwrap();
-        eprintln!(
-            "[read deciphered]: len {} '{}'",
-            len,
-            String::from_utf8_lossy(&out_buf[..len])
-        );
+        eprintln!("read msg: ciphertext len {}, msg len {}", msg.len(), len);
+        eprintln!("read msg: {}", String::from_utf8_lossy(&out_buf[..len]));
     };
 
     Ok(())

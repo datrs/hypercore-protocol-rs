@@ -10,7 +10,7 @@
 
 Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Works only *with NOISE and the capability system disabled!*
 
-See [this gist](https://gist.github.com/Frando/e123c29160d0d995ef2149e8e96a6717) for an NodeJS example. Note that to disable NOISE, [experimental pull requests](https://github.com/mafintosh/hypercore/pull/244) to [hypercore](https://github.com/hypercore) its dependencies are needed.
+See [this gist](https://gist.github.com/Frando/e123c29160d0d995ef2149e8e96a6717) for an NodeJS example. Note that to disable NOISE, [experimental pull requests](https://github.com/mafintosh/hypercore/pull/244) to [hypercore](https://github.com/hypercore) and its dependencies are needed.
 
 ### noise.rs
 
