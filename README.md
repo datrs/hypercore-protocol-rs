@@ -1,9 +1,6 @@
 # hypercore-protocol in Rust
 
-*Vaporware and first experiments only! I started this in my spare time, might be abandoned or become a proper crate and moved into [datrs](https://github.com/datrs).*
-
-NOTE: This does not yet include the NOISE handshake!
-To test against [hypercore](https://github.com/hypercore), use [this PR that allows to disable NOISE](https://github.com/mafintosh/hypercore/pull/244).
+*First experiments. I started this in my spare time, might be abandoned or later become a crate and moved into [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
 
 ## Examples
 
