@@ -55,23 +55,21 @@ pub async fn handshake(
     // let nonce_msg = [];
 
     if is_initiator {
-        let len = noise.write_message(&nonce_msg, &mut buf_tx).unwrap();
-        eprintln!("[send] len {}", len);
-        send(&mut writer, &buf_tx[..len]).await.unwrap();
+        let result = noise.write_message(&nonce_msg, &mut buf_tx);
+        match result {
+            Ok(len) => send(&mut writer, &buf_tx[..len]).await.unwrap(),
+            Err(e) => panic!("[error] handshake init write: {:?}", e),
+        }
     }
 
     let mut remote_payload_len;
 
     loop {
         let msg = recv(&mut reader).await.unwrap();
-        eprintln!("[recv] len {}", msg.len());
         let result = noise.read_message(&msg, &mut buf_rx);
         match result {
-            Ok(len) => {
-                remote_payload_len = len;
-                eprintln!("[recv decoded] len {}", len);
-            }
-            Err(e) => panic!("[error] at first noise read: {:?}", e),
+            Ok(len) => remote_payload_len = len,
+            Err(e) => panic!("[error] handshake read: {:?}", e),
         }
 
         if noise.is_handshake_finished() {
@@ -80,11 +78,8 @@ pub async fn handshake(
 
         let result = noise.write_message(&nonce_msg, &mut buf_tx);
         match result {
-            Ok(len) => {
-                eprintln!("[send] len {}", len);
-                send(&mut writer, &buf_tx[..len]).await.unwrap();
-            }
-            Err(e) => panic!("[error] at noise write: {:?}", e),
+            Ok(len) => send(&mut writer, &buf_tx[..len]).await.unwrap(),
+            Err(e) => panic!("[error] handshake write: {:?}", e),
         }
 
         if noise.is_handshake_finished() {
@@ -164,6 +159,7 @@ async fn send<W>(writer: &mut BufWriter<W>, buf: &[u8]) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
+    eprintln!("[send] len {}", buf.len());
     let buf_delimited = with_delimiter(buf);
     writer.write_all(&buf_delimited).await?;
     writer.flush().await?;
@@ -203,6 +199,7 @@ where
     // Read main message.
     let mut messagebuf = vec![0u8; varint as usize];
     reader.read_exact(&mut messagebuf).await?;
+    eprintln!("[recv] len {}", messagebuf.len());
     Ok(messagebuf)
 }
 
