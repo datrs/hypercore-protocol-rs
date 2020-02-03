@@ -10,7 +10,9 @@
   "author": "",
   "license": "GPL-3.0",
   "dependencies": {
+    "hypercore": "^8.6.0",
     "hypercore-protocol": "^7.7.1",
-    "noise-protocol": "github:emilbayes/noise-protocol#standard-dh"
+    "noise-protocol": "github:emilbayes/noise-protocol#standard-dh",
+    "random-access-memory": "^3.1.1"
   }
 }

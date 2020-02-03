@@ -1,8 +1,9 @@
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use async_std::io::{BufReader, BufWriter};
+use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message;
 use rand::Rng;
 use snow;
-use snow::{Builder, Error as SnowError, HandshakeState};
+use snow::{Builder, Error as SnowError, HandshakeState, Keypair};
 use std::io;
 use std::io::{Error, ErrorKind, Result};
 // use std::clone::Clone;
@@ -14,12 +15,26 @@ use crate::schema;
 
 const MAX_MESSAGE_SIZE: u64 = 65535;
 
-pub fn build_handshake_state(is_initiator: bool) -> std::result::Result<HandshakeState, SnowError> {
+#[derive(Debug, Clone)]
+pub struct HandshakeResult {
+    pub is_initiator: bool,
+    pub local_pubkey: Vec<u8>,
+    pub local_seckey: Vec<u8>,
+    pub remote_pubkey: Vec<u8>,
+    pub local_nonce: Vec<u8>,
+    pub remote_nonce: Vec<u8>,
+    pub split_tx: Vec<u8>,
+    pub split_rx: Vec<u8>,
+}
+
+pub fn build_handshake_state(
+    is_initiator: bool,
+) -> std::result::Result<(HandshakeState, Keypair), SnowError> {
     static PATTERN: &'static str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
     eprintln!("local pubkey: {:x?}", &key_pair.public);
-    let noise = if is_initiator {
+    let handshake_state = if is_initiator {
         builder
             .local_private_key(&key_pair.private)
             .build_initiator()
@@ -28,14 +43,14 @@ pub fn build_handshake_state(is_initiator: bool) -> std::result::Result<Handshak
             .local_private_key(&key_pair.private)
             .build_responder()
     };
-    noise
+    Ok((handshake_state?, key_pair))
 }
 
 pub async fn handshake<R, W>(
     reader: R,
     writer: W,
     is_initiator: bool,
-) -> std::result::Result<(R, W), Error>
+) -> std::result::Result<(BufReader<R>, BufWriter<W>, HandshakeResult), Error>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -52,10 +67,10 @@ where
         )
     };
 
-    let mut noise = build_handshake_state(is_initiator).map_err(map_err)?;
+    let (mut noise, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
 
     let local_nonce = generate_nonce();
-    let payload = encode_nonce_msg(local_nonce);
+    let payload = encode_nonce_msg(local_nonce.clone());
 
     let mut tx_buf = vec![0u8; 65535];
     let mut rx_buf = vec![0u8; 65535];
@@ -88,9 +103,36 @@ where
     eprintln!("handshakehash len: {}", noise.get_handshake_hash().len());
     eprintln!("handshakehash: {:x?}", noise.get_handshake_hash());
     eprintln!("remote payload len: {}", &rx_buf[..rx_len].len());
-    let _remote_nonce = decode_nonce_msg(&rx_buf[..rx_len]);
+    let remote_nonce = decode_nonce_msg(&rx_buf[..rx_len])?;
+    let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
-    Ok((reader.into_inner(), writer.into_inner()))
+    let split = noise.split_raw();
+    let split_tx;
+    let split_rx;
+    if is_initiator {
+        split_tx = split.0;
+        split_rx = split.1;
+    } else {
+        split_tx = split.1;
+        split_rx = split.0;
+    }
+
+    eprintln!("split rx: {:x?}", &split_rx);
+    eprintln!("split tx: {:x?}", &split_tx);
+
+    let result = HandshakeResult {
+        is_initiator,
+        local_nonce,
+        remote_nonce,
+        local_pubkey: local_keypair.public,
+        local_seckey: local_keypair.private,
+        remote_pubkey,
+        split_tx,
+        split_rx,
+    };
+
+    // Ok((reader.into_inner(), writer.into_inner()))
+    Ok((reader, writer, result))
 }
 
 fn generate_nonce() -> Vec<u8> {
