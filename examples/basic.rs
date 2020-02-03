@@ -1,16 +1,16 @@
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
+use async_trait::async_trait;
 use std::env;
 use std::io::{ErrorKind, Result};
 use std::sync::Arc;
-use async_trait::async_trait;
 
 // use simple_hypercore_protocol::create_from_tcp_stream;
-use simple_hypercore_protocol::{Protocol, Handlers, Message};
 use simple_hypercore_protocol::handshake::handshake;
 use simple_hypercore_protocol::schema;
-use simple_hypercore_protocol::protocol::{discovery_key,Proto};
+use simple_hypercore_protocol::types::Proto;
+use simple_hypercore_protocol::{discovery_key, Handlers, Message, Proto, Protocol};
 
 fn usage() {
     println!("usage: cargo run --example basic -- [client|server] [port] [key]");
@@ -72,10 +72,10 @@ async fn tcp_client(address: String, key: Option<String>) -> Result<()> {
 
 struct Feed {
     key: Vec<u8>,
-    discovery_key: Vec<u8>
+    discovery_key: Vec<u8>,
 }
 impl Feed {
-    pub fn new (key: Vec<u8>) -> Self {
+    pub fn new(key: Vec<u8>) -> Self {
         Self {
             discovery_key: discovery_key(&key),
             key,
@@ -84,16 +84,14 @@ impl Feed {
 }
 
 struct Feeds {
-    feeds: Vec<Feed>
+    feeds: Vec<Feed>,
 }
 impl Feeds {
-    pub fn new () -> Self {
-        Self {
-            feeds: vec![]
-        }
+    pub fn new() -> Self {
+        Self { feeds: vec![] }
     }
 
-    pub fn add (&mut self, feed: Feed) {
+    pub fn add(&mut self, feed: Feed) {
         self.feeds.push(feed);
     }
 }
@@ -104,19 +102,20 @@ impl Handlers for Feeds {
         eprintln!("RESOLVE {:x?}", discovery_key);
         match self.feeds.iter().find(|f| f.discovery_key == discovery_key) {
             Some(feed) => Some(feed.key.clone()),
-            None => None
+            None => None,
         }
     }
     async fn onopen(&self, protocol: &mut Proto, discovery_key: &[u8]) -> Result<()> {
         eprintln!("ONOPEN!!!! {:x?}", &discovery_key);
-        protocol.send(
-            &discovery_key,
-            Message::Want(schema::Want {
-                start: 0,
-                length: Some(1048576),
-            }),
-        )
-        .await?;
+        protocol
+            .send(
+                &discovery_key,
+                Message::Want(schema::Want {
+                    start: 0,
+                    length: Some(1048576),
+                }),
+            )
+            .await?;
         Ok(())
     }
 }
@@ -136,9 +135,7 @@ async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>
 
     // let handler = Handler {}
 
-    let mut protocol = Protocol::new(
-        reader, writer, Some(handshake)
-    );
+    let mut protocol = Protocol::new(reader, writer, Some(handshake));
 
     protocol.set_handlers(Arc::new(handlers));
 

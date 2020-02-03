@@ -1,4 +1,5 @@
 use async_std::io::{BufReader, BufWriter};
+use blake2_rfc::blake2b::Blake2b;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message;
 use rand::Rng;
@@ -6,12 +7,10 @@ use snow;
 use snow::{Builder, Error as SnowError, HandshakeState, Keypair};
 use std::io;
 use std::io::{Error, ErrorKind, Result};
-// use std::clone::Clone;
-// use std::sync::Arc;
-// use crate::CloneableStream;
 use varinteger;
 
-use crate::schema;
+use crate::constants::CAP_NS_BUF;
+use crate::schema::NoisePayload;
 
 const MAX_MESSAGE_SIZE: u64 = 65535;
 
@@ -25,6 +24,69 @@ pub struct HandshakeResult {
     pub remote_nonce: Vec<u8>,
     pub split_tx: Vec<u8>,
     pub split_rx: Vec<u8>,
+}
+
+impl HandshakeResult {
+    pub fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
+        let mut context = Blake2b::with_key(32, &self.split_rx[..32]);
+        context.update(CAP_NS_BUF);
+        context.update(&self.split_tx[..32]);
+        context.update(key);
+        let hash = context.finalize();
+        Some(hash.as_bytes().to_vec())
+    }
+
+    pub fn remote_capability(&self, key: &[u8]) -> Option<Vec<u8>> {
+        let mut context = Blake2b::with_key(32, &self.split_tx[..32]);
+        context.update(CAP_NS_BUF);
+        context.update(&self.split_rx[..32]);
+        context.update(key);
+        let hash = context.finalize();
+        Some(hash.as_bytes().to_vec())
+    }
+
+    pub fn verify_remote_capability(&self, capability: Option<Vec<u8>>, key: &[u8]) -> Result<()> {
+        let expected_capability = self.remote_capability(key);
+        match (capability, expected_capability) {
+            (Some(c1), Some(c2)) if c1 == c2 => Ok(()),
+            (None, None) => Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "Missing capabilities for verification",
+            )),
+            _ => Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "Invalid remote channel capability",
+            )),
+        }
+        // let
+        // let capability = match capability {
+        //     None => {
+        //         return Err(Error::new(
+        //             ErrorKind::PermissionDenied,
+        //             "Did not receive remote capability",
+        //         ));
+        //     }
+        //     Some(capability) => capability,
+        // };
+        // let expected_capability = self.remote_capability(key);
+        // let expected_capability = match expected_capability {
+        //     None => {
+        //         return Err(Error::new(
+        //             ErrorKind::PermissionDenied,
+        //             "Cannot verify capability",
+        //         ));
+        //     }
+        //     Some(expected_capability) => expected_capability,
+        // };
+        // if expected_capability != *capability {
+        //     Err(Error::new(
+        //         ErrorKind::PermissionDenied,
+        //         "Remote capability is invalid",
+        //     ))
+        // } else {
+        //     Ok(())
+        // }
+    }
 }
 
 pub fn build_handshake_state(
@@ -47,8 +109,8 @@ pub fn build_handshake_state(
 }
 
 pub async fn handshake<R, W>(
-    reader: R,
-    writer: W,
+    mut reader: BufReader<R>,
+    mut writer: BufWriter<W>,
     is_initiator: bool,
 ) -> std::result::Result<(BufReader<R>, BufWriter<W>, HandshakeResult), Error>
 where
@@ -57,8 +119,8 @@ where
 {
     eprintln!("start handshaking, initiator: {}", is_initiator);
 
-    let mut reader = BufReader::new(reader);
-    let mut writer = BufWriter::new(writer);
+    // let mut reader = BufReader::new(reader);
+    // let mut writer = BufWriter::new(writer);
 
     let map_err = |e| {
         Error::new(
@@ -72,8 +134,8 @@ where
     let local_nonce = generate_nonce();
     let payload = encode_nonce_msg(local_nonce.clone());
 
-    let mut tx_buf = vec![0u8; 65535];
-    let mut rx_buf = vec![0u8; 65535];
+    let mut tx_buf = vec![0u8; 512];
+    let mut rx_buf = vec![0u8; 512];
     let mut rx_len;
     let mut tx_len;
 
@@ -142,14 +204,14 @@ fn generate_nonce() -> Vec<u8> {
 
 fn encode_nonce_msg(nonce: Vec<u8>) -> Vec<u8> {
     // eprintln!("nonce len {} data {:x?}", nonce.len(), &nonce);
-    let nonce_msg = schema::NoisePayload { nonce };
+    let nonce_msg = NoisePayload { nonce };
     let mut buf = vec![0u8; 0];
     nonce_msg.encode(&mut buf).unwrap();
     buf
 }
 
 fn decode_nonce_msg(msg: &[u8]) -> Result<Vec<u8>> {
-    let decoded = schema::NoisePayload::decode(msg)?;
+    let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
 }
 
