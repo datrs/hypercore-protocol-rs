@@ -38,7 +38,7 @@ function onconnection (opts) {
     }
   })
 
-  const proto = new Protocol(isInitiator, { noise: true })
+  const proto = new Protocol(isInitiator, { noise: true, encryption: false })
 
   console.log('init protocol')
   console.log('local public key: ', proto.publicKey)
@@ -58,11 +58,12 @@ function onconnection (opts) {
     })
     console.log('noise handshake split lengths:', { rx: proto.state._split.rx.length, tx: proto.state._split.tx.length })
     console.log('noise handshake split:', proto.state._split)
-  })
-  proto.open(KEY, {
-    onopen () {
-      console.log('channel opened!')
-    }
+    console.log('now open channel')
+    proto.open(KEY, {
+      onopen () {
+        console.log('channel opened!')
+      }
+    })
   })
 }
 

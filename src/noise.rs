@@ -35,6 +35,7 @@ pub fn build_handshake_state(is_initiator: bool) -> std::result::Result<Handshak
     noise
 }
 
+
 pub async fn handshake(
     stream: TcpStream,
     is_initiator: bool,
@@ -162,7 +163,6 @@ where
     let buf_delimited = with_delimiter(buf);
     writer.write_all(&buf_delimited).await?;
     writer.flush().await?;
-    // eprintln!("send len {} final {}", buf.len(), buf_delimited.len());
     Ok(())
 }
 
