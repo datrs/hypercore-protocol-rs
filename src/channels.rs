@@ -1,9 +1,7 @@
 use hex;
 use std::collections::HashMap;
-// use std::future::Future;
 
-use crate::discovery_key;
-use crate::types::HandlerType;
+use crate::{discovery_key, HandlerType};
 
 #[derive(Clone)]
 pub struct Channel {
@@ -15,17 +13,27 @@ pub struct Channel {
 }
 
 impl Channel {
-    pub fn is_remote_open(&self) -> bool {
-        self.remote_id.is_some()
+    pub fn with_handlers(key: Vec<u8>, handlers: HandlerType) -> Self {
+        let discovery_key = discovery_key(&key);
+        Self {
+            local_id: None,
+            remote_id: None,
+            discovery_key: discovery_key,
+            key: Some(key),
+            handlers: Some(handlers),
+        }
     }
+    // pub fn is_remote_open(&self) -> bool {
+    //     self.remote_id.is_some()
+    // }
 
-    pub fn is_local_open(&self) -> bool {
-        self.local_id.is_some()
-    }
+    // pub fn is_local_open(&self) -> bool {
+    //     self.local_id.is_some()
+    // }
 
-    pub fn set_key(&mut self, key: Vec<u8>) {
-        self.key = Some(key)
-    }
+    // pub fn set_key(&mut self, key: Vec<u8>) {
+    //     self.key = Some(key)
+    // }
 }
 
 pub struct Channelizer {

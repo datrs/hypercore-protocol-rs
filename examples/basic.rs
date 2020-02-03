@@ -3,20 +3,18 @@ use async_std::stream::StreamExt;
 use async_std::task;
 use async_trait::async_trait;
 use std::env;
-use std::io::{ErrorKind, Result};
+use std::io::Result;
 use std::sync::Arc;
 
-// use simple_hypercore_protocol::create_from_tcp_stream;
-use simple_hypercore_protocol::handshake::handshake;
-use simple_hypercore_protocol::schema;
-use simple_hypercore_protocol::types::Proto;
-use simple_hypercore_protocol::{discovery_key, Handlers, Message, Proto, Protocol};
+use simple_hypercore_protocol::{discovery_key, schema, Handlers, Message, Proto, Protocol};
 
+/// Print usage and exit.
 fn usage() {
     println!("usage: cargo run --example basic -- [client|server] [port] [key]");
     std::process::exit(1);
 }
 
+/// Our main function. Starts either a TCP server or TCP client.
 fn main() {
     let count = env::args().count();
     if count < 3 {
@@ -42,23 +40,21 @@ fn main() {
 
 async fn tcp_server(address: String, key: Option<String>) -> Result<()> {
     let listener = TcpListener::bind(&address).await?;
-    println!("Listening on {}", listener.local_addr()?);
-
+    println!("listening on {}", listener.local_addr()?);
     let mut incoming = listener.incoming();
-    while let Some(stream) = incoming.next().await {
+    while let Some(Ok(stream)) = incoming.next().await {
         let key = key.clone();
-        let stream = stream?;
         let peer_addr = stream.peer_addr().unwrap();
         eprintln!("new connection from {}", peer_addr);
         task::spawn(async move {
-            match onconnection(stream, false, key).await {
-                Err(ref e) if e.kind() != ErrorKind::UnexpectedEof => {
-                    eprintln!("connection closed from {} with error: {}", peer_addr, e);
-                }
-                Err(_) | Ok(()) => {
-                    eprintln!("connection closed from {}", peer_addr);
-                }
-            }
+            let result = onconnection(stream, false, key).await;
+            eprintln!(
+                "connection closed from {} (error: {})",
+                peer_addr,
+                result
+                    .err()
+                    .map_or_else(|| "none".into(), |e| e.to_string())
+            );
         });
     }
     Ok(())
@@ -66,9 +62,10 @@ async fn tcp_server(address: String, key: Option<String>) -> Result<()> {
 
 async fn tcp_client(address: String, key: Option<String>) -> Result<()> {
     let stream = TcpStream::connect(&address).await?;
-    onconnection(stream, true, key).await?;
-    Ok(())
+    onconnection(stream, true, key).await
 }
+
+// This is where we start our application code.
 
 struct Feed {
     key: Vec<u8>,
@@ -121,24 +118,20 @@ impl Handlers for Feeds {
 }
 
 async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>) -> Result<()> {
-    let reader = stream.clone();
-    let writer = stream.clone();
-
-    let (reader, writer, handshake) = handshake(reader, writer, is_initiator).await?;
-
-    eprintln!("handshake complete! now init hypercore protocol");
-
     let mut handlers = Feeds::new();
     if let Some(key) = key {
         handlers.add(Feed::new(hex::decode(key).unwrap()));
     }
 
-    // let handler = Handler {}
+    let reader = stream.clone();
+    let writer = stream.clone();
+    let mut protocol = Protocol::from_rw_with_handshake(reader, writer, is_initiator).await?;
 
-    let mut protocol = Protocol::new(reader, writer, Some(handshake));
+    // This would need more type annotations.
+    // let protocol = Protocol::from_stream_with_handshake(stream, is_initiator).await?;
 
+    eprintln!("handshake complete! now start protocol");
     protocol.set_handlers(Arc::new(handlers));
-
     protocol.listen().await?;
 
     Ok(())

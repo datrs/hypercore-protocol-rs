@@ -8,8 +8,9 @@ pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
 }
 
+pub use channels::Channel;
 pub use message::{ExtensionMessage, Message};
-pub use protocol::{Handlers, Proto, Protocol};
+pub use protocol::{HandlerType, Handlers, Proto, Protocol};
 pub use schema::*;
 pub use util::discovery_key;
 

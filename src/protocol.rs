@@ -220,12 +220,8 @@ where
 
     async fn send_channel(&mut self, discovery_key: &[u8], msg: Message) -> Result<()> {
         match self.channels.get_local_id(&discovery_key) {
-            None => {
-                Err(Error::new(ErrorKind::BrokenPipe, "Channel is not open"))
-            },
-            Some(local_id) => {
-                self.send(local_id as u64, msg).await
-            }
+            None => Err(Error::new(ErrorKind::BrokenPipe, "Channel is not open")),
+            Some(local_id) => self.send(local_id as u64, msg).await,
         }
     }
 

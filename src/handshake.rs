@@ -58,34 +58,6 @@ impl HandshakeResult {
                 "Invalid remote channel capability",
             )),
         }
-        // let
-        // let capability = match capability {
-        //     None => {
-        //         return Err(Error::new(
-        //             ErrorKind::PermissionDenied,
-        //             "Did not receive remote capability",
-        //         ));
-        //     }
-        //     Some(capability) => capability,
-        // };
-        // let expected_capability = self.remote_capability(key);
-        // let expected_capability = match expected_capability {
-        //     None => {
-        //         return Err(Error::new(
-        //             ErrorKind::PermissionDenied,
-        //             "Cannot verify capability",
-        //         ));
-        //     }
-        //     Some(expected_capability) => expected_capability,
-        // };
-        // if expected_capability != *capability {
-        //     Err(Error::new(
-        //         ErrorKind::PermissionDenied,
-        //         "Remote capability is invalid",
-        //     ))
-        // } else {
-        //     Ok(())
-        // }
     }
 }
 
@@ -95,7 +67,7 @@ pub fn build_handshake_state(
     static PATTERN: &'static str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
-    eprintln!("local pubkey: {:x?}", &key_pair.public);
+    // eprintln!("local pubkey: {:x?}", &key_pair.public);
     let handshake_state = if is_initiator {
         builder
             .local_private_key(&key_pair.private)
@@ -118,9 +90,6 @@ where
     W: AsyncWrite + Unpin,
 {
     eprintln!("start handshaking, initiator: {}", is_initiator);
-
-    // let mut reader = BufReader::new(reader);
-    // let mut writer = BufWriter::new(writer);
 
     let map_err = |e| {
         Error::new(
@@ -159,12 +128,12 @@ where
         rx_len = noise.read_message(&msg, &mut rx_buf).map_err(map_err)?;
     }
 
-    eprintln!("handshake complete!");
+    // eprintln!("handshake complete!");
     // eprintln!("loc pk {:x?}", &local_keypair.public);
-    eprintln!("rem pk {:x?}", noise.get_remote_static().unwrap());
-    eprintln!("handshakehash len: {}", noise.get_handshake_hash().len());
-    eprintln!("handshakehash: {:x?}", noise.get_handshake_hash());
-    eprintln!("remote payload len: {}", &rx_buf[..rx_len].len());
+    // eprintln!("rem pk {:x?}", noise.get_remote_static().unwrap());
+    // eprintln!("handshakehash len: {}", noise.get_handshake_hash().len());
+    // eprintln!("handshakehash: {:x?}", noise.get_handshake_hash());
+    // eprintln!("remote payload len: {}", &rx_buf[..rx_len].len());
     let remote_nonce = decode_nonce_msg(&rx_buf[..rx_len])?;
     let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
@@ -179,8 +148,8 @@ where
         split_rx = split.0;
     }
 
-    eprintln!("split rx: {:x?}", &split_rx);
-    eprintln!("split tx: {:x?}", &split_tx);
+    // eprintln!("split rx: {:x?}", &split_rx);
+    // eprintln!("split tx: {:x?}", &split_tx);
 
     let result = HandshakeResult {
         is_initiator,
@@ -220,7 +189,7 @@ async fn send<W>(writer: &mut BufWriter<W>, buf: &[u8]) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    eprintln!("[send] len {}", buf.len());
+    // eprintln!("[send] len {}", buf.len());
     let buf_delimited = with_delimiter(buf);
     writer.write_all(&buf_delimited).await?;
     writer.flush().await?;
@@ -254,12 +223,10 @@ where
         factor = factor * 128;
     }
 
-    // eprintln!("read delim, len {}", varint);
-
     // Read main message.
     let mut messagebuf = vec![0u8; varint as usize];
     reader.read_exact(&mut messagebuf).await?;
-    eprintln!("[recv] len {}", messagebuf.len());
+    // eprintln!("[recv] len {}", messagebuf.len());
     Ok(messagebuf)
 }
 
