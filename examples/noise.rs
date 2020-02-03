@@ -1,7 +1,7 @@
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
-use simple_hypercore_protocol::noise;
+use simple_hypercore_protocol::{handshake, tcp_stream_to_reader_writer};
 use std::env;
 use std::io::{ErrorKind, Result};
 
@@ -63,7 +63,8 @@ async fn tcp_client(address: String) -> Result<()> {
 }
 
 async fn onconnection(stream: TcpStream, is_initiator: bool) -> Result<()> {
-    match noise::handshake(stream, is_initiator).await {
+    let (reader, writer) = tcp_stream_to_reader_writer(stream);
+    match handshake::handshake(reader, writer, is_initiator).await {
         Ok(_) => eprintln!("done without errors"),
         Err(e) => eprintln!("error {:?}", e),
     };

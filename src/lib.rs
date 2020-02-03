@@ -5,20 +5,28 @@ use std::io::Result;
 use std::pin::Pin;
 use std::sync::Arc;
 
-pub mod noise;
+pub mod handshake;
 pub mod protocol;
 pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
 }
 
 pub async fn create_from_tcp_stream(stream: TcpStream, is_initiator: bool) -> Result<()> {
-    let stream = CloneableStream(Arc::new(stream));
-    protocol::handle_connection(stream.clone(), stream.clone(), is_initiator).await?;
+    let (reader, writer) = tcp_stream_to_reader_writer(stream);
+    let (reader, writer) = handshake::handshake(reader, writer, is_initiator).await?;
+    protocol::handle_connection(reader, writer, is_initiator).await?;
     Ok(())
 }
 
+pub fn tcp_stream_to_reader_writer(stream: TcpStream) -> (CloneableStream, CloneableStream) {
+    let stream = CloneableStream(Arc::new(stream));
+    let mut reader = stream.clone();
+    let mut writer = stream.clone();
+    (reader, writer)
+}
+
 #[derive(Clone)]
-pub(crate) struct CloneableStream(Arc<TcpStream>);
+pub struct CloneableStream(Arc<TcpStream>);
 impl AsyncRead for CloneableStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<Result<usize>> {
         Pin::new(&mut &*self.0).poll_read(cx, buf)
