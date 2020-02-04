@@ -1,5 +1,6 @@
 mod channels;
 pub mod constants;
+mod handlers;
 pub mod handshake;
 mod message;
 pub mod protocol;
@@ -9,9 +10,9 @@ pub mod schema {
 }
 
 pub use channels::Channel;
+pub use handlers::{ChannelContext, ChannelHandlers, StreamContext, StreamHandlers};
 pub use message::{ExtensionMessage, Message};
 pub use protocol::Protocol;
-pub use protocol::{ChannelContext, ChannelHandlers, StreamContext, StreamHandlers};
 pub use schema::*;
 pub use util::discovery_key;
 

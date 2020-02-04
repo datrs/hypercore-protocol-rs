@@ -1,7 +1,7 @@
 use hex;
 use std::collections::HashMap;
 
-use crate::{discovery_key, protocol::ChannelHandlerType};
+use crate::{discovery_key, handlers::ChannelHandlerType};
 
 #[derive(Clone)]
 pub struct Channel {
