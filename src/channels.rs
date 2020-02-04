@@ -13,16 +13,16 @@ pub struct Channel {
 }
 
 impl Channel {
-    pub fn with_handlers(key: Vec<u8>, handlers: ChannelHandlerType) -> Self {
-        let discovery_key = discovery_key(&key);
-        Self {
-            discovery_key: discovery_key,
-            handlers: handlers,
-            key: Some(key),
-            local_id: None,
-            remote_id: None,
-        }
-    }
+    // pub fn with_handlers(key: Vec<u8>, handlers: ChannelHandlerType) -> Self {
+    //     let discovery_key = discovery_key(&key);
+    //     Self {
+    //         discovery_key: discovery_key,
+    //         handlers: handlers,
+    //         key: Some(key),
+    //         local_id: None,
+    //         remote_id: None,
+    //     }
+    // }
     // pub fn is_remote_open(&self) -> bool {
     //     self.remote_id.is_some()
     // }

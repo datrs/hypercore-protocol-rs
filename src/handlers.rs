@@ -10,8 +10,13 @@ pub(crate) struct DefaultHandlers {}
 #[async_trait]
 impl StreamHandlers for DefaultHandlers {}
 
+/// A type alias for [DynProtocol](DynProtocol) – this is the protocol handler you get
+/// within [StreamHandlers](StreamHandlers) to send messages and open channels.
 pub type StreamContext = (dyn DynProtocol);
 
+/// A trait object wrapper for [Protocol](Protocol). These are the methods you can call
+/// on the `context` parameter in [StreamHandlers](StreamHandlers) implementations.
+/// You should not need to implement this yourself.
 #[async_trait]
 pub trait DynProtocol: Send {
     async fn send(&mut self, discovery_key: &[u8], message: Message) -> Result<()>;
@@ -38,6 +43,9 @@ where
     }
 }
 
+/// The ChannelContext struct is the `context` parameter being passed to
+/// [ChannelHandlers](ChannelHandlers). It allows to send messages over the current channel,
+/// open new channels, or destroy the Protocol.
 pub struct ChannelContext<'a> {
     protocol: &'a mut dyn DynProtocol,
     discovery_key: &'a [u8],
@@ -67,6 +75,8 @@ impl<'a> ChannelContext<'a> {
 pub type StreamHandlerType = Arc<dyn StreamHandlers + Send + Sync>;
 pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
 
+/// Implement this trait on a struct to handle stream-level events. Pass the struct on which you
+/// implemented this trait into [protocol.set_handlers](Protocol::set_handlers).
 #[async_trait]
 pub trait StreamHandlers: Sync {
     async fn on_discoverykey(
@@ -78,8 +88,10 @@ pub trait StreamHandlers: Sync {
     }
 }
 
+/// Implement this trait on a struct to handle channel-level events. All methods are optional. Pass the struct on which you
+/// implemented this trait into [protocol.open](Protocol::open).
 #[async_trait]
-pub trait ChannelHandlers: Sync {
+pub trait ChannelHandlers: Send + Sync {
     async fn onmessage<'a>(
         &self,
         mut context: &'a mut ChannelContext<'a>,

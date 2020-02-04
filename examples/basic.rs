@@ -1,10 +1,13 @@
+use async_std::prelude::*;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
+use async_std::io;
 use async_trait::async_trait;
 use std::env;
 use std::io::Result;
 use std::sync::Arc;
+use pretty_hash::fmt as pretty_fmt;
 
 use simple_hypercore_protocol::{
     discovery_key, schema, ChannelContext, ChannelHandlers, Message, Protocol, StreamContext,
@@ -19,6 +22,7 @@ fn usage() {
 
 /// Our main function. Starts either a TCP server or TCP client.
 fn main() {
+    env_logger::init();
     let count = env::args().count();
     if count < 3 {
         usage();
@@ -48,10 +52,10 @@ async fn tcp_server(address: String, key: Option<String>) -> Result<()> {
     while let Some(Ok(stream)) = incoming.next().await {
         let key = key.clone();
         let peer_addr = stream.peer_addr().unwrap();
-        eprintln!("new connection from {}", peer_addr);
+        log::info!("new connection from {}", peer_addr);
         task::spawn(async move {
             let result = onconnection(stream, false, key).await;
-            eprintln!(
+            log::info!(
                 "connection closed from {} (error: {})",
                 peer_addr,
                 result
@@ -88,23 +92,45 @@ impl ChannelHandlers for Feed {
     async fn on_open<'a>(
         &self,
         context: &mut ChannelContext<'a>,
-        _discovery_key: &[u8],
+        discovery_key: &[u8],
     ) -> Result<()> {
-        eprintln!("onchannelopen!!!");
+        log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
         context
             .send(Message::Want(schema::Want {
                 start: 0,
                 length: Some(1048576),
             }))
             .await?;
-        context
-            .send(Message::Request(schema::Request {
-                index: 0,
-                bytes: None,
-                hash: None,
-                nodes: None,
-            }))
-            .await?;
+        // context
+        //     .send(Message::Request(schema::Request {
+        //         index: 0,
+        //         bytes: None,
+        //         hash: None,
+        //         nodes: None,
+        //     }))
+        //     .await?;
+        Ok(())
+    }
+
+    async fn on_have<'a>(
+        &self,
+        context: &mut ChannelContext<'a>,
+        msg: schema::Have,
+    ) -> Result<()> {
+        eprintln!("HELLO {:?}", msg);
+        match msg.start {
+            0 => {},
+            _ => {
+                for x in 0..msg.start {
+                    context.send(Message::Request(schema::Request {
+                        index: x,
+                        bytes: None,
+                        hash: Some(false),
+                        nodes: None
+                    })).await?;
+                }
+            }
+        };
         Ok(())
     }
 
@@ -113,7 +139,18 @@ impl ChannelHandlers for Feed {
         _context: &mut ChannelContext<'a>,
         msg: schema::Data,
     ) -> Result<()> {
-        eprintln!("DATA: {}", String::from_utf8(msg.value.unwrap()).unwrap());
+        
+        log::info!("data: idx {}, {} bytes", msg.index, msg.value.as_ref().map_or(0, |v| v.len()));
+        if let Some(value) = msg.value {
+            // println!("recv {:?}", value);
+            // println!("{}", String::from_utf8(value).unwrap());
+            let mut stdout = io::stdout();
+            stdout.write_all(&value).await?;
+            stdout.flush().await?;
+        }
+        // let value = msg.value.or(
+        // io::stdout().write_all()
+        // eprintln!("DATA: {}", String::from_utf8(msg.value.unwrap()).unwrap());
         Ok(())
     }
 }
@@ -138,7 +175,7 @@ impl StreamHandlers for Feeds {
         protocol: &mut StreamContext,
         discovery_key: &[u8],
     ) -> Result<()> {
-        eprintln!("RESOLVE {:x?}", discovery_key);
+        log::trace!("resolve discovery_key: {}", pretty_fmt(discovery_key).unwrap());
         let feed = self.feeds.iter().find(|f| f.discovery_key == discovery_key);
         match feed {
             None => Ok(()),
@@ -148,19 +185,18 @@ impl StreamHandlers for Feeds {
 }
 
 async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>) -> Result<()> {
-    let mut handlers = Feeds::new();
+    let mut feeds = Feeds::new();
     if let Some(key) = key {
-        handlers.add(Feed::new(hex::decode(key).unwrap()));
+        feeds.add(Feed::new(hex::decode(key).unwrap()));
     }
 
     let reader = stream.clone();
     let writer = stream.clone();
-    let mut protocol = Protocol::from_rw_with_handshake(reader, writer, is_initiator).await?;
-
-    // This would need more type annotations.
-    // let protocol = Protocol::from_stream_with_handshake(stream, is_initiator).await?;
-    eprintln!("handshake complete! now start protocol");
-    protocol.set_handlers(Arc::new(handlers));
+    let mut protocol = Protocol::from_rw(reader, writer, is_initiator).await?;
+    // This would need type annotations, which are ugly to type. I don't
+    // think there's a way around this at the moment.
+    // let mut protocol = Protocol::from_stream(stream, is_initiator).await?;
+    protocol.set_handlers(Arc::new(feeds));
     protocol.listen().await?;
 
     Ok(())

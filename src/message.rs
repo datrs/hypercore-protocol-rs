@@ -1,9 +1,12 @@
 use crate::schema::*;
 use bytes::Bytes;
+use pretty_hash::fmt as pretty_fmt;
 use prost::Message as ProstMessage;
 use simple_message_channels::Message as ChannelMessage;
+use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 
+/// A protocol message.
 #[derive(Debug)]
 pub enum Message {
     Open(Open),
@@ -20,10 +23,11 @@ pub enum Message {
     Extension(ExtensionMessage),
 }
 
+/// A extension message (not yet supported properly).
 #[derive(Debug)]
 pub struct ExtensionMessage {
-    id: u64,
-    message: Vec<u8>,
+    pub id: u64,
+    pub message: Vec<u8>,
 }
 impl ExtensionMessage {
     fn _new(id: u64, message: Vec<u8>) -> Self {
@@ -60,7 +64,7 @@ impl ExtensionMessage {
 impl Message {
     pub fn decode(typ: u8, buf: Vec<u8>) -> Result<Self> {
         let bytes = Bytes::from(buf);
-        eprintln!("decode! typ {}", typ);
+        // log::trace!("decode msg typ {}", typ);
         match typ {
             0 => Ok(Self::Open(Open::decode(bytes)?)),
             1 => Ok(Self::Options(Options::decode(bytes)?)),
@@ -101,4 +105,27 @@ fn encode_msg(msg: &mut impl ProstMessage) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; msg.encoded_len()];
     msg.encode(&mut buf)?;
     Ok(buf)
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Customize so only `x` and `y` are denoted.
+        match self {
+            Self::Open(msg) => write!(
+                f,
+                "Open(discovery_key: {}, capability <{}>)",
+                pretty_fmt(&msg.discovery_key).unwrap(),
+                msg.capability.as_ref().map_or(0, |c| c.len())
+            ),
+            Self::Data(msg) => write!(
+                f,
+                "Data(index {}, value: <{}>, nodes: {}, signature <{}>)",
+                msg.index,
+                msg.value.as_ref().map_or(0, |d| d.len()),
+                msg.nodes.len(),
+                msg.signature.as_ref().map_or(0, |d| d.len()),
+            ),
+            _ => write!(f, "{:?}", &self),
+        }
+    }
 }

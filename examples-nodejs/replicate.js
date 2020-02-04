@@ -51,7 +51,7 @@ function onconnection (opts) {
   // const proto = new Protocol(isInitiator, { noise: true, encrypted: false })
   feed.ready(() => {
     let mode = feed.writable ? 'write' : 'read'
-    const proto = feed.replicate(isInitiator, { encrypted: false })
+    const proto = feed.replicate(isInitiator, { encrypted: true })
 
     console.error('init protocol')
     console.error('key', feed.key.toString('hex'))
@@ -64,7 +64,9 @@ function onconnection (opts) {
     })
 
     if (mode === 'write') {
-      feed.append(['hello', 'world']);
+      // feed.append(feed.length)
+      feed.append('hello')
+      setTimeout(() => feed.append('world'), 500)
       // const filepath = p.join(os.homedir(), 'Musik', 'foo.mp3')
       // const rs = fs.createReadStream(filepath)
       // rs.pipe(feed.createWriteStream())

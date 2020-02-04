@@ -1,4 +1,4 @@
-use async_std::io::{BufReader, BufWriter};
+// use async_std::io::{BufReader, BufWriter};
 use blake2_rfc::blake2b::Blake2b;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message;
@@ -67,7 +67,7 @@ pub fn build_handshake_state(
     static PATTERN: &'static str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
-    // eprintln!("local pubkey: {:x?}", &key_pair.public);
+    // log::trace!("> hs local pubkey: {:x?}", &key_pair.public);
     let handshake_state = if is_initiator {
         builder
             .local_private_key(&key_pair.private)
@@ -81,20 +81,20 @@ pub fn build_handshake_state(
 }
 
 pub async fn handshake<R, W>(
-    mut reader: BufReader<R>,
-    mut writer: BufWriter<W>,
+    mut reader: &mut R,
+    mut writer: &mut W,
     is_initiator: bool,
-) -> std::result::Result<(BufReader<R>, BufWriter<W>, HandshakeResult), Error>
+) -> std::result::Result<HandshakeResult, Error>
 where
     R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
 {
-    eprintln!("start handshaking, initiator: {}", is_initiator);
+    log::trace!("> handshake start, role: {}", if is_initiator { "initiator" } else { "responder" });
 
     let map_err = |e| {
         Error::new(
             ErrorKind::PermissionDenied,
-            format!("Handshake error: {}", e),
+            format!("handshake error: {}", e),
         )
     };
 
@@ -128,12 +128,6 @@ where
         rx_len = noise.read_message(&msg, &mut rx_buf).map_err(map_err)?;
     }
 
-    // eprintln!("handshake complete!");
-    // eprintln!("loc pk {:x?}", &local_keypair.public);
-    // eprintln!("rem pk {:x?}", noise.get_remote_static().unwrap());
-    // eprintln!("handshakehash len: {}", noise.get_handshake_hash().len());
-    // eprintln!("handshakehash: {:x?}", noise.get_handshake_hash());
-    // eprintln!("remote payload len: {}", &rx_buf[..rx_len].len());
     let remote_nonce = decode_nonce_msg(&rx_buf[..rx_len])?;
     let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
@@ -148,8 +142,13 @@ where
         split_rx = split.0;
     }
 
-    // eprintln!("split rx: {:x?}", &split_rx);
-    // eprintln!("split tx: {:x?}", &split_tx);
+    log::trace!("> handshake complete");
+    // log::trace!("local pubkey {:x?}", &local_keypair.public);
+    // log::trace!("remot pubkey {:x?}", &remote_pubkey));
+    // log::trace!("split rx: {:x?}", &split_rx);
+    // log::trace!("split tx: {:x?}", &split_tx);
+    // log::trace!("remot nonce: {:x?}", &local_nonce);
+    // log::trace!("local nonce: {:x?}", &remote_nonce));
 
     let result = HandshakeResult {
         is_initiator,
@@ -162,8 +161,7 @@ where
         split_rx,
     };
 
-    // Ok((reader.into_inner(), writer.into_inner()))
-    Ok((reader, writer, result))
+    Ok(result)
 }
 
 fn generate_nonce() -> Vec<u8> {
@@ -172,7 +170,6 @@ fn generate_nonce() -> Vec<u8> {
 }
 
 fn encode_nonce_msg(nonce: Vec<u8>) -> Vec<u8> {
-    // eprintln!("nonce len {} data {:x?}", nonce.len(), &nonce);
     let nonce_msg = NoisePayload { nonce };
     let mut buf = vec![0u8; 0];
     nonce_msg.encode(&mut buf).unwrap();
@@ -185,11 +182,11 @@ fn decode_nonce_msg(msg: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Send a message with a varint prefix.
-async fn send<W>(writer: &mut BufWriter<W>, buf: &[u8]) -> io::Result<()>
+async fn send<W>(writer: &mut W, buf: &[u8]) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    // eprintln!("[send] len {}", buf.len());
+    // log::trace!("> hs send len {}", buf.len());
     let buf_delimited = with_delimiter(buf);
     writer.write_all(&buf_delimited).await?;
     writer.flush().await?;
@@ -197,9 +194,9 @@ where
 }
 
 /// Receive a varint-prefixed message.
-pub async fn recv<'a, R>(reader: &mut BufReader<R>) -> Result<Vec<u8>>
+pub async fn recv<R>(reader: &mut R) -> Result<Vec<u8>>
 where
-    R: AsyncRead + Send + Unpin + 'static,
+    R: AsyncRead + Send + Unpin,
 {
     let mut varint: u64 = 0;
     let mut factor = 1;
@@ -226,7 +223,7 @@ where
     // Read main message.
     let mut messagebuf = vec![0u8; varint as usize];
     reader.read_exact(&mut messagebuf).await?;
-    // eprintln!("[recv] len {}", messagebuf.len());
+    // log::trace!("> hs recv len {}", messagebuf.len());
     Ok(messagebuf)
 }
 
