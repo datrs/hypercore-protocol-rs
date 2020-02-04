@@ -10,7 +10,8 @@ pub mod schema {
 
 pub use channels::Channel;
 pub use message::{ExtensionMessage, Message};
-pub use protocol::{HandlerType, Handlers, Proto, Protocol};
+pub use protocol::Protocol;
+pub use protocol::{ChannelContext, ChannelHandlers, StreamContext, StreamHandlers};
 pub use schema::*;
 pub use util::discovery_key;
 

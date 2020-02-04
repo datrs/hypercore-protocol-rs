@@ -1,26 +1,26 @@
 use hex;
 use std::collections::HashMap;
 
-use crate::{discovery_key, HandlerType};
+use crate::{discovery_key, protocol::ChannelHandlerType};
 
 #[derive(Clone)]
 pub struct Channel {
-    pub(crate) local_id: Option<usize>,
-    pub(crate) remote_id: Option<usize>,
+    pub(crate) handlers: ChannelHandlerType,
     pub(crate) discovery_key: Vec<u8>,
     pub(crate) key: Option<Vec<u8>>,
-    pub(crate) handlers: Option<HandlerType>,
+    pub(crate) local_id: Option<usize>,
+    pub(crate) remote_id: Option<usize>,
 }
 
 impl Channel {
-    pub fn with_handlers(key: Vec<u8>, handlers: HandlerType) -> Self {
+    pub fn with_handlers(key: Vec<u8>, handlers: ChannelHandlerType) -> Self {
         let discovery_key = discovery_key(&key);
         Self {
+            discovery_key: discovery_key,
+            handlers: handlers,
+            key: Some(key),
             local_id: None,
             remote_id: None,
-            discovery_key: discovery_key,
-            key: Some(key),
-            handlers: Some(handlers),
         }
     }
     // pub fn is_remote_open(&self) -> bool {
@@ -117,7 +117,7 @@ impl Channelizer {
         self.channels.remove(&hdkey);
     }
 
-    pub fn attach_local(&mut self, key: Vec<u8>, handlers: Option<HandlerType>) -> Vec<u8> {
+    pub fn attach_local(&mut self, key: Vec<u8>, handlers: ChannelHandlerType) -> Vec<u8> {
         let discovery_key = discovery_key(&key);
         let hdkey = hex::encode(&discovery_key);
 
@@ -154,14 +154,16 @@ impl Channelizer {
             // that we keep a growing list of old remote_id mappings. Remove old?
             channel.remote_id = Some(remote_id);
         } else {
-            let channel = Channel {
-                key: None,
-                discovery_key: discovery_key,
-                local_id: None,
-                remote_id: Some(remote_id),
-                handlers: None,
-            };
-            self.channels.insert(hdkey.clone(), channel);
+            // TODO: Throw an error? This may not happen, as attach_remote()
+            // is never called on channels not opened by local also.
+            // let channel = Channel {
+            //     key: None,
+            //     discovery_key: discovery_key,
+            //     local_id: None,
+            //     remote_id: Some(remote_id),
+            //     handlers: None,
+            // };
+            // self.channels.insert(hdkey.clone(), channel);
         }
     }
 }

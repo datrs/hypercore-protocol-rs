@@ -6,7 +6,10 @@ use std::env;
 use std::io::Result;
 use std::sync::Arc;
 
-use simple_hypercore_protocol::{discovery_key, schema, Handlers, Message, Proto, Protocol};
+use simple_hypercore_protocol::{
+    discovery_key, schema, ChannelContext, ChannelHandlers, Message, Protocol, StreamContext,
+    StreamHandlers,
+};
 
 /// Print usage and exit.
 fn usage() {
@@ -80,8 +83,43 @@ impl Feed {
     }
 }
 
+#[async_trait]
+impl ChannelHandlers for Feed {
+    async fn on_open<'a>(
+        &self,
+        context: &mut ChannelContext<'a>,
+        _discovery_key: &[u8],
+    ) -> Result<()> {
+        eprintln!("onchannelopen!!!");
+        context
+            .send(Message::Want(schema::Want {
+                start: 0,
+                length: Some(1048576),
+            }))
+            .await?;
+        context
+            .send(Message::Request(schema::Request {
+                index: 0,
+                bytes: None,
+                hash: None,
+                nodes: None,
+            }))
+            .await?;
+        Ok(())
+    }
+
+    async fn on_data<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        msg: schema::Data,
+    ) -> Result<()> {
+        eprintln!("DATA: {}", String::from_utf8(msg.value.unwrap()).unwrap());
+        Ok(())
+    }
+}
+
 struct Feeds {
-    feeds: Vec<Feed>,
+    feeds: Vec<Arc<Feed>>,
 }
 impl Feeds {
     pub fn new() -> Self {
@@ -89,31 +127,23 @@ impl Feeds {
     }
 
     pub fn add(&mut self, feed: Feed) {
-        self.feeds.push(feed);
+        self.feeds.push(Arc::new(feed));
     }
 }
 
 #[async_trait]
-impl Handlers for Feeds {
-    fn ondiscoverykey(&self, discovery_key: &[u8]) -> Option<Vec<u8>> {
+impl StreamHandlers for Feeds {
+    async fn on_discoverykey(
+        &self,
+        protocol: &mut StreamContext,
+        discovery_key: &[u8],
+    ) -> Result<()> {
         eprintln!("RESOLVE {:x?}", discovery_key);
-        match self.feeds.iter().find(|f| f.discovery_key == discovery_key) {
-            Some(feed) => Some(feed.key.clone()),
-            None => None,
+        let feed = self.feeds.iter().find(|f| f.discovery_key == discovery_key);
+        match feed {
+            None => Ok(()),
+            Some(feed) => protocol.open(feed.key.clone(), feed.clone()).await,
         }
-    }
-    async fn onopen(&self, protocol: &mut Proto, discovery_key: &[u8]) -> Result<()> {
-        eprintln!("ONOPEN!!!! {:x?}", &discovery_key);
-        protocol
-            .send(
-                &discovery_key,
-                Message::Want(schema::Want {
-                    start: 0,
-                    length: Some(1048576),
-                }),
-            )
-            .await?;
-        Ok(())
     }
 }
 
@@ -129,7 +159,6 @@ async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>
 
     // This would need more type annotations.
     // let protocol = Protocol::from_stream_with_handshake(stream, is_initiator).await?;
-
     eprintln!("handshake complete! now start protocol");
     protocol.set_handlers(Arc::new(handlers));
     protocol.listen().await?;

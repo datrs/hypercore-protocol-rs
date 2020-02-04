@@ -9,19 +9,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::channels::{Channel, Channelizer};
+use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT};
 use crate::handshake::{handshake, HandshakeResult};
-use crate::message::Message;
+use crate::message::{ExtensionMessage, Message};
+// use crate::handlers::{ChannelContext, ChannelHandlers, StreamHandlers, StreamHandlerType, ChannelHandlerType};
 use crate::schema::*;
 use crate::util::discovery_key;
-
-use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT};
 
 pub struct Protocol<R, W> {
     raw_writer: BufWriter<W>,
     reader: Reader<BufReader<R>>,
     handshake: Option<HandshakeResult>,
     channels: Channelizer,
-    handlers: HandlerType,
+    handlers: StreamHandlerType,
+    error: Option<Error>,
 }
 
 impl<R, W> Protocol<R, W>
@@ -41,6 +42,7 @@ where
             handshake,
             channels: Channelizer::new(),
             handlers,
+            error: None,
         }
     }
 
@@ -75,12 +77,17 @@ where
         Ok(Protocol::new(reader, writer, Some(handshake)))
     }
 
-    pub fn set_handlers(&mut self, handlers: HandlerType) {
+    pub fn set_handlers(&mut self, handlers: StreamHandlerType) {
         self.handlers = handlers;
     }
 
     pub async fn listen(&mut self) -> Result<()> {
         loop {
+            // TODO: Check this later again.
+            if let Some(error) = self.error.take() {
+                return Err(error);
+            }
+
             // TODO: Implement timeout.
             let _timeout = Duration::from_secs(DEFAULT_TIMEOUT as u64);
             let keepalive = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
@@ -104,6 +111,10 @@ where
         }
     }
 
+    pub async fn destroy(&mut self, error: Error) {
+        self.error = Some(error)
+    }
+
     async fn onmessage(&mut self, message: ChannelMessage) -> Result<()> {
         let ChannelMessage {
             typ,
@@ -117,25 +128,44 @@ where
             Message::Close(msg) => self.onclose(channel, msg).await,
             Message::Extension(_msg) => unimplemented!(),
             _ => {
-                let channel = self.channels.get_remote(channel as usize);
-                match channel {
-                    None => eprintln!("Message on closed channel"),
-                    Some(channel) => {
-                        if let Some(handlers) = channel.handlers.as_ref() {
-                            handlers.onmessage(&channel.discovery_key, message);
-                        } else {
-                            self.handlers.onmessage(&channel.discovery_key, message);
-                        }
-                    }
-                };
-                Ok(())
+                let channel = self
+                    .channels
+                    .get_remote(channel as usize)
+                    .ok_or(Error::new(
+                        ErrorKind::BrokenPipe,
+                        "Received message on closed channel",
+                    ))?;
+
+                let discovery_key = channel.discovery_key.clone();
+                let handlers = channel.handlers.clone();
+                self.on_channel_message(handlers, discovery_key, message)
+                    .await
             }
         };
         Ok(())
     }
 
-    async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-        self.channels.attach_local(key.clone(), None);
+    async fn on_channel_message<'a>(
+        &'a mut self,
+        handlers: ChannelHandlerType,
+        discovery_key: Vec<u8>,
+        message: Message,
+    ) -> Result<()> {
+        let mut context = ChannelContext::from_channel(&mut *self, &discovery_key);
+        handlers.clone().onmessage(&mut context, message).await
+    }
+
+    async fn on_channel_open<'a>(
+        &'a mut self,
+        handlers: ChannelHandlerType,
+        discovery_key: Vec<u8>,
+    ) -> Result<()> {
+        let mut context = ChannelContext::from_channel(&mut *self, &discovery_key);
+        handlers.clone().on_open(&mut context, &discovery_key).await
+    }
+
+    async fn open(&mut self, key: Vec<u8>, handlers: ChannelHandlerType) -> Result<()> {
+        self.channels.attach_local(key.clone(), handlers);
         let discovery_key = discovery_key(&key);
         let capability = self.capability(&key);
         let message = Message::Open(Open {
@@ -178,17 +208,16 @@ where
             // No channel yet for this discovery key.
             None => {
                 // Call out to our ondiscoverykey handler to see if the application
-                // can provide the matching key.
-                let key = self.handlers.ondiscoverykey(&discovery_key);
-                match key {
-                    // If not, well, we don't know the key, so exit and out.
-                    // TODO: This shouldn't kill the stream.
-                    None => Err(Error::new(ErrorKind::AddrNotAvailable, "Key not found")),
-                    // Yay, we found a key! So let's open a channel from our side too.
-                    Some(key) => {
-                        self.open(key.clone()).await?;
-                        Ok(key)
-                    }
+                // wants to open a channel.
+                self.handlers
+                    .clone()
+                    .on_discoverykey(&mut *self, &discovery_key)
+                    .await?;
+
+                // And check again if the channel is there.
+                match self.channels.get(&discovery_key) {
+                    Some(Channel { key: Some(key), .. }) => Ok(key.to_vec()),
+                    _ => Err(Error::new(ErrorKind::BrokenPipe, "Key not found")),
                 }
             }
         };
@@ -202,12 +231,14 @@ where
         self.channels
             .attach_remote(discovery_key.clone(), ch as usize);
 
-        // Call the stream-level handler.
-        self.handlers
-            .clone()
-            .onopen(&mut *self, &discovery_key)
+        // Here, a channel should always be ready.
+        let channel = self.channels.get(&discovery_key).ok_or(Error::new(
+            ErrorKind::BrokenPipe,
+            "Failed to open a channel.",
+        ))?;
+        let handlers = channel.handlers.clone();
+        self.on_channel_open(handlers, discovery_key.to_vec())
             .await?;
-
         Ok(())
     }
 
@@ -253,13 +284,17 @@ where
 struct DefaultHandlers {}
 
 #[async_trait]
-impl Handlers for DefaultHandlers {}
+impl StreamHandlers for DefaultHandlers {}
 
-pub type Proto = (dyn DynProtocol + Send);
+pub type StreamContext = (dyn DynProtocol + Send);
+
 #[async_trait]
 pub trait DynProtocol {
     async fn send(&mut self, discovery_key: &[u8], message: Message) -> Result<()>;
+    async fn open(&mut self, key: Vec<u8>, handlers: ChannelHandlerType) -> Result<()>;
+    async fn destroy(&mut self, error: Error);
 }
+
 #[async_trait]
 impl<R, W> DynProtocol for Protocol<R, W>
 where
@@ -269,19 +304,144 @@ where
     async fn send(&mut self, discovery_key: &[u8], message: Message) -> Result<()> {
         self.send_channel(discovery_key, message).await
     }
-}
 
-pub type HandlerType = Arc<dyn Handlers + Send + Sync>;
-
-#[async_trait]
-pub trait Handlers: Sync {
-    fn ondiscoverykey(&self, _discovery_key: &[u8]) -> Option<Vec<u8>> {
-        None
+    async fn open(&mut self, key: Vec<u8>, handlers: ChannelHandlerType) -> Result<()> {
+        self.open(key, handlers).await
     }
 
-    async fn onopen(&self, _protocol: &mut Proto, _discovery_key: &[u8]) -> Result<()> {
+    async fn destroy(&mut self, error: Error) {
+        self.destroy(error).await
+    }
+}
+
+pub struct ChannelContext<'a> {
+    protocol: &'a mut (dyn DynProtocol + Send),
+    discovery_key: &'a [u8],
+}
+
+impl<'a> ChannelContext<'a> {
+    pub fn from_channel(protocol: &'a mut StreamContext, discovery_key: &'a [u8]) -> Self {
+        Self {
+            discovery_key: discovery_key,
+            protocol,
+        }
+    }
+    pub async fn send(&mut self, message: Message) -> Result<()> {
+        let discovery_key = self.discovery_key;
+        self.protocol.send(discovery_key, message).await
+    }
+
+    pub async fn _destroy(&mut self, error: Error) {
+        self.protocol.destroy(error).await
+    }
+}
+
+pub type StreamHandlerType = Arc<dyn StreamHandlers + Send + Sync>;
+pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
+
+#[async_trait]
+pub trait StreamHandlers: Sync {
+    async fn on_discoverykey(
+        &self,
+        _protocol: &mut StreamContext,
+        _discovery_key: &[u8],
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait ChannelHandlers: Sync {
+    async fn onmessage<'a>(
+        &self,
+        mut context: &'a mut ChannelContext<'a>,
+        message: Message,
+    ) -> Result<()> {
+        match message {
+            Message::Options(msg) => self.on_options(&mut context, msg).await,
+            Message::Status(msg) => self.on_status(&mut context, msg).await,
+            Message::Have(msg) => self.on_have(&mut context, msg).await,
+            Message::Unhave(msg) => self.on_unhave(&mut context, msg).await,
+            Message::Want(msg) => self.on_want(&mut context, msg).await,
+            Message::Unwant(msg) => self.on_unwant(&mut context, msg).await,
+            Message::Request(msg) => self.on_request(&mut context, msg).await,
+            Message::Cancel(msg) => self.on_cancel(&mut context, msg).await,
+            Message::Data(msg) => self.on_data(&mut context, msg).await,
+            Message::Extension(msg) => self.on_extension(&mut context, msg).await,
+            // Open is handled at the stream level.
+            // Message::Open(msg) => self.on_open(&mut context, msg),
+            Message::Close(msg) => self.on_close(&mut context, msg).await,
+            _ => Ok(()),
+        }
+    }
+
+    async fn on_open<'a>(
+        &self,
+        _protocol: &mut ChannelContext<'a>,
+        _discovery_key: &[u8],
+    ) -> Result<()> {
         Ok(())
     }
 
-    fn onmessage(&self, _discovery_key: &[u8], _message: Message) {}
+    async fn on_status<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Status,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_options<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Options,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_have<'a>(&self, _context: &mut ChannelContext<'a>, _message: Have) -> Result<()> {
+        Ok(())
+    }
+    async fn on_unhave<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Unhave,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_want<'a>(&self, _context: &mut ChannelContext<'a>, _message: Want) -> Result<()> {
+        Ok(())
+    }
+    async fn on_unwant<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Unwant,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_request<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Request,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_cancel<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: Cancel,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn on_data<'a>(&self, _context: &mut ChannelContext<'a>, _message: Data) -> Result<()> {
+        Ok(())
+    }
+    async fn on_close<'a>(&self, _context: &mut ChannelContext<'a>, _message: Close) -> Result<()> {
+        Ok(())
+    }
+    async fn on_extension<'a>(
+        &self,
+        _context: &mut ChannelContext<'a>,
+        _message: ExtensionMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
