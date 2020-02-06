@@ -20,7 +20,7 @@ pub struct ProtocolOptions {
     pub is_initiator: bool,
     pub noise: bool,
     pub encrypted: bool,
-    pub handlers: Option<ChannelHandlerType>
+    pub handlers: Option<ChannelHandlerType>,
 }
 
 impl ProtocolOptions {
@@ -30,7 +30,7 @@ impl ProtocolOptions {
             is_initiator,
             noise: true,
             encrypted: true,
-            handlers: None
+            handlers: None,
         }
     }
 

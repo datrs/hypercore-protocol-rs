@@ -10,7 +10,7 @@ use std::env;
 use std::io::Result;
 
 use simple_hypercore_protocol::{
-    discovery_key, schema, schema::*, ChannelContext, ChannelHandlers, Message, Protocol,
+    discovery_key, schema::*, ChannelContext, ChannelHandlers, Message, Protocol,
     StreamContext, StreamHandlers,
 };
 
@@ -93,11 +93,14 @@ async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>
 #[derive(Debug)]
 struct FeedState {
     remote_head: u64,
-    started: bool
+    started: bool,
 }
 impl Default for FeedState {
     fn default() -> Self {
-        FeedState { remote_head: 0, started: false }
+        FeedState {
+            remote_head: 0,
+            started: false,
+        }
     }
 }
 
@@ -132,7 +135,6 @@ impl ChannelHandlers for Feed {
         });
         channel.send(msg).await?;
 
-
         Ok(())
     }
 
@@ -140,14 +142,14 @@ impl ChannelHandlers for Feed {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
         log::info!(
-            "receive have: start {:} (state {:?})",
+            "receive have: {} (state {})",
             msg.start,
             state.remote_head
         );
         if msg.start > state.remote_head {
             // Store the new remote head.
             state.remote_head = msg.start;
-            // If we didn't start reading, request first data block. 
+            // If we didn't start reading, request first data block.
             if !state.started {
                 state.started = true;
                 let msg = Message::Request(Request {
@@ -162,7 +164,7 @@ impl ChannelHandlers for Feed {
         Ok(())
     }
 
-    async fn on_data<'a>(&self, channel: &mut ChannelContext<'a>, msg: schema::Data) -> Result<()> {
+    async fn on_data<'a>(&self, channel: &mut ChannelContext<'a>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
         log::info!(
             "receive data: idx {}, {} bytes (remote_head {})",
@@ -217,7 +219,10 @@ impl StreamHandlers for FeedStore {
             "resolve discovery_key: {}",
             pretty_fmt(discovery_key).unwrap()
         );
-        let feed = self.feeds.iter().find(|feed| feed.discovery_key == discovery_key);
+        let feed = self
+            .feeds
+            .iter()
+            .find(|feed| feed.discovery_key == discovery_key);
         match feed {
             None => Ok(()),
             Some(feed) => {
