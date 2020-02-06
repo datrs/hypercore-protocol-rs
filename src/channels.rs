@@ -36,6 +36,7 @@ impl Channel {
     // }
 }
 
+/// The Channelizer maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
 pub struct Channelizer {
     channels: HashMap<String, Channel>,
     local_id: Vec<Option<String>>,

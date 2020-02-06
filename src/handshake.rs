@@ -89,7 +89,14 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    log::trace!("> handshake start, role: {}", if is_initiator { "initiator" } else { "responder" });
+    log::trace!(
+        "> handshake start, role: {}",
+        if is_initiator {
+            "initiator"
+        } else {
+            "responder"
+        }
+    );
 
     let map_err = |e| {
         Error::new(

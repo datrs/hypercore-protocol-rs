@@ -20,6 +20,7 @@ pub struct ProtocolOptions {
     pub is_initiator: bool,
     pub noise: bool,
     pub encrypted: bool,
+    pub handlers: Option<ChannelHandlerType>
 }
 
 impl ProtocolOptions {
@@ -29,6 +30,7 @@ impl ProtocolOptions {
             is_initiator,
             noise: true,
             encrypted: true,
+            handlers: None
         }
     }
 
@@ -40,6 +42,21 @@ impl ProtocolOptions {
     /// Default options for a responding endpoint.
     pub fn responder() -> Self {
         Self::default(false)
+    }
+
+    pub fn set_handlers(mut self, handlers: ChannelHandlerType) -> Self {
+        self.handlers = Some(handlers);
+        self
+    }
+
+    pub fn set_encrypted(mut self, encrypted: bool) -> Self {
+        self.encrypted = encrypted;
+        self
+    }
+
+    pub fn set_noise(mut self, noise: bool) -> Self {
+        self.noise = noise;
+        self
     }
 }
 
@@ -76,17 +93,17 @@ where
 
     /// Create a new Protocol from an [AsyncRead](AsyncRead) + [AsyncWrite](AsyncWrite) stream with default options.
     /// This needs complex type annotations, better use [from_rw](Protocol::from_rw).
-    pub async fn from_stream<S>(
-        stream: S,
-        is_initiator: bool,
-    ) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    {
-        // TODO: This is in a seperate function because I ran into type parameters
-        // not being derivable if inlined here.
-        from_stream_with_options(stream, ProtocolOptions::default(is_initiator)).await
-    }
+    // pub async fn from_stream<S>(
+    //     stream: S,
+    //     is_initiator: bool,
+    // ) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
+    // where
+    //     S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
+    // {
+    //     // TODO: This is in a seperate function because I ran into type parameters
+    //     // not being derivable if inlined here.
+    //     from_stream_with_options(stream, ProtocolOptions::default(is_initiator)).await
+    // }
 
     /// Create a new Protocol from an [AsyncRead](AsyncRead) and an [AsyncWrite](AsyncWrite) with default options. The returned future resolves to a [Protocol](Protocol) once the
     /// handshake is complete.

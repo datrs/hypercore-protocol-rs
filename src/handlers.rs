@@ -67,6 +67,48 @@ impl<'a> ChannelContext<'a> {
         self.protocol.open(key, handlers).await
     }
 
+    pub async fn status(&mut self, msg: Status) -> Result<()> {
+        self.send(Message::Status(msg)).await
+    }
+
+    pub async fn options(&mut self, msg: Options) -> Result<()> {
+        self.send(Message::Options(msg)).await
+    }
+
+    pub async fn have(&mut self, msg: Have) -> Result<()> {
+        self.send(Message::Have(msg)).await
+    }
+
+    pub async fn unhave(&mut self, msg: Unhave) -> Result<()> {
+        self.send(Message::Unhave(msg)).await
+    }
+
+    pub async fn want(&mut self, msg: Want) -> Result<()> {
+        self.send(Message::Want(msg)).await
+    }
+
+    pub async fn unwant(&mut self, msg: Unwant) -> Result<()> {
+        self.send(Message::Unwant(msg)).await
+    }
+
+    pub async fn request(&mut self, msg: Request) -> Result<()> {
+        self.send(Message::Request(msg)).await
+    }
+
+    pub async fn cancel(&mut self, msg: Cancel) -> Result<()> {
+        self.send(Message::Cancel(msg)).await
+    }
+
+    pub async fn data(&mut self, msg: Data) -> Result<()> {
+        self.send(Message::Data(msg)).await
+    }
+
+    pub async fn close(&mut self, _msg: Close) -> Result<()> {
+        // TODO: Implement close.
+        // self.protocol.close(Close).await
+        Ok(())
+    }
+
     pub async fn destroy(&mut self, error: Error) {
         self.protocol.destroy(error).await
     }

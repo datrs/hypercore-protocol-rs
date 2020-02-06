@@ -2,14 +2,23 @@ const net = require('net')
 const Protocol = require('hypercore-protocol')
 const hypercore = require('hypercore')
 const ram = require('random-access-memory')
+const { pipeline } = require('stream')
 const fs = require('fs')
 const p = require('path')
 const os = require('os')
 
 const hostname = 'localhost'
-let [mode, port, key] = process.argv.slice(2)
+let [mode, port, keyOrFilename] = process.argv.slice(2)
 if (['client', 'server'].indexOf(mode) === -1 || !port) {
-  exit('usage: node index.js [client|server] PORT [KEY]')
+  exit('usage: node index.js [client|server] PORT [KEY|FILENAME]')
+}
+
+const KEY_REGEX = /^[\dabcdef]{64}$/i
+let key, filename
+if (keyOrFilename.match(KEY_REGEX)) {
+  key = keyOrFilename
+} else {
+  filename = keyOrFilename
 }
 
 const feed = hypercore(ram, key)
@@ -17,11 +26,16 @@ feed.ready(() => {
   console.log('key', feed.key.toString('hex'))
 })
 
-start({ port, hostname, mode, feed })
+const opts = {
+  feed, filename, mode, port, hostname
+}
 
-function start ({ port, hostname, mode, feed }) {
+start(opts)
+
+function start (opts) {
+  const { port, hostname, mode } = opts
   const isInitiator = mode === 'client'
-  const opts = { feed, isInitiator }
+  opts.isInitiator = isInitiator
   if (mode === 'client') {
     const socket = net.connect(port, hostname)
     onconnection({ ...opts, socket })
@@ -51,7 +65,7 @@ function onconnection (opts) {
   // const proto = new Protocol(isInitiator, { noise: true, encrypted: false })
   feed.ready(() => {
     let mode = feed.writable ? 'write' : 'read'
-    const proto = feed.replicate(isInitiator, { encrypted: true })
+    const proto = feed.replicate(isInitiator, { encrypted: true, live: true })
 
     console.error('init protocol')
     console.error('key', feed.key.toString('hex'))
@@ -63,10 +77,22 @@ function onconnection (opts) {
       socket.destroy()
     })
 
+    if (feed.writable && filename) {
+      pipeline(
+        fs.createReadStream(filename),
+        feed.createWriteStream(),
+        err => {
+          if (err) console.error('error importin file', err)
+          else console.error('import done, new len', feed.length)
+        }
+      )
+    }
+
     if (mode === 'write') {
       // feed.append(feed.length)
-      feed.append('hello')
-      setTimeout(() => feed.append('world'), 500)
+      // feed.append('hello')
+      // setTimeout(() => feed.append('world'), 500)
+  
       // const filepath = p.join(os.homedir(), 'Musik', 'foo.mp3')
       // const rs = fs.createReadStream(filepath)
       // rs.pipe(feed.createWriteStream())
