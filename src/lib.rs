@@ -7,14 +7,7 @@
 //! use simple_hypercore_protocol::{ProtocolBuilder, StreamHandlers};
 //! let stream = async_std::net::connect("localhost:8000").await?;
 //!
-//! struct FeedStore {}
-//! #[async_trait]
-//! impl StreamHandlers for FeedStore {
-//!     async fn on_discoverykey(proto: &mut StreamContext, discovey_key: &[u8]) -> Result<()> {
-//!         // If you have the key for this discovery_key, open a channel with
-//!         // proto.open(key, channel_handlers).await?.
-//!     }
-//! }
+//! // let handlers = ...
 //!
 //! let protocol = ProtocolBuilder::new(true)
 //!     .set_handlers(handlers)
@@ -25,6 +18,11 @@
 //! #
 //! # })
 //! ```
+//! The `handlers` variable refers to an application specific struct that implements
+//! the [StreamHandlers](StreamHandlers) to optionally open channels if the remote announces
+//! discovery keys. When opening a channel, pass a struct implementing [ChannelHandlers] to react
+//! to the actual messages. All channel handling is done by the [Protocol](Protocol), including the
+//! Noise handshake and the capability verification.
 //!
 //! See [examples/basic.rs](https://github.com/Frando/hypercore-protocol-rust-experiments/blob/master/examples/basic.rs) for an actual example of how to use a protocol stream.
 

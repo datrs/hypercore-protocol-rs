@@ -7,7 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-simple-message-channels = "0.2.0"
+# simple-message-channels = "0.2.0"
+simple-message-channels = { path = "../simple-message-channels" }
 async-std = "1.5.0"
 futures = "0.3.1"
 snow = { git = "https://github.com/Frando/snow.git", branch = "datrs" }

@@ -125,6 +125,33 @@ pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
 /// Implement this trait on a struct to handle stream-level events.
 ///
 /// Set the handler when building a protocol in [ProtocolBuilder.set_handlers](ProtocolBuilder::set_handlers).
+///
+/// Example (where `Feed` would implement [ChannelHandlers](ChannelHandlers)):
+/// ```
+/// struct FeedStore {
+///     feeds: Vec<Arc<Feed>>,
+/// }
+///
+/// #[async_trait]
+/// impl StreamHandlers for FeedStore {
+///     async fn on_discoverykey(
+///         &self,
+///         protocol: &mut StreamContext,
+///         discovery_key: &[u8],
+///     ) -> Result<()> {
+///         let feed = self
+///             .feeds
+///             .iter()
+///             .find(|feed| feed.discovery_key == discovery_key);
+///         if let Some(feed) = feed {
+///             let key = feed.key.clone();
+///             let feed_handler = Arc::clone(&feed);
+///             protocol.open(key, feed_handler).await
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait StreamHandlers: Sync {
     async fn on_discoverykey(
@@ -136,7 +163,9 @@ pub trait StreamHandlers: Sync {
     }
 }
 
-/// Implement this trait on a struct to handle channel-level events. All methods are optional. Pass the struct on which you
+/// Implement this trait on a struct to handle channel-level events.
+///
+/// All methods are optional. Pass the struct on which you
 /// implemented this trait into [protocol.open](Protocol::open).
 #[async_trait]
 pub trait ChannelHandlers: Send + Sync {
