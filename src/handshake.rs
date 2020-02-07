@@ -1,18 +1,15 @@
 // use async_std::io::{BufReader, BufWriter};
 use blake2_rfc::blake2b::Blake2b;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::io::{AsyncRead, AsyncWrite};
 use prost::Message;
 use rand::Rng;
 use snow;
 use snow::{Builder, Error as SnowError, HandshakeState, Keypair};
-use std::io;
 use std::io::{Error, ErrorKind, Result};
-use varinteger;
 
 use crate::constants::CAP_NS_BUF;
+use crate::prefixed::{read_prefixed as recv, write_prefixed as send};
 use crate::schema::NoisePayload;
-
-const MAX_MESSAGE_SIZE: u64 = 65535;
 
 #[derive(Debug, Clone)]
 pub struct HandshakeResult {
@@ -108,7 +105,7 @@ where
     let (mut noise, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
 
     let local_nonce = generate_nonce();
-    let payload = encode_nonce_msg(local_nonce.clone());
+    let payload = encode_nonce(local_nonce.clone());
 
     let mut tx_buf = vec![0u8; 512];
     let mut rx_buf = vec![0u8; 512];
@@ -135,7 +132,7 @@ where
         rx_len = noise.read_message(&msg, &mut rx_buf).map_err(map_err)?;
     }
 
-    let remote_nonce = decode_nonce_msg(&rx_buf[..rx_len])?;
+    let remote_nonce = decode_nonce(&rx_buf[..rx_len])?;
     let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
     let split = noise.split_raw();
@@ -176,69 +173,14 @@ fn generate_nonce() -> Vec<u8> {
     random_bytes.to_vec()
 }
 
-fn encode_nonce_msg(nonce: Vec<u8>) -> Vec<u8> {
+fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
     let nonce_msg = NoisePayload { nonce };
     let mut buf = vec![0u8; 0];
     nonce_msg.encode(&mut buf).unwrap();
     buf
 }
 
-fn decode_nonce_msg(msg: &[u8]) -> Result<Vec<u8>> {
+fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
-}
-
-/// Send a message with a varint prefix.
-async fn send<W>(writer: &mut W, buf: &[u8]) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    // log::trace!("hs send len {}", buf.len());
-    let buf_delimited = with_delimiter(buf);
-    writer.write_all(&buf_delimited).await?;
-    writer.flush().await?;
-    Ok(())
-}
-
-/// Receive a varint-prefixed message.
-pub async fn recv<R>(reader: &mut R) -> Result<Vec<u8>>
-where
-    R: AsyncRead + Send + Unpin,
-{
-    let mut varint: u64 = 0;
-    let mut factor = 1;
-    let mut headerbuf = vec![0u8; 1];
-    // Read initial varint (message length).
-    loop {
-        reader.read_exact(&mut headerbuf).await?;
-        let byte = headerbuf[0];
-        // Skip empty bytes (may be keepalive pings).
-        if byte == 0 {
-            continue;
-        }
-
-        varint = varint + (byte as u64 & 127) * factor;
-        if byte < 128 {
-            break;
-        }
-        if varint > MAX_MESSAGE_SIZE {
-            return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
-        }
-        factor = factor * 128;
-    }
-
-    // Read main message.
-    let mut messagebuf = vec![0u8; varint as usize];
-    reader.read_exact(&mut messagebuf).await?;
-    // log::trace!("recv len {}", messagebuf.len());
-    Ok(messagebuf)
-}
-
-fn with_delimiter(data: &[u8]) -> Vec<u8> {
-    let len = data.len();
-    let varint_len = varinteger::length(len as u64);
-    let mut buf = vec![0u8; len + varint_len];
-    varinteger::encode(len as u64, &mut buf[..varint_len]);
-    &mut buf[varint_len..].copy_from_slice(&data);
-    buf
 }

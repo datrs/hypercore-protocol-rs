@@ -1,7 +1,6 @@
+use crate::{discovery_key, handlers::ChannelHandlerType};
 use hex;
 use std::collections::HashMap;
-
-use crate::{discovery_key, handlers::ChannelHandlerType};
 
 #[derive(Clone)]
 pub struct Channel {
@@ -10,30 +9,6 @@ pub struct Channel {
     pub(crate) key: Option<Vec<u8>>,
     pub(crate) local_id: Option<usize>,
     pub(crate) remote_id: Option<usize>,
-}
-
-impl Channel {
-    // pub fn with_handlers(key: Vec<u8>, handlers: ChannelHandlerType) -> Self {
-    //     let discovery_key = discovery_key(&key);
-    //     Self {
-    //         discovery_key: discovery_key,
-    //         handlers: handlers,
-    //         key: Some(key),
-    //         local_id: None,
-    //         remote_id: None,
-    //     }
-    // }
-    // pub fn is_remote_open(&self) -> bool {
-    //     self.remote_id.is_some()
-    // }
-
-    // pub fn is_local_open(&self) -> bool {
-    //     self.local_id.is_some()
-    // }
-
-    // pub fn set_key(&mut self, key: Vec<u8>) {
-    //     self.key = Some(key)
-    // }
 }
 
 /// The Channelizer maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
@@ -157,14 +132,7 @@ impl Channelizer {
         } else {
             // TODO: Throw an error? This may not happen, as attach_remote()
             // is never called on channels not opened by local also.
-            // let channel = Channel {
-            //     key: None,
-            //     discovery_key: discovery_key,
-            //     local_id: None,
-            //     remote_id: Some(remote_id),
-            //     handlers: None,
-            // };
-            // self.channels.insert(hdkey.clone(), channel);
+            panic!("may not open a remote channel that is not also opened locally")
         }
     }
 }

@@ -9,6 +9,11 @@ use std::sync::Arc;
 pub(crate) struct DefaultHandlers {}
 #[async_trait]
 impl StreamHandlers for DefaultHandlers {}
+impl DefaultHandlers {
+    pub fn new() -> Arc<DefaultHandlers> {
+        Arc::new(DefaultHandlers {})
+    }
+}
 
 /// A type alias for [DynProtocol](DynProtocol) – this is the protocol handler you get
 /// within [StreamHandlers](StreamHandlers) to send messages and open channels.
@@ -117,8 +122,9 @@ impl<'a> ChannelContext<'a> {
 pub type StreamHandlerType = Arc<dyn StreamHandlers + Send + Sync>;
 pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
 
-/// Implement this trait on a struct to handle stream-level events. Pass the struct on which you
-/// implemented this trait into [protocol.set_handlers](Protocol::set_handlers).
+/// Implement this trait on a struct to handle stream-level events.
+///
+/// Set the handler when building a protocol in [ProtocolBuilder.set_handlers](ProtocolBuilder::set_handlers).
 #[async_trait]
 pub trait StreamHandlers: Sync {
     async fn on_discoverykey(

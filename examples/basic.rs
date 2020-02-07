@@ -9,10 +9,8 @@ use std::env;
 use std::io::Result;
 
 use simple_hypercore_protocol::schema::*;
-use simple_hypercore_protocol::{
-    discovery_key, ChannelContext, ChannelHandlers, Message, Protocol, StreamContext,
-    StreamHandlers,
-};
+use simple_hypercore_protocol::{discovery_key, ProtocolBuilder};
+use simple_hypercore_protocol::{ChannelContext, ChannelHandlers, StreamContext, StreamHandlers};
 
 mod util;
 use util::{tcp_client, tcp_server};
@@ -53,14 +51,16 @@ fn usage() {
 
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
-async fn onconnection(stream: TcpStream, is_initiator: bool, feedstore: Arc<FeedStore>) -> Result<()> {
-    let reader = stream.clone();
-    let writer = stream.clone();
+async fn onconnection(
+    stream: TcpStream,
+    is_initiator: bool,
+    feedstore: Arc<FeedStore>,
+) -> Result<()> {
+    let mut protocol = ProtocolBuilder::new(is_initiator)
+        .set_handlers(feedstore)
+        .from_stream(stream);
 
-    let mut protocol = Protocol::from_rw(reader, writer, is_initiator).await?;
-    protocol.set_handlers(feedstore);
-    protocol.listen().await?;
-    Ok(())
+    protocol.listen().await
 }
 
 struct FeedStore {
@@ -73,22 +73,6 @@ impl FeedStore {
 
     pub fn add(&mut self, feed: Feed) {
         self.feeds.push(Arc::new(feed));
-    }
-}
-
-/// A FeedState stores the head seq of the remote.
-/// This would have a bitfield to support sparse sync in the actual impl.
-#[derive(Debug)]
-struct FeedState {
-    remote_head: u64,
-    started: bool,
-}
-impl Default for FeedState {
-    fn default() -> Self {
-        FeedState {
-            remote_head: 0,
-            started: false,
-        }
     }
 }
 
@@ -108,6 +92,48 @@ impl Feed {
     }
 }
 
+/// A FeedState stores the head seq of the remote.
+/// This would have a bitfield to support sparse sync in the actual impl.
+#[derive(Debug)]
+struct FeedState {
+    remote_head: u64,
+    started: bool,
+}
+impl Default for FeedState {
+    fn default() -> Self {
+        FeedState {
+            remote_head: 0,
+            started: false,
+        }
+    }
+}
+
+#[async_trait]
+impl StreamHandlers for FeedStore {
+    async fn on_discoverykey(
+        &self,
+        protocol: &mut StreamContext,
+        discovery_key: &[u8],
+    ) -> Result<()> {
+        log::trace!(
+            "resolve discovery_key: {}",
+            pretty_fmt(discovery_key).unwrap()
+        );
+        let feed = self
+            .feeds
+            .iter()
+            .find(|feed| feed.discovery_key == discovery_key);
+        match feed {
+            Some(feed) => {
+                let key = feed.key.clone();
+                let feed_handler = Arc::clone(&feed);
+                protocol.open(key, feed_handler).await
+            }
+            None => Ok(()),
+        }
+    }
+}
+
 #[async_trait]
 impl ChannelHandlers for Feed {
     async fn on_open<'a>(
@@ -117,11 +143,11 @@ impl ChannelHandlers for Feed {
     ) -> Result<()> {
         log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
 
-        let msg = Message::Want(Want {
+        let msg = Want {
             start: 0,
             length: None, // length: Some(1048576),
-        });
-        channel.send(msg).await?;
+        };
+        channel.want(msg).await?;
 
         Ok(())
     }
@@ -136,13 +162,13 @@ impl ChannelHandlers for Feed {
             // If we didn't start reading, request first data block.
             if !state.started {
                 state.started = true;
-                let msg = Message::Request(Request {
+                let msg = Request {
                     index: 0,
                     bytes: None,
                     hash: None,
                     nodes: None,
-                });
-                channel.send(msg).await?;
+                };
+                channel.request(msg).await?;
             }
         }
         Ok(())
@@ -166,40 +192,15 @@ impl ChannelHandlers for Feed {
         let next = msg.index + 1;
         if state.remote_head >= next {
             // Request next data block.
-            let msg = Message::Request(Request {
+            let msg = Request {
                 index: next,
                 bytes: None,
                 hash: None,
                 nodes: None,
-            });
-            channel.send(msg).await?;
+            };
+            channel.request(msg).await?;
         }
 
         Ok(())
-    }
-}
-
-#[async_trait]
-impl StreamHandlers for FeedStore {
-    async fn on_discoverykey(
-        &self,
-        protocol: &mut StreamContext,
-        discovery_key: &[u8],
-    ) -> Result<()> {
-        log::trace!(
-            "resolve discovery_key: {}",
-            pretty_fmt(discovery_key).unwrap()
-        );
-        let feed = self
-            .feeds
-            .iter()
-            .find(|feed| feed.discovery_key == discovery_key);
-        match feed {
-            None => Ok(()),
-            Some(feed) => {
-                let feed = Arc::clone(&feed);
-                protocol.open(feed.key.clone(), feed).await
-            }
-        }
     }
 }

@@ -1,9 +1,7 @@
 use async_std::future;
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use futures::stream::TryStreamExt;
-use simple_message_channels::{send, Message as ChannelMessage, Reader};
+use simple_message_channels::Message as WireMessage;
 use std::io::{Error, ErrorKind, Result};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::channels::{Channel, Channelizer};
@@ -12,6 +10,7 @@ use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handlers::{ChannelContext, ChannelHandlerType, DefaultHandlers, StreamHandlerType};
 use crate::handshake::{handshake, HandshakeResult};
 use crate::message::Message;
+use crate::prefixed;
 use crate::schema::*;
 use crate::util::discovery_key;
 
@@ -20,51 +19,72 @@ pub struct ProtocolOptions {
     pub is_initiator: bool,
     pub noise: bool,
     pub encrypted: bool,
-    pub handlers: Option<ChannelHandlerType>,
+    pub handlers: Option<StreamHandlerType>,
 }
 
-impl ProtocolOptions {
-    /// Default options with handshake and encryption enabled.
-    pub fn default(is_initiator: bool) -> Self {
-        Self {
+/// Build a Protocol instance with options.
+pub struct ProtocolBuilder(ProtocolOptions);
+
+impl ProtocolBuilder {
+    pub fn new(is_initiator: bool) -> Self {
+        Self(ProtocolOptions {
             is_initiator,
             noise: true,
             encrypted: true,
             handlers: None,
-        }
+        })
     }
 
     /// Default options for an initiating endpoint.
     pub fn initiator() -> Self {
-        Self::default(true)
+        Self::new(true)
     }
 
     /// Default options for a responding endpoint.
     pub fn responder() -> Self {
-        Self::default(false)
+        Self::new(false)
     }
 
-    pub fn set_handlers(mut self, handlers: ChannelHandlerType) -> Self {
-        self.handlers = Some(handlers);
+    pub fn set_handlers(mut self, handlers: StreamHandlerType) -> Self {
+        self.0.handlers = Some(handlers);
         self
     }
 
     pub fn set_encrypted(mut self, encrypted: bool) -> Self {
-        self.encrypted = encrypted;
+        self.0.encrypted = encrypted;
         self
     }
 
     pub fn set_noise(mut self, noise: bool) -> Self {
-        self.noise = noise;
+        self.0.noise = noise;
         self
+    }
+
+    pub fn from_stream<S>(self, stream: S) -> Protocol<S, S>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
+    {
+        Protocol::new(stream.clone(), stream.clone(), self.0)
+    }
+
+    pub fn from_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        Protocol::new(reader, writer, self.0)
     }
 }
 
 /// A Protocol stream.
-pub struct Protocol<R, W> {
-    raw_writer: W,
-    reader: Reader<R>,
-    // options: ProtocolOptions,
+pub struct Protocol<R, W>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    writer: EncryptedWriter<W>,
+    reader: EncryptedReader<R>,
+    options: ProtocolOptions,
     handshake: Option<HandshakeResult>,
     channels: Channelizer,
     handlers: StreamHandlerType,
@@ -76,99 +96,74 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    /// Create a new Protocol instance. Note that this needs a handshake result and encryption
-    /// has to be handled by the underlying reader and writer. This is for special case use only,
-    /// normally you'd use the async initializers, e.g. [from_rw](Protocol::from_rw).
-    pub fn new(reader: R, writer: W, handshake: Option<HandshakeResult>) -> Self {
-        let handlers = Arc::new(DefaultHandlers {});
+    /// Create a new Protocol instance.
+    pub fn new(reader: R, writer: W, mut options: ProtocolOptions) -> Self {
+        let reader = EncryptedReader::new(reader);
+        let writer = EncryptedWriter::new(writer);
+        let handlers = options
+            .handlers
+            .take()
+            .unwrap_or_else(|| DefaultHandlers::new());
         Protocol {
-            raw_writer: writer,
-            reader: Reader::new(reader),
-            handshake,
-            channels: Channelizer::new(),
+            writer,
+            reader,
             handlers,
+            options,
+            channels: Channelizer::new(),
+            handshake: None,
             error: None,
         }
     }
 
-    /// Create a new Protocol from an [AsyncRead](AsyncRead) + [AsyncWrite](AsyncWrite) stream with default options.
-    /// This needs complex type annotations, better use [from_rw](Protocol::from_rw).
-    // pub async fn from_stream<S>(
-    //     stream: S,
-    //     is_initiator: bool,
-    // ) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
-    // where
-    //     S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    // {
-    //     // TODO: This is in a seperate function because I ran into type parameters
-    //     // not being derivable if inlined here.
-    //     from_stream_with_options(stream, ProtocolOptions::default(is_initiator)).await
-    // }
-
-    /// Create a new Protocol from an [AsyncRead](AsyncRead) and an [AsyncWrite](AsyncWrite) with default options. The returned future resolves to a [Protocol](Protocol) once the
-    /// handshake is complete.
-    pub async fn from_rw(
-        reader: R,
-        writer: W,
-        is_initiator: bool,
-    ) -> Result<Protocol<EncryptedReader<R>, EncryptedWriter<W>>> {
-        from_rw_with_options(reader, writer, ProtocolOptions::default(is_initiator)).await
+    // Start the main protocol loop.
+    //
+    // The returned future resolves either if an error occurrs, if the connection
+    // is dropped, or if all channels are closed (TODO: implement the latter).
+    pub async fn listen(&mut self) -> Result<()> {
+        if self.options.noise {
+            self.perform_handshake().await?;
+        }
+        self.main_loop().await?;
+        Ok(())
     }
 
-    /// Create a new Protocol from an [AsyncRead](AsyncRead) and an [AsyncWrite](AsyncWrite) with [options](ProtocolOptions). The returned future resolves to a [Protocol](Protocol) once the
-    /// handshake is complete.
-    pub async fn from_rw_with_options(
-        reader: R,
-        writer: W,
-        options: ProtocolOptions,
-    ) -> Result<Protocol<EncryptedReader<R>, EncryptedWriter<W>>> {
-        from_rw_with_options(reader, writer, options).await
-    }
-
-    /// Create a new Protocol from an [AsyncRead](AsyncRead) + [AsyncWrite](AsyncWrite) stream with [options](ProtocolOptions). The returned future resolves to a [Protocol](Protocol) once the
-    /// handshake is complete.
-    pub async fn from_stream_with_options<S>(
-        stream: S,
-        options: ProtocolOptions,
-    ) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    {
-        // TODO: This is in a seperate function because I ran into type parameters
-        // not being derivable if inlined here.
-        from_stream_with_options(stream, options).await
-    }
-
-    /// Set the Protocol handlers.
-    pub fn set_handlers(&mut self, handlers: StreamHandlerType) {
-        self.handlers = handlers;
+    async fn perform_handshake(&mut self) -> Result<()> {
+        let handshake = handshake(
+            &mut self.reader,
+            &mut self.writer,
+            self.options.is_initiator,
+        )
+        .await?;
+        if self.options.encrypted {
+            self.reader.upgrade_with_handshake(&handshake)?;
+            self.writer.upgrade_with_handshake(&handshake)?;
+        }
+        self.handshake = Some(handshake);
+        Ok(())
     }
 
     /// Start the protocol. The returned future resolves either if an error occurs
     /// or if the other side drops the connection.
     /// TODO: Enable graceful shutdown.
-    pub async fn listen(&mut self) -> Result<()> {
+    async fn main_loop(&mut self) -> Result<()> {
+        // TODO: Implement timeout.
+        let _timeout = Duration::from_secs(DEFAULT_TIMEOUT as u64);
+        let keepalive = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
         loop {
-            // TODO: Check this later again.
+            // Check if an error was set (through Protocol.destroy()).
             if let Some(error) = self.error.take() {
                 return Err(error);
             }
 
-            // TODO: Implement timeout.
-            let _timeout = Duration::from_secs(DEFAULT_TIMEOUT as u64);
-            let keepalive = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-
-            let next = self.reader.try_next();
+            let next = prefixed::read_prefixed(&mut self.reader);
 
             match future::timeout(keepalive, next).await {
                 Err(_timeout_err) => {
                     self.ping().await?;
                 }
-                Ok(Ok(Some(message))) => {
+                Ok(Ok(message)) => {
+                    let message = WireMessage::from_buf(&message)?;
                     self.onmessage(message).await?;
-                }
-                Ok(Ok(None)) => {
-                    return Err(Error::new(ErrorKind::UnexpectedEof, "connection closed"));
                 }
                 Ok(Err(e)) => {
                     return Err(e);
@@ -182,13 +177,9 @@ where
         self.error = Some(error)
     }
 
-    async fn onmessage(&mut self, message: ChannelMessage) -> Result<()> {
-        let ChannelMessage {
-            typ,
-            channel,
-            message,
-        } = message;
-        let message = Message::decode(typ, message)?;
+    async fn onmessage(&mut self, message: WireMessage) -> Result<()> {
+        let channel = message.channel;
+        let message = Message::decode(message.typ, message.message)?;
         log::trace!("recv: {}", message);
         let _result = match message {
             Message::Open(msg) => self.onopen(channel, msg).await,
@@ -229,7 +220,8 @@ where
         discovery_key: Vec<u8>,
     ) -> Result<()> {
         let mut context = ChannelContext::new(&mut *self, &discovery_key);
-        handlers.clone().on_open(&mut context, &discovery_key).await
+        let handlers = handlers.clone();
+        handlers.on_open(&mut context, &discovery_key).await
     }
 
     /// Open a new channel by passing a key and a Arc-wrapped [handlers](crate::ChannelHandlers)
@@ -265,7 +257,7 @@ where
 
         // The remote is opening a channel for a discovery key. Let's see
         // if we know the pubkey for this channel.
-        let pubkey = match self.channels.get(&discovery_key) {
+        let key = match self.channels.get(&discovery_key) {
             // Yep, we opened this channel locally.
             Some(Channel { key: Some(key), .. }) => Ok(key.to_vec()),
             // No key, but the channel is already present - this only happens
@@ -282,19 +274,16 @@ where
                     .on_discoverykey(&mut *self, &discovery_key)
                     .await?;
 
-                // And check again if the channel is there.
+                // And check again if a channel has been opened.
                 match self.channels.get(&discovery_key) {
                     Some(Channel { key: Some(key), .. }) => Ok(key.to_vec()),
                     _ => Err(Error::new(ErrorKind::BrokenPipe, "Key not found")),
                 }
             }
-        };
-
-        // Unwrap the result from above.
-        let pubkey = pubkey?;
+        }?;
 
         // Verify the remote capability.
-        self.verify_remote_capability(capability, &pubkey)?;
+        self.verify_remote_capability(capability, &key)?;
         // Attach the channel for future use.
         self.channels
             .attach_remote(discovery_key.clone(), ch as usize);
@@ -312,8 +301,10 @@ where
 
     pub async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
         log::trace!("send {} {}", ch, msg);
-        let encoded = msg.encode(ch)?;
-        send(&mut self.raw_writer, encoded).await?;
+        let message = msg.encode(ch)?;
+        let buf = message.encode()?;
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -326,8 +317,8 @@ where
 
     async fn ping(&mut self) -> Result<()> {
         let buf = vec![0u8];
-        self.raw_writer.write_all(&buf).await?;
-        self.raw_writer.flush().await?;
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -348,69 +339,3 @@ where
         }
     }
 }
-
-async fn from_stream_with_options<S>(
-    stream: S,
-    options: ProtocolOptions,
-) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
-where
-    S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-{
-    let reader = stream.clone();
-    let writer = stream.clone();
-    from_rw_with_options(reader, writer, options).await
-}
-
-async fn from_rw_with_options<RR, WW>(
-    reader: RR,
-    writer: WW,
-    options: ProtocolOptions,
-) -> Result<Protocol<EncryptedReader<RR>, EncryptedWriter<WW>>>
-where
-    RR: AsyncRead + Send + Unpin + 'static,
-    WW: AsyncWrite + Send + Unpin + 'static,
-{
-    let mut reader = EncryptedReader::new(reader);
-    let mut writer = EncryptedWriter::new(writer);
-    let mut maybe_handshake = None;
-    if options.noise {
-        let handshake = handshake(&mut reader, &mut writer, options.is_initiator).await?;
-        if options.encrypted {
-            reader.upgrade_with_handshake(&handshake)?;
-            writer.upgrade_with_handshake(&handshake)?;
-        }
-        maybe_handshake = Some(handshake);
-    }
-    Ok(Protocol::new(reader, writer, maybe_handshake))
-}
-
-// pub type ReadType = EncryptedReader<BufReader<AsyncRead + Send + Unpin + Clone + 'static>>;
-// pub type WriteType = EncryptedReader<BufWriter<AsyncWrite + Send + Unpin + Clone + 'static>>;
-// pub async fn from_stream_with_handshake<S>(
-//     stream: S,
-//     is_initiator: bool,
-// ) -> Result<Protocol<EncryptedReader<S>, EncryptedWriter<S>>>
-// where
-//     S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-// {
-//     let reader = stream.clone();
-//     let writer = stream.clone();
-//     from_rw_with_handshake(reader, writer, is_initiator).await
-// }
-
-// async fn from_rw_with_handshake<R, W>(
-//     reader: R,
-//     writer: W,
-//     is_initiator: bool,
-// ) -> Result<Protocol<EncryptedReader<R>, EncryptedWriter<W>>>
-// where
-//     R: AsyncRead + Send + Unpin + 'static,
-//     W: AsyncWrite + Send + Unpin + 'static,
-// {
-//     let mut reader = EncryptedReader::new(reader);
-//     let mut writer = EncryptedWriter::new(writer);
-//     let handshake = handshake(&mut reader, &mut writer, is_initiator).await?;
-//     reader.upgrade_with_handshake(&handshake)?;
-//     writer.upgrade_with_handshake(&handshake)?;
-//     Ok(Protocol::new(reader, writer, Some(handshake)))
-// }
