@@ -1,7 +1,7 @@
 <h1 align="center">hypercore-protocol-rs</h1>
 <div align="center">
   <strong>
-  Async Rust implementation of the wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol)
+  Rust implementation of the wire protocol of <a href="https://github.com/mafintosh/hypercore-protocol">Hypercore</a>
   </strong>
 </div>
 
@@ -10,6 +10,8 @@
 *Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
 
 This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
+
+It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake (currently with two patches: [(1)](https://github.com/mcginty/snow/pull/73), [(2)](https://github.com/mcginty/snow/pull/78)).
 
 Current features are:
 
