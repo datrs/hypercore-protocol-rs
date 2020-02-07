@@ -5,6 +5,7 @@ use async_std::sync::{Arc, RwLock};
 use async_std::task;
 use async_trait::async_trait;
 use pretty_hash::fmt as pretty_fmt;
+use std::collections::HashMap;
 use std::env;
 use std::io::Result;
 
@@ -64,18 +65,44 @@ async fn onconnection(
 }
 
 struct FeedStore {
-    feeds: Vec<Arc<Feed>>,
+    feeds: HashMap<String, Arc<Feed>>,
 }
 impl FeedStore {
     pub fn new() -> Self {
-        Self { feeds: vec![] }
+        let feeds = HashMap::new();
+        Self { feeds }
     }
 
     pub fn add(&mut self, feed: Feed) {
-        self.feeds.push(Arc::new(feed));
+        let hdkey = hex::encode(&feed.discovery_key);
+        self.feeds.insert(hdkey, Arc::new(feed));
+    }
+
+    pub fn get(&self, discovery_key: &[u8]) -> Option<&Arc<Feed>> {
+        let hdkey = hex::encode(discovery_key);
+        self.feeds.get(&hdkey)
     }
 }
 
+/// We implement the StreamHandler trait on the FeedStore.
+#[async_trait]
+impl StreamHandler for FeedStore {
+    async fn on_discoverykey(
+        &self,
+        protocol: &mut StreamContext,
+        discovery_key: &[u8],
+    ) -> Result<()> {
+        log::trace!("open discovery_key: {}", pretty_fmt(discovery_key).unwrap());
+        if let Some(feed) = self.get(discovery_key) {
+            protocol.open(feed.key.clone(), feed.clone()).await
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A Feed is a single unit of replication, an append-only log.
+/// This toy feed can only read sequentially and does not save or buffer anything.
 #[derive(Debug)]
 struct Feed {
     key: Vec<u8>,
@@ -92,64 +119,20 @@ impl Feed {
     }
 }
 
-/// A FeedState stores the head seq of the remote.
-/// This would have a bitfield to support sparse sync in the actual impl.
-#[derive(Debug)]
-struct FeedState {
-    remote_head: u64,
-    started: bool,
-}
-impl Default for FeedState {
-    fn default() -> Self {
-        FeedState {
-            remote_head: 0,
-            started: false,
-        }
-    }
-}
-
-#[async_trait]
-impl StreamHandler for FeedStore {
-    async fn on_discoverykey(
-        &self,
-        protocol: &mut StreamContext,
-        discovery_key: &[u8],
-    ) -> Result<()> {
-        log::trace!(
-            "resolve discovery_key: {}",
-            pretty_fmt(discovery_key).unwrap()
-        );
-        let feed = self
-            .feeds
-            .iter()
-            .find(|feed| feed.discovery_key == discovery_key);
-        match feed {
-            Some(feed) => {
-                let key = feed.key.clone();
-                let feed_handler = Arc::clone(&feed);
-                protocol.open(key, feed_handler).await
-            }
-            None => Ok(()),
-        }
-    }
-}
-
+/// The Feed structs implements the ChannelHandler trait.
+/// This allows to pass a Feed struct into the protocol when `open`ing a channel,
+/// making it the handler for all messages that arrive on this channel.
+/// The trait fns all receive a `channel` arg that allows to send messages over
+/// the current channel.
 #[async_trait]
 impl ChannelHandler for Feed {
-    async fn on_open<'a>(
-        &self,
-        channel: &mut Channel<'a>,
-        discovery_key: &[u8],
-    ) -> Result<()> {
+    async fn on_open<'a>(&self, channel: &mut Channel<'a>, discovery_key: &[u8]) -> Result<()> {
         log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
-
         let msg = Want {
             start: 0,
-            length: None, // length: Some(1048576),
+            length: None,
         };
-        channel.want(msg).await?;
-
-        Ok(())
+        channel.want(msg).await
     }
 
     async fn on_have<'a>(&self, channel: &mut Channel<'a>, msg: Have) -> Result<()> {
@@ -202,5 +185,21 @@ impl ChannelHandler for Feed {
         }
 
         Ok(())
+    }
+}
+
+/// A FeedState stores the head seq of the remote.
+/// This would have a bitfield to support sparse sync in the actual impl.
+#[derive(Debug)]
+struct FeedState {
+    remote_head: u64,
+    started: bool,
+}
+impl Default for FeedState {
+    fn default() -> Self {
+        FeedState {
+            remote_head: 0,
+            started: false,
+        }
     }
 }

@@ -197,60 +197,32 @@ pub trait ChannelHandler: Send + Sync {
         }
     }
 
-    async fn on_open<'a>(
-        &self,
-        _protocol: &mut Channel<'a>,
-        _discovery_key: &[u8],
-    ) -> Result<()> {
+    async fn on_open<'a>(&self, _protocol: &mut Channel<'a>, _discovery_key: &[u8]) -> Result<()> {
         Ok(())
     }
 
-    async fn on_status<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Status,
-    ) -> Result<()> {
+    async fn on_status<'a>(&self, _channel: &mut Channel<'a>, _message: Status) -> Result<()> {
         Ok(())
     }
-    async fn on_options<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Options,
-    ) -> Result<()> {
+    async fn on_options<'a>(&self, _channel: &mut Channel<'a>, _message: Options) -> Result<()> {
         Ok(())
     }
     async fn on_have<'a>(&self, _channel: &mut Channel<'a>, _message: Have) -> Result<()> {
         Ok(())
     }
-    async fn on_unhave<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Unhave,
-    ) -> Result<()> {
+    async fn on_unhave<'a>(&self, _channel: &mut Channel<'a>, _message: Unhave) -> Result<()> {
         Ok(())
     }
     async fn on_want<'a>(&self, _channel: &mut Channel<'a>, _message: Want) -> Result<()> {
         Ok(())
     }
-    async fn on_unwant<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Unwant,
-    ) -> Result<()> {
+    async fn on_unwant<'a>(&self, _channel: &mut Channel<'a>, _message: Unwant) -> Result<()> {
         Ok(())
     }
-    async fn on_request<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Request,
-    ) -> Result<()> {
+    async fn on_request<'a>(&self, _channel: &mut Channel<'a>, _message: Request) -> Result<()> {
         Ok(())
     }
-    async fn on_cancel<'a>(
-        &self,
-        _channel: &mut Channel<'a>,
-        _message: Cancel,
-    ) -> Result<()> {
+    async fn on_cancel<'a>(&self, _channel: &mut Channel<'a>, _message: Cancel) -> Result<()> {
         Ok(())
     }
     async fn on_data<'a>(&self, _channel: &mut Channel<'a>, _message: Data) -> Result<()> {
