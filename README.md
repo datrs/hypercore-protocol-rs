@@ -1,16 +1,31 @@
-# hypercore-protocol in Rust
+<h1 align="center">hypercore-protocol-rs</h1>
+<div align="center">
+  <strong>
+  Async Rust implementation of the wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol)
+  </strong>
+</div>
 
-This crate implements the basic wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol) in Rust. It can do the Noise handshake (\*), open and close channels, verify capability hashes and send and receive all protocol messages. This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
+---
 
 *Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
+
+This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
+
+Current features are:
+
+* Complete the Noise handshake (\*) and set up the transport encryption
+* Open channels with a key
+* Accept channels opened by the remote end if your end knows the key
+* Create and verify capability hashes
+* Send and receive all protocol messages
 
 _\*: The Noise handshake is not working with the released version of Hypercore. See [this issue](https://github.com/mafintosh/hypercore-protocol/issues/51) for details._
 
 ## Examples
 
-### basic.rs
+### [basic.rs](examples/basic.rs)
 
-Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Works only *with an unreleased branch of `noise-protocol` that uses a standard Diffie-Hellman exchange*.
+Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Also my current test case, read the code in there if you want to see how you'd work with hypercore-protocol using this crate.
 
 * Share a file over a hypercore on a local TCP server. Prints a hypercore key.
   `node examples-nodejs/replicate.js server 8000 ./README.md`
@@ -19,6 +34,8 @@ Accepts a hypercore-protocol stream and fetches the first data block of the firs
   `cargo run --example basic -- server 8000 KEY`
 
 You can swap client and server between the two commands.
+
+Note that the rust impl works only against a patched version of hypercore that switches the NodeJS module [noise-protocol](https://github.com/emilbayes/noise-protocol) to a branch that changes to [Noise handshake DH calculation to the recommended standard](https://github.com/mafintosh/hypercore-protocol/issues/51).
 
 ### noise.rs
 
