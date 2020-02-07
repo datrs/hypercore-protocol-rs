@@ -4,7 +4,7 @@
 //! ```
 //! # async_std::task::block_on(async {
 //! #
-//! use simple_hypercore_protocol::{ProtocolBuilder, StreamHandlers};
+//! use hypercore_protocol::{ProtocolBuilder, StreamHandlers};
 //! let stream = async_std::net::connect("localhost:8000").await?;
 //!
 //! // let handlers = ...

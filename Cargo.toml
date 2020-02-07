@@ -1,5 +1,5 @@
 [package]
-name = "simple-hypercore-protocol"
+name = "hypercore-protocol"
 version = "0.1.0"
 authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
 edition = "2018"

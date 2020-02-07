@@ -1,6 +1,6 @@
 use async_std::net::TcpStream;
 use async_std::task;
-use simple_hypercore_protocol::handshake;
+use hypercore_protocol::handshake;
 use std::env;
 use std::io::Result;
 

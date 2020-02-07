@@ -8,9 +8,9 @@ use pretty_hash::fmt as pretty_fmt;
 use std::env;
 use std::io::Result;
 
-use simple_hypercore_protocol::schema::*;
-use simple_hypercore_protocol::{discovery_key, ProtocolBuilder};
-use simple_hypercore_protocol::{Channel, ChannelHandler, StreamContext, StreamHandler};
+use hypercore_protocol::schema::*;
+use hypercore_protocol::{discovery_key, ProtocolBuilder};
+use hypercore_protocol::{Channel, ChannelHandler, StreamContext, StreamHandler};
 
 mod util;
 use util::{tcp_client, tcp_server};
