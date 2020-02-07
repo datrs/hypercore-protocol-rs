@@ -69,25 +69,3 @@ where
     // log::trace!("recv len {}", messagebuf.len());
     Ok(messagebuf)
 }
-
-// enum VarintResult {
-//     Ok(u4),
-//     BufTooShort,
-//     Overflow
-// }
-// fn read_varint(buf: &[u8]) -> Result<Option<u64>> {
-// }
-
-// struct Varint {
-//     factor: u32,
-//     result: u64
-// }
-
-// impl Varint {
-//     pub fn new() -> Varint {
-//         Varint { factor: 1, result: 0 }
-//     }
-
-//     pub fn read_byte(byte: &[u8; 1]) {
-//     }
-// }
