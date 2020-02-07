@@ -1,10 +1,21 @@
 [package]
 name = "hypercore-protocol"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
+description = "Binary replication protocol for Hypercore feeds"
 authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
+documentation = "https://docs.rs/hypercore-protocol"
+repository = "https://github.com/Frando/hypercore-protocol-rs"
+readme = "README.md"
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+keywords = ["dat", "p2p", "stream", "feed", "hypercore", "protocol"]
+categories = [
+  "asynchronous",
+  "concurrency",
+  "cryptography",
+  "data-structures",
+  "encoding",
+]
 
 [dependencies]
 simple-message-channels = "0.2.0"
