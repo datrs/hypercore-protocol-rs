@@ -189,7 +189,7 @@ where
             message,
         } = message;
         let message = Message::decode(typ, message)?;
-        log::trace!("> recv: {}", message);
+        log::trace!("recv: {}", message);
         let _result = match message {
             Message::Open(msg) => self.onopen(channel, msg).await,
             Message::Close(msg) => self.onclose(channel, msg).await,
@@ -311,7 +311,7 @@ where
     }
 
     pub async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
-        log::trace!("> send {} {}", ch, msg);
+        log::trace!("send {} {}", ch, msg);
         let encoded = msg.encode(ch)?;
         send(&mut self.raw_writer, encoded).await?;
         Ok(())

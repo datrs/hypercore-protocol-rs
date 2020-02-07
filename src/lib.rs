@@ -14,6 +14,7 @@ pub mod schema {
 }
 
 pub use handlers::{ChannelContext, ChannelHandlers, DynProtocol, StreamContext, StreamHandlers};
+pub use handshake::{handshake, HandshakeResult};
 pub use message::Message;
-pub use protocol::Protocol;
+pub use protocol::{Protocol, ProtocolOptions};
 pub use util::discovery_key;

@@ -67,7 +67,7 @@ pub fn build_handshake_state(
     static PATTERN: &'static str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
-    // log::trace!("> hs local pubkey: {:x?}", &key_pair.public);
+    // log::trace!("hs local pubkey: {:x?}", &key_pair.public);
     let handshake_state = if is_initiator {
         builder
             .local_private_key(&key_pair.private)
@@ -90,7 +90,7 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     log::trace!(
-        "> handshake start, role: {}",
+        "handshake start, role: {}",
         if is_initiator {
             "initiator"
         } else {
@@ -149,7 +149,7 @@ where
         split_rx = split.0;
     }
 
-    log::trace!("> handshake complete");
+    log::trace!("handshake complete");
     // log::trace!("local pubkey {:x?}", &local_keypair.public);
     // log::trace!("remot pubkey {:x?}", &remote_pubkey));
     // log::trace!("split rx: {:x?}", &split_rx);
@@ -193,7 +193,7 @@ async fn send<W>(writer: &mut W, buf: &[u8]) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    // log::trace!("> hs send len {}", buf.len());
+    // log::trace!("hs send len {}", buf.len());
     let buf_delimited = with_delimiter(buf);
     writer.write_all(&buf_delimited).await?;
     writer.flush().await?;
@@ -230,7 +230,7 @@ where
     // Read main message.
     let mut messagebuf = vec![0u8; varint as usize];
     reader.read_exact(&mut messagebuf).await?;
-    // log::trace!("> hs recv len {}", messagebuf.len());
+    // log::trace!("recv len {}", messagebuf.len());
     Ok(messagebuf)
 }
 

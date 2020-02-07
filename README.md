@@ -1,16 +1,24 @@
 # hypercore-protocol in Rust
 
-*First experiments. I started this in my spare time, might be abandoned or later become a crate and moved into [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
+This crate implements the basic wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol) in Rust. It can do the Noise handshake (\*), open and close channels, verify capability hashes and send and receive all protocol messages. This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
+
+*Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
+
+_\*: The Noise handshake is not working with the released version of Hypercore. See [this issue](https://github.com/mafintosh/hypercore-protocol/issues/51) for details._
 
 ## Examples
 
 ### basic.rs
 
-`cargo run --example basic -- server 8000`
+Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Works only *with an unreleased branch of `noise-protocol` that uses a standard Diffie-Hellman exchange*.
 
-Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Works only *with NOISE and the capability system disabled!*
+* Share a file over a hypercore on a local TCP server. Prints a hypercore key.
+  `node examples-nodejs/replicate.js server 8000 ./README.md`
 
-See [this gist](https://gist.github.com/Frando/e123c29160d0d995ef2149e8e96a6717) for an NodeJS example. Note that to disable NOISE, [experimental pull requests](https://github.com/mafintosh/hypercore/pull/244) to [hypercore](https://github.com/hypercore) and its dependencies are needed.
+* Use this key to connect from Rust and pipe the file content to stdout:
+  `cargo run --example basic -- server 8000 KEY`
+
+You can swap client and server between the two commands.
 
 ### noise.rs
 
@@ -31,8 +39,6 @@ node examples-nodejs/handshake.js client 8000
 ```
 
 Running both from different terminals should print debug output and complete the handshake.
-
-Running a Rust client against a NodeJS server or vice-versa **does not work**. If anyone has ideas why that is the case please help out :-)
 
 There's also an [issue in the datrs/hypercore repo](https://github.com/datrs/hypercore/issues/92) where I documented my findings in the process up to here.
 

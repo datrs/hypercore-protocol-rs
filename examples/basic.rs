@@ -1,7 +1,6 @@
 use async_std::io;
-use async_std::net::{TcpListener, TcpStream};
+use async_std::net::TcpStream;
 use async_std::prelude::*;
-use async_std::stream::StreamExt;
 use async_std::sync::{Arc, RwLock};
 use async_std::task;
 use async_trait::async_trait;
@@ -9,28 +8,40 @@ use pretty_hash::fmt as pretty_fmt;
 use std::env;
 use std::io::Result;
 
+use simple_hypercore_protocol::schema::*;
 use simple_hypercore_protocol::{
-    discovery_key, schema::*, ChannelContext, ChannelHandlers, Message, Protocol,
-    StreamContext, StreamHandlers,
+    discovery_key, ChannelContext, ChannelHandlers, Message, Protocol, StreamContext,
+    StreamHandlers,
 };
 
+mod util;
+use util::{tcp_client, tcp_server};
+
 fn main() {
-    env_logger::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    util::init_logger();
     if env::args().count() < 3 {
         usage();
     }
     let mode = env::args().nth(1).unwrap();
     let port = env::args().nth(2).unwrap();
-    let key = env::args().nth(3);
     let address = format!("127.0.0.1:{}", port);
+
+    let key = env::args().nth(3);
+    let key = key.map_or(None, |key| hex::decode(key).ok());
+
+    let mut feedstore = FeedStore::new();
+    if let Some(key) = key {
+        feedstore.add(Feed::new(key));
+    }
+    let feedstore = Arc::new(feedstore);
 
     task::block_on(async move {
         let result = match mode.as_ref() {
-            "server" => tcp_server(address, key).await,
-            "client" => tcp_client(address, key).await,
+            "server" => tcp_server(address, onconnection, feedstore).await,
+            "client" => tcp_client(address, onconnection, feedstore).await,
             _ => panic!(usage()),
         };
-        log_if_error(&result);
+        util::log_if_error(&result);
     });
 }
 
@@ -40,52 +51,29 @@ fn usage() {
     std::process::exit(1);
 }
 
-fn log_if_error(result: &Result<()>) {
-    if let Err(err) = result.as_ref() {
-        log::error!("error: {}", err);
-    }
-}
-
-async fn tcp_server(address: String, key: Option<String>) -> Result<()> {
-    let listener = TcpListener::bind(&address).await?;
-    log::info!("listening on {}", listener.local_addr()?);
-    let mut incoming = listener.incoming();
-    while let Some(Ok(stream)) = incoming.next().await {
-        let key = key.clone();
-        let peer_addr = stream.peer_addr().unwrap();
-        log::info!("new connection from {}", peer_addr);
-        task::spawn(async move {
-            let result = onconnection(stream, false, key).await;
-            log_if_error(&result);
-            log::info!("connection closed from {}", peer_addr);
-        });
-    }
-    Ok(())
-}
-
-async fn tcp_client(address: String, key: Option<String>) -> Result<()> {
-    let stream = TcpStream::connect(&address).await?;
-    onconnection(stream, true, key).await
-}
-
-// This is where our actual application code starts.
-
-async fn onconnection(stream: TcpStream, is_initiator: bool, key: Option<String>) -> Result<()> {
-    let mut feedstore = FeedStore::new();
-
-    let key = key.map_or(None, |key| Some(hex::decode(key)));
-    if let Some(Ok(key)) = key {
-        let feed = Feed::new(key);
-        feedstore.add(feed);
-    }
-
+// The onconnection handler is called for each incoming connection (if server)
+// or once when connected (if client).
+async fn onconnection(stream: TcpStream, is_initiator: bool, feedstore: Arc<FeedStore>) -> Result<()> {
     let reader = stream.clone();
     let writer = stream.clone();
-    let mut protocol = Protocol::from_rw(reader, writer, is_initiator).await?;
-    protocol.set_handlers(Arc::new(feedstore));
-    protocol.listen().await?;
 
+    let mut protocol = Protocol::from_rw(reader, writer, is_initiator).await?;
+    protocol.set_handlers(feedstore);
+    protocol.listen().await?;
     Ok(())
+}
+
+struct FeedStore {
+    feeds: Vec<Arc<Feed>>,
+}
+impl FeedStore {
+    pub fn new() -> Self {
+        Self { feeds: vec![] }
+    }
+
+    pub fn add(&mut self, feed: Feed) {
+        self.feeds.push(Arc::new(feed));
+    }
 }
 
 /// A FeedState stores the head seq of the remote.
@@ -141,11 +129,7 @@ impl ChannelHandlers for Feed {
     async fn on_have<'a>(&self, channel: &mut ChannelContext<'a>, msg: Have) -> Result<()> {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
-        log::info!(
-            "receive have: {} (state {})",
-            msg.start,
-            state.remote_head
-        );
+        log::info!("receive have: {} (state {})", msg.start, state.remote_head);
         if msg.start > state.remote_head {
             // Store the new remote head.
             state.remote_head = msg.start;
@@ -192,19 +176,6 @@ impl ChannelHandlers for Feed {
         }
 
         Ok(())
-    }
-}
-
-struct FeedStore {
-    feeds: Vec<Arc<Feed>>,
-}
-impl FeedStore {
-    pub fn new() -> Self {
-        Self { feeds: vec![] }
-    }
-
-    pub fn add(&mut self, feed: Feed) {
-        self.feeds.push(Arc::new(feed));
     }
 }
 
