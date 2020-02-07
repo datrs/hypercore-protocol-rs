@@ -1,11 +1,6 @@
 <h1 align="center">hypercore-protocol-rs</h1>
-<div align="center">
-  <strong>
-  Rust implementation of the wire protocol of <a href="https://github.com/mafintosh/hypercore-protocol">Hypercore</a>
-  </strong>
-</div>
 
----
+**A Rust implementation of the wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol)**
 
 *Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
 
