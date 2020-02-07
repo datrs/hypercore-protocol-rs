@@ -42,7 +42,7 @@ pub mod schema {
     pub use crate::message::ExtensionMessage;
 }
 
-pub use handlers::{ChannelContext, ChannelHandlers, DynProtocol, StreamContext, StreamHandlers};
+pub use handlers::{Channel, ChannelHandler, DynProtocol, StreamContext, StreamHandler};
 pub use handshake::{handshake, HandshakeResult};
 pub use message::Message;
 pub use protocol::{Protocol, ProtocolBuilder, ProtocolOptions};

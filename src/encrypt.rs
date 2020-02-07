@@ -1,5 +1,4 @@
 use crate::handshake::HandshakeResult;
-use async_std::io::{BufReader, BufWriter};
 use futures::io::{AsyncRead, AsyncWrite};
 use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
 use salsa20::XSalsa20;
@@ -52,7 +51,7 @@ where
     R: AsyncRead + Send + Unpin + 'static,
 {
     cipher: Option<Cipher>,
-    reader: BufReader<R>,
+    reader: R,
 }
 
 impl<R> EncryptedReader<R>
@@ -60,11 +59,6 @@ where
     R: AsyncRead + Send + Unpin + 'static,
 {
     pub fn new(reader: R) -> Self {
-        let reader = BufReader::new(reader);
-        Self::from_buffered(reader)
-    }
-
-    pub fn from_buffered(reader: BufReader<R>) -> Self {
         Self {
             cipher: None,
             reader,
@@ -83,7 +77,7 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     cipher: Option<Cipher>,
-    writer: BufWriter<W>,
+    writer: W,
 }
 
 impl<W> EncryptedWriter<W>
@@ -91,11 +85,6 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     pub fn new(writer: W) -> Self {
-        let writer = BufWriter::new(writer);
-        Self::from_buffered(writer)
-    }
-
-    pub fn from_buffered(writer: BufWriter<W>) -> Self {
         Self {
             cipher: None,
             writer,

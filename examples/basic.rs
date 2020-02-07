@@ -10,7 +10,7 @@ use std::io::Result;
 
 use simple_hypercore_protocol::schema::*;
 use simple_hypercore_protocol::{discovery_key, ProtocolBuilder};
-use simple_hypercore_protocol::{ChannelContext, ChannelHandlers, StreamContext, StreamHandlers};
+use simple_hypercore_protocol::{Channel, ChannelHandler, StreamContext, StreamHandler};
 
 mod util;
 use util::{tcp_client, tcp_server};
@@ -109,7 +109,7 @@ impl Default for FeedState {
 }
 
 #[async_trait]
-impl StreamHandlers for FeedStore {
+impl StreamHandler for FeedStore {
     async fn on_discoverykey(
         &self,
         protocol: &mut StreamContext,
@@ -135,10 +135,10 @@ impl StreamHandlers for FeedStore {
 }
 
 #[async_trait]
-impl ChannelHandlers for Feed {
+impl ChannelHandler for Feed {
     async fn on_open<'a>(
         &self,
-        channel: &mut ChannelContext<'a>,
+        channel: &mut Channel<'a>,
         discovery_key: &[u8],
     ) -> Result<()> {
         log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
@@ -152,7 +152,7 @@ impl ChannelHandlers for Feed {
         Ok(())
     }
 
-    async fn on_have<'a>(&self, channel: &mut ChannelContext<'a>, msg: Have) -> Result<()> {
+    async fn on_have<'a>(&self, channel: &mut Channel<'a>, msg: Have) -> Result<()> {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
         log::info!("receive have: {} (state {})", msg.start, state.remote_head);
@@ -174,7 +174,7 @@ impl ChannelHandlers for Feed {
         Ok(())
     }
 
-    async fn on_data<'a>(&self, channel: &mut ChannelContext<'a>, msg: Data) -> Result<()> {
+    async fn on_data<'a>(&self, channel: &mut Channel<'a>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
         log::info!(
             "receive data: idx {}, {} bytes (remote_head {})",

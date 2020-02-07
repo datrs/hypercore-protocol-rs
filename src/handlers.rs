@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub(crate) struct DefaultHandlers {}
 #[async_trait]
-impl StreamHandlers for DefaultHandlers {}
+impl StreamHandler for DefaultHandlers {}
 impl DefaultHandlers {
     pub fn new() -> Arc<DefaultHandlers> {
         Arc::new(DefaultHandlers {})
@@ -16,11 +16,11 @@ impl DefaultHandlers {
 }
 
 /// A type alias for [DynProtocol](DynProtocol) – this is the protocol handler you get
-/// within [StreamHandlers](StreamHandlers) to send messages and open channels.
+/// within [StreamHandler](StreamHandler) to send messages and open channels.
 pub type StreamContext = (dyn DynProtocol);
 
 /// A trait object wrapper for [Protocol](Protocol). These are the methods you can call
-/// on the `context` parameter in [StreamHandlers](StreamHandlers) implementations.
+/// on the `context` parameter in [StreamHandler](StreamHandler) implementations.
 /// You should not need to implement this yourself.
 #[async_trait]
 pub trait DynProtocol: Send {
@@ -44,25 +44,30 @@ where
     }
 
     async fn destroy(&mut self, error: Error) {
-        self.destroy(error).await
+        self.destroy(error)
     }
 }
 
-/// The ChannelContext struct is the `context` parameter being passed to
-/// [ChannelHandlers](ChannelHandlers). It allows to send messages over the current channel,
+/// The Channel struct is the `context` parameter being passed to
+/// [ChannelHandler](ChannelHandler). It allows to send messages over the current channel,
 /// open new channels, or destroy the Protocol.
-pub struct ChannelContext<'a> {
+pub struct Channel<'a> {
     protocol: &'a mut dyn DynProtocol,
     discovery_key: &'a [u8],
 }
 
-impl<'a> ChannelContext<'a> {
+impl<'a> Channel<'a> {
     pub fn new(protocol: &'a mut dyn DynProtocol, discovery_key: &'a [u8]) -> Self {
         Self {
             discovery_key: discovery_key,
             protocol,
         }
     }
+
+    pub fn discovery_key(&self) -> &[u8] {
+        self.discovery_key
+    }
+
     pub async fn send(&mut self, message: Message) -> Result<()> {
         let discovery_key = self.discovery_key;
         self.protocol.send(discovery_key, message).await
@@ -119,21 +124,21 @@ impl<'a> ChannelContext<'a> {
     }
 }
 
-pub type StreamHandlerType = Arc<dyn StreamHandlers + Send + Sync>;
-pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
+pub type StreamHandlerType = Arc<dyn StreamHandler + Send + Sync>;
+pub type ChannelHandlerType = Arc<dyn ChannelHandler + Send + Sync>;
 
 /// Implement this trait on a struct to handle stream-level events.
 ///
 /// Set the handler when building a protocol in [ProtocolBuilder.set_handlers](ProtocolBuilder::set_handlers).
 ///
-/// Example (where `Feed` would implement [ChannelHandlers](ChannelHandlers)):
+/// Example (where `Feed` would implement [ChannelHandler](ChannelHandler)):
 /// ```
 /// struct FeedStore {
 ///     feeds: Vec<Arc<Feed>>,
 /// }
 ///
 /// #[async_trait]
-/// impl StreamHandlers for FeedStore {
+/// impl StreamHandler for FeedStore {
 ///     async fn on_discoverykey(
 ///         &self,
 ///         protocol: &mut StreamContext,
@@ -153,7 +158,7 @@ pub type ChannelHandlerType = Arc<dyn ChannelHandlers + Send + Sync>;
 /// }
 /// ```
 #[async_trait]
-pub trait StreamHandlers: Sync {
+pub trait StreamHandler: Sync {
     async fn on_discoverykey(
         &self,
         _protocol: &mut StreamContext,
@@ -168,33 +173,33 @@ pub trait StreamHandlers: Sync {
 /// All methods are optional. Pass the struct on which you
 /// implemented this trait into [protocol.open](Protocol::open).
 #[async_trait]
-pub trait ChannelHandlers: Send + Sync {
-    async fn onmessage<'a>(
+pub trait ChannelHandler: Send + Sync {
+    async fn on_message<'a>(
         &self,
-        mut context: &'a mut ChannelContext<'a>,
+        mut channel: &'a mut Channel<'a>,
         message: Message,
     ) -> Result<()> {
         match message {
-            Message::Options(msg) => self.on_options(&mut context, msg).await,
-            Message::Status(msg) => self.on_status(&mut context, msg).await,
-            Message::Have(msg) => self.on_have(&mut context, msg).await,
-            Message::Unhave(msg) => self.on_unhave(&mut context, msg).await,
-            Message::Want(msg) => self.on_want(&mut context, msg).await,
-            Message::Unwant(msg) => self.on_unwant(&mut context, msg).await,
-            Message::Request(msg) => self.on_request(&mut context, msg).await,
-            Message::Cancel(msg) => self.on_cancel(&mut context, msg).await,
-            Message::Data(msg) => self.on_data(&mut context, msg).await,
-            Message::Extension(msg) => self.on_extension(&mut context, msg).await,
-            // Open is handled at the stream level.
-            // Message::Open(msg) => self.on_open(&mut context, msg),
-            Message::Close(msg) => self.on_close(&mut context, msg).await,
+            Message::Options(msg) => self.on_options(&mut channel, msg).await,
+            Message::Status(msg) => self.on_status(&mut channel, msg).await,
+            Message::Have(msg) => self.on_have(&mut channel, msg).await,
+            Message::Unhave(msg) => self.on_unhave(&mut channel, msg).await,
+            Message::Want(msg) => self.on_want(&mut channel, msg).await,
+            Message::Unwant(msg) => self.on_unwant(&mut channel, msg).await,
+            Message::Request(msg) => self.on_request(&mut channel, msg).await,
+            Message::Cancel(msg) => self.on_cancel(&mut channel, msg).await,
+            Message::Data(msg) => self.on_data(&mut channel, msg).await,
+            Message::Extension(msg) => self.on_extension(&mut channel, msg).await,
+            // Open and close is handled at the stream level.
+            // Message::Open(msg) => self.on_open(&mut channel, msg),
+            // Message::Close(msg) => self.on_close(&mut channel, msg).await,
             _ => Ok(()),
         }
     }
 
     async fn on_open<'a>(
         &self,
-        _protocol: &mut ChannelContext<'a>,
+        _protocol: &mut Channel<'a>,
         _discovery_key: &[u8],
     ) -> Result<()> {
         Ok(())
@@ -202,61 +207,61 @@ pub trait ChannelHandlers: Send + Sync {
 
     async fn on_status<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Status,
     ) -> Result<()> {
         Ok(())
     }
     async fn on_options<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Options,
     ) -> Result<()> {
         Ok(())
     }
-    async fn on_have<'a>(&self, _context: &mut ChannelContext<'a>, _message: Have) -> Result<()> {
+    async fn on_have<'a>(&self, _channel: &mut Channel<'a>, _message: Have) -> Result<()> {
         Ok(())
     }
     async fn on_unhave<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Unhave,
     ) -> Result<()> {
         Ok(())
     }
-    async fn on_want<'a>(&self, _context: &mut ChannelContext<'a>, _message: Want) -> Result<()> {
+    async fn on_want<'a>(&self, _channel: &mut Channel<'a>, _message: Want) -> Result<()> {
         Ok(())
     }
     async fn on_unwant<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Unwant,
     ) -> Result<()> {
         Ok(())
     }
     async fn on_request<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Request,
     ) -> Result<()> {
         Ok(())
     }
     async fn on_cancel<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: Cancel,
     ) -> Result<()> {
         Ok(())
     }
-    async fn on_data<'a>(&self, _context: &mut ChannelContext<'a>, _message: Data) -> Result<()> {
+    async fn on_data<'a>(&self, _channel: &mut Channel<'a>, _message: Data) -> Result<()> {
         Ok(())
     }
-    async fn on_close<'a>(&self, _context: &mut ChannelContext<'a>, _message: Close) -> Result<()> {
+    async fn on_close<'a>(&self, _channel: &mut Channel<'a>, _message: Close) -> Result<()> {
         Ok(())
     }
     async fn on_extension<'a>(
         &self,
-        _context: &mut ChannelContext<'a>,
+        _channel: &mut Channel<'a>,
         _message: ExtensionMessage,
     ) -> Result<()> {
         Ok(())

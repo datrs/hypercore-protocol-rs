@@ -1,13 +1,14 @@
 use async_std::future;
+use async_std::io::{BufReader, BufWriter};
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use simple_message_channels::Message as WireMessage;
 use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
 
-use crate::channels::{Channel, Channelizer};
+use crate::channels::Channelizer;
 use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT};
 use crate::encrypt::{EncryptedReader, EncryptedWriter};
-use crate::handlers::{ChannelContext, ChannelHandlerType, DefaultHandlers, StreamHandlerType};
+use crate::handlers::{Channel, ChannelHandlerType, DefaultHandlers, StreamHandlerType};
 use crate::handshake::{handshake, HandshakeResult};
 use crate::message::Message;
 use crate::prefixed;
@@ -82,8 +83,8 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    writer: EncryptedWriter<W>,
-    reader: EncryptedReader<R>,
+    writer: EncryptedWriter<BufWriter<W>>,
+    reader: EncryptedReader<BufReader<R>>,
     options: ProtocolOptions,
     handshake: Option<HandshakeResult>,
     channels: Channelizer,
@@ -98,8 +99,8 @@ where
 {
     /// Create a new Protocol instance.
     pub fn new(reader: R, writer: W, mut options: ProtocolOptions) -> Self {
-        let reader = EncryptedReader::new(reader);
-        let writer = EncryptedWriter::new(writer);
+        let reader = EncryptedReader::new(BufReader::new(reader));
+        let writer = EncryptedWriter::new(BufWriter::new(writer));
         let handlers = options
             .handlers
             .take()
@@ -123,8 +124,7 @@ where
         if self.options.noise {
             self.perform_handshake().await?;
         }
-        self.main_loop().await?;
-        Ok(())
+        self.main_loop().await
     }
 
     async fn perform_handshake(&mut self) -> Result<()> {
@@ -151,8 +151,8 @@ where
         let keepalive = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
         loop {
             // Check if an error was set (through Protocol.destroy()).
-            if let Some(error) = self.error.take() {
-                return Err(error);
+            if self.error.is_some() {
+                return Err(self.error.take().unwrap());
             }
 
             let next = prefixed::read_prefixed(&mut self.reader);
@@ -163,7 +163,7 @@ where
                 }
                 Ok(Ok(message)) => {
                     let message = WireMessage::from_buf(&message)?;
-                    self.onmessage(message).await?;
+                    self.on_message(message).await?;
                 }
                 Ok(Err(e)) => {
                     return Err(e);
@@ -173,31 +173,21 @@ where
     }
 
     /// Destroy the protocol instance with an error.
-    pub async fn destroy(&mut self, error: Error) {
+    pub fn destroy(&mut self, error: Error) {
         self.error = Some(error)
     }
 
-    async fn onmessage(&mut self, message: WireMessage) -> Result<()> {
+    async fn on_message(&mut self, message: WireMessage) -> Result<()> {
         let channel = message.channel;
         let message = Message::decode(message.typ, message.message)?;
         log::trace!("recv: {}", message);
         let _result = match message {
-            Message::Open(msg) => self.onopen(channel, msg).await,
-            Message::Close(msg) => self.onclose(channel, msg).await,
+            Message::Open(msg) => self.on_open(channel, msg).await,
+            Message::Close(msg) => self.on_close(channel, msg).await,
             Message::Extension(_msg) => unimplemented!(),
             _ => {
-                let channel = self
-                    .channels
-                    .get_remote(channel as usize)
-                    .ok_or(Error::new(
-                        ErrorKind::BrokenPipe,
-                        "Received message on closed channel",
-                    ))?;
-
-                let discovery_key = channel.discovery_key.clone();
-                let handlers = channel.handlers.clone();
-                self.on_channel_message(handlers, discovery_key, message)
-                    .await
+                let discovery_key = self.channels.resolve_remote(channel as usize)?;
+                self.on_channel_message(discovery_key, message).await
             }
         };
         Ok(())
@@ -205,23 +195,29 @@ where
 
     async fn on_channel_message<'a>(
         &'a mut self,
-        handlers: ChannelHandlerType,
         discovery_key: Vec<u8>,
         message: Message,
     ) -> Result<()> {
-        let mut context = ChannelContext::new(&mut *self, &discovery_key);
-        let handlers = handlers.clone();
-        handlers.onmessage(&mut context, message).await
+        let (handlers, mut context) = self.channel_context(&discovery_key)?;
+        handlers.on_message(&mut context, message).await
     }
 
-    async fn on_channel_open<'a>(
-        &'a mut self,
-        handlers: ChannelHandlerType,
-        discovery_key: Vec<u8>,
-    ) -> Result<()> {
-        let mut context = ChannelContext::new(&mut *self, &discovery_key);
-        let handlers = handlers.clone();
+    async fn on_channel_open<'a>(&'a mut self, discovery_key: Vec<u8>) -> Result<()> {
+        let (handlers, mut context) = self.channel_context(&discovery_key)?;
         handlers.on_open(&mut context, &discovery_key).await
+    }
+
+    fn channel_context<'a>(
+        &'a mut self,
+        discovery_key: &'a [u8],
+    ) -> Result<(ChannelHandlerType, Channel<'a>)> {
+        let channel = self
+            .channels
+            .get(&discovery_key)
+            .ok_or(Error::new(ErrorKind::BrokenPipe, "Channel is not open"))?;
+        let handlers = channel.handlers.clone();
+        let context = Channel::new(&mut *self, &discovery_key);
+        Ok((handlers, context))
     }
 
     /// Open a new channel by passing a key and a Arc-wrapped [handlers](crate::ChannelHandlers)
@@ -238,7 +234,7 @@ where
         Ok(())
     }
 
-    async fn onclose(&mut self, ch: u64, msg: Close) -> Result<()> {
+    async fn on_close(&mut self, ch: u64, msg: Close) -> Result<()> {
         let ch = ch as usize;
         if let Some(discovery_key) = msg.discovery_key {
             self.channels.remove(&discovery_key.clone());
@@ -249,53 +245,37 @@ where
         Ok(())
     }
 
-    async fn onopen(&mut self, ch: u64, msg: Open) -> Result<()> {
+    async fn on_open(&mut self, ch: u64, msg: Open) -> Result<()> {
         let Open {
             discovery_key,
             capability,
         } = msg;
 
-        // The remote is opening a channel for a discovery key. Let's see
-        // if we know the pubkey for this channel.
-        let key = match self.channels.get(&discovery_key) {
-            // Yep, we opened this channel locally.
-            Some(Channel { key: Some(key), .. }) => Ok(key.to_vec()),
-            // No key, but the channel is already present - this only happens
-            // if the remote already opened this channel. Exit out.
-            Some(Channel { key: None, .. }) => {
-                Err(Error::new(ErrorKind::AlreadyExists, "Channel already open"))
-            }
-            // No channel yet for this discovery key.
-            None => {
-                // Call out to our ondiscoverykey handler to see if the application
-                // wants to open a channel.
-                self.handlers
-                    .clone()
-                    .on_discoverykey(&mut *self, &discovery_key)
-                    .await?;
+        let mut key = self.channels.get_key(&discovery_key);
 
-                // And check again if a channel has been opened.
-                match self.channels.get(&discovery_key) {
-                    Some(Channel { key: Some(key), .. }) => Ok(key.to_vec()),
-                    _ => Err(Error::new(ErrorKind::BrokenPipe, "Key not found")),
-                }
-            }
-        }?;
+        // This means there is not yet a locally-opened channel for this discovery_key.
+        if key.is_none() {
+            // Let the application open a channel if wanted.
+            let handlers = self.handlers.clone();
+            handlers.on_discoverykey(&mut *self, &discovery_key).await?;
+            // And see if it happened.
+            key = self.channels.get_key(&discovery_key);
+        }
+
+        if key.is_none() {
+            // TODO: Do something if a channel is opened without us having the key,
+            // maybe close the channel to singal this back to the remote?
+            return Ok(());
+        }
+        let key = key.unwrap();
 
         // Verify the remote capability.
         self.verify_remote_capability(capability, &key)?;
         // Attach the channel for future use.
         self.channels
-            .attach_remote(discovery_key.clone(), ch as usize);
-
-        // Here, a channel should always be ready.
-        let channel = self.channels.get(&discovery_key).ok_or(Error::new(
-            ErrorKind::BrokenPipe,
-            "Failed to open a channel.",
-        ))?;
-        let handlers = channel.handlers.clone();
-        self.on_channel_open(handlers, discovery_key.to_vec())
-            .await?;
+            .attach_remote(discovery_key.clone(), ch as usize)?;
+        // Let the channel handler know the channel is open.
+        self.on_channel_open(discovery_key.to_vec()).await?;
         Ok(())
     }
 
