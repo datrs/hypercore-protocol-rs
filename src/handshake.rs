@@ -135,7 +135,7 @@ where
     let remote_nonce = decode_nonce(&rx_buf[..rx_len])?;
     let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
-    let split = noise.split_raw();
+    let split = noise.dangerously_get_raw_split();
     let split_tx;
     let split_rx;
     if is_initiator {

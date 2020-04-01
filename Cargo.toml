@@ -18,10 +18,10 @@ categories = [
 ]
 
 [dependencies]
-simple-message-channels = "0.2.0"
 async-std = "1.5.0"
+simple-message-channels = "0.2.0"
 futures = "0.3.1"
-snow = { git = "https://github.com/Frando/snow.git", branch = "datrs" }
+snow = { git = "https://github.com/Frando/snow.git", branch = "datrs-new", features = ["risky-raw-split", "xchachapoly"] }
 prost = "0.6.1"
 bytes = "0.5.4"
 varinteger = "1.0.6"
@@ -32,9 +32,11 @@ async-trait = "0.1.22"
 salsa20 = "0.4.0"
 log = "0.4.8"
 pretty-hash = "0.4.1"
+futures-timer = "3.0.2"
 
 [dev-dependencies]
 env_logger = "0.7.1"
+hypercore = { git = "https://github.com/bltavares/hypercore", branch = "bitfield-compress" }
 
 [build-dependencies]
 prost-build = "0.6.1"
