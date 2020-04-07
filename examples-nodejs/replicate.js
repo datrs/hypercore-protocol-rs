@@ -27,7 +27,7 @@ feed.ready(() => {
   console.log('KEY=' + feed.key.toString('hex'))
   console.log()
   if (feed.writable && filename) {
-    feed.append(['hi', 'ola', 'hello', 'mundo'])
+    feed.append(['hi\n', 'ola\n', 'hello\n', 'mundo\n'])
     // pipeline(
     //   fs.createReadStream(filename),
     //   split(),
