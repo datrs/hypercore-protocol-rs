@@ -1,8 +1,8 @@
 use crate::schema::*;
+use crate::wire_message::Message as ChannelMessage;
 use bytes::Bytes;
 use pretty_hash::fmt as pretty_fmt;
 use prost::Message as ProstMessage;
-use simple_message_channels::Message as ChannelMessage;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 

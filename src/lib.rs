@@ -1,7 +1,7 @@
 //! Speak hypercore-protocol.
 //!
 //! Most basic example:
-//! ```
+//! ```rust
 //! # async_std::task::block_on(async {
 //! #
 //! use hypercore_protocol::{ProtocolBuilder, StreamHandlers};
@@ -35,6 +35,7 @@ mod message;
 mod prefixed;
 mod protocol;
 mod util;
+mod wire_message;
 
 /// The wire messages used by the protocol.
 pub mod schema {
