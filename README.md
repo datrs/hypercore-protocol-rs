@@ -20,17 +20,30 @@ _\*: The Noise handshake is not working with the released version of Hypercore. 
 
 ## Examples
 
+To get started:
+```
+cd examples-nodejs
+npm install
+```
+
+* `node examples-nodejs/run.js basic`
+
+    Runs the `basic.rs` example with a replication stream from NodeJS hypercore. The `basic.rs` example fetches all blocks of a hypercore and prints them to STDOUT.
+
+* `node examples-nodejs/run.js hypercore`
+
+    Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a hypercore and tries to insert them into a hypercore. This currently fails, see [this issue](https://github.com/datrs/hypercore/pull/108) for details.
+
+
 ### [basic.rs](examples/basic.rs)
 
-Accepts a hypercore-protocol stream and fetches the first data block of the first hypercore. Also my current test case, read the code in there if you want to see how you'd work with hypercore-protocol using this crate.
+Accepts a hypercore-protocol stream and fetches all blocks of the first hypercore.
 
 * Share a file over a hypercore on a local TCP server. Prints a hypercore key.
   `node examples-nodejs/replicate.js server 8000 ./README.md`
 
 * Use this key to connect from Rust and pipe the file content to stdout:
   `cargo run --example basic -- server 8000 KEY`
-
-You can swap client and server between the two commands.
 
 Note that the rust impl works only against a patched version of hypercore that switches the NodeJS module [noise-protocol](https://github.com/emilbayes/noise-protocol) to a branch that changes to [Noise handshake DH calculation to the recommended standard](https://github.com/mafintosh/hypercore-protocol/issues/51).
 
