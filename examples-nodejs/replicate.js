@@ -6,10 +6,11 @@ const { pipeline } = require('stream')
 const fs = require('fs')
 const p = require('path')
 const os = require('os')
+const split = require('split2')
 
 const hostname = 'localhost'
 let [mode, port, keyOrFilename] = process.argv.slice(2)
-if (['client', 'server'].indexOf(mode) === -1 || !port) {
+if (['client', 'server'].indexOf(mode) === -1 || !port || !keyOrFilename) {
   exit('usage: node index.js [client|server] PORT [KEY|FILENAME]')
 }
 
@@ -23,7 +24,20 @@ if (keyOrFilename.match(KEY_REGEX)) {
 
 const feed = hypercore(ram, key)
 feed.ready(() => {
-  console.log('key', feed.key.toString('hex'))
+  console.log('KEY=' + feed.key.toString('hex'))
+  console.log()
+  if (feed.writable && filename) {
+    feed.append(['hi', 'ola', 'hello', 'mundo'])
+    // pipeline(
+    //   fs.createReadStream(filename),
+    //   split(),
+    //   feed.createWriteStream(),
+    //   err => {
+    //     if (err) console.error('error importing file', err)
+    //     else console.error('import done, new len %o, bytes %o', feed.length, feed.byteLength)
+    //   }
+    // )
+  }
 })
 
 const opts = {
@@ -33,9 +47,10 @@ const opts = {
 start(opts)
 
 function start (opts) {
-  const { port, hostname, mode } = opts
+  const { port, hostname, mode, feed, filename } = opts
   const isInitiator = mode === 'client'
   opts.isInitiator = isInitiator
+
   if (mode === 'client') {
     const socket = net.connect(port, hostname)
     onconnection({ ...opts, socket })
@@ -77,17 +92,6 @@ function onconnection (opts) {
       socket.destroy()
     })
 
-    if (feed.writable && filename) {
-      pipeline(
-        fs.createReadStream(filename),
-        feed.createWriteStream(),
-        err => {
-          if (err) console.error('error importin file', err)
-          else console.error('import done, new len', feed.length)
-        }
-      )
-    }
-
     if (mode === 'write') {
       // feed.append(feed.length)
       // feed.append('hello')
@@ -100,6 +104,8 @@ function onconnection (opts) {
     if (mode === 'read') {
       feed.createReadStream({ live: true }).pipe(process.stdout)
     }
+
+    // setTimeout(() => proto.destroy(), 1000)
   })
 }
 
