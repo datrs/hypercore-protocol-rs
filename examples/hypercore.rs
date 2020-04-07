@@ -1,10 +1,8 @@
-use async_std::io;
 use async_std::net::TcpStream;
-use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex, RwLock};
 use async_std::task;
 use async_trait::async_trait;
-use hypercore::{Feed, Node, NodeTrait, Proof, PublicKey, Signature, Storage};
+use hypercore::{Feed, Node, Proof, PublicKey, Signature, Storage};
 use pretty_hash::fmt as pretty_fmt;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
@@ -35,13 +33,13 @@ fn main() {
     task::block_on(async move {
         let mut feedstore: FeedStore<RandomAccessMemory> = FeedStore::new();
         if let Some(key) = key {
+            // Create a hypercore.
             let storage = Storage::new_memory().await.unwrap();
             let public_key = PublicKey::from_bytes(&key).unwrap();
-
             let feed = Feed::builder(public_key, storage).build().unwrap();
-            // let feed = Feed::with_storage(storage).await.unwrap();
 
-            let feed_wrapper: FeedWrapper<RandomAccessMemory> = FeedWrapper::from_feed(feed);
+            // Wrap it and add to the feed store.
+            let feed_wrapper = FeedWrapper::from_memory_feed(feed);
             feedstore.add(feed_wrapper);
         }
         let feedstore = Arc::new(feedstore);
@@ -61,42 +59,10 @@ fn usage() {
     std::process::exit(1);
 }
 
-async fn append<T>(feed: &mut Feed<T>, content: &[u8])
-where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
-{
-    feed.append(content).await.unwrap();
-}
-
-async fn print<T>(feed: &Arc<Mutex<Feed<T>>>)
-where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
-{
-    let mut feed = feed.lock().await;
-    let len = feed.len();
-    println!("Feed len: {}", len);
-    for i in (len - 1)..len {
-        let node = feed.get(i).await.unwrap();
-        if let Some(value) = node {
-            println!("{}: {:?}", i, String::from_utf8(value).unwrap());
-        } else {
-            println!("{}: {:?}", i, "NONE");
-        }
-    }
-}
-
-// fn main() {
-//     task::block_on(task::spawn(async {
-//         let mut feed = Feed::default();
-
-//         append(&mut feed, b"hello").await;
-//         append(&mut feed, b"world").await;
-//         print(&mut feed).await;
-//     }));
-// }
-
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
+// Unfortunately, everything that touches the feedstore or a feed has to be generic
+// at the moment.
 async fn onconnection<T: 'static>(
     stream: TcpStream,
     is_initiator: bool,
@@ -112,6 +78,7 @@ where
     protocol.listen().await
 }
 
+/// A container for hypercores.
 struct FeedStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
@@ -171,17 +138,7 @@ where
     feed: Arc<Mutex<Feed<T>>>,
 }
 impl FeedWrapper<RandomAccessMemory> {
-    pub fn new(key: Vec<u8>) -> Self {
-        let feed: Feed<RandomAccessMemory> = Feed::default();
-        FeedWrapper {
-            discovery_key: discovery_key(&key),
-            key,
-            state: Arc::new(RwLock::new(FeedState::default())),
-            feed: Arc::new(Mutex::new(feed)),
-        }
-    }
-
-    pub fn from_feed(feed: Feed<RandomAccessMemory>) -> Self {
+    pub fn from_memory_feed(feed: Feed<RandomAccessMemory>) -> Self {
         let key = feed.public_key().to_bytes();
         FeedWrapper {
             discovery_key: discovery_key(&key),
@@ -238,28 +195,24 @@ where
 
     async fn on_data<'a>(&self, channel: &mut Channel<'a>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
-        log::info!(
-            "receive data: idx {}, {} bytes (remote_head {:?})",
-            msg.index,
-            msg.value.as_ref().map_or(0, |v| v.len()),
-            state.remote_head
-        );
+        // log::info!(
+        //     "receive data: idx {}, {} bytes (remote_head {:?})",
+        //     msg.index,
+        //     msg.value.as_ref().map_or(0, |v| v.len()),
+        //     state.remote_head
+        // );
 
+        // Lock our feed.
         let mut feed = self.feed.lock().await;
-        // let len = match msg.value {
-        //     Some(value) => value.len(),
-        //     None => 0,
-        // };
-
-        let (value, len): (Option<&[u8]>, usize) = match msg.value.as_ref() {
-            None => (None, 0),
+        let value: Option<&[u8]> = match msg.value.as_ref() {
+            None => None,
             Some(value) => {
                 eprintln!(
-                    "recv {} {}",
+                    "recv idx {}: {:?}",
                     msg.index,
                     String::from_utf8(value.clone()).unwrap()
                 );
-                (Some(value), value.len())
+                Some(value)
             }
         };
 
@@ -278,47 +231,31 @@ where
             signature,
         };
 
-        // eprintln!("PUT {:?} {:?} {:?}", msg.index, value, proof);
+        // println!("idx {} data {:?}", msg.index, &value);
+        // println!(
+        //     "Proof: {:#?}",
+        //     proof
+        //         .clone()
+        //         .nodes
+        //         .iter()
+        //         .map(|n| {
+        //             let n = n.clone();
+        //             format!("index {} len {} parent {}", n.index(), n.len(), n.parent())
+        //         })
+        //         .collect::<Vec<String>>()
+        // );
         // feed.put(msg.index, None, proof.clone()).await.unwrap();
-        // let index = match msg.index {
-        //     0 => 0,
-        //     _ => msg.index - 1,
-        // };
-        // println!("proof {:?}", proof);
-        println!("idx {} data {:?}", msg.index, &value);
-        println!(
-            "Proof: {:#?}",
-            proof
-                .clone()
-                .nodes
-                .iter()
-                .map(|n| {
-                    let n = n.clone();
-                    format!("index {} len {} parent {}", n.index(), n.len(), n.parent())
-                })
-                .collect::<Vec<String>>()
-        );
-        // feed.put(msg.index, None, proof.clone()).await.unwrap();
+
+        // This does not fail, but the data is incorrectly inserted.
         feed.put(msg.index, value, proof.clone()).await.unwrap();
 
         let i = msg.index;
         let node = feed.get(i).await.unwrap();
         if let Some(value) = node {
-            println!("get {}: {:?}", i, String::from_utf8(value).unwrap());
+            println!("feed idx {}: {:?}", i, String::from_utf8(value).unwrap());
         } else {
-            println!("get {}: {:?}", i, "NONE");
+            println!("feed idx {}: {:?}", i, "NONE");
         }
-
-        println!("PUT OK!");
-        // drop(feed);
-        // print(&self.feed).await;
-        // if let Some(value) = msg.value {
-        //     let feed = self.feed.lock().await;
-        //     let mut stdout = io::stdout();
-        //     stdout.write_all(&value).await?;
-        //     stdout.flush().await?;
-        // }
-        println!("req next");
 
         let next = msg.index + 1;
         if let Some(remote_head) = state.remote_head {

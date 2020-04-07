@@ -1,7 +1,7 @@
 use futures::future::{select, Either};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures::io::{BufReader, BufWriter};
-use log::*;
+// use log::*;
 use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
 // We use the instant crate for WASM compatiblity.
