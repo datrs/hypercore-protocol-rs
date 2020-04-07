@@ -4,6 +4,8 @@ use futures::io::{BufReader, BufWriter};
 use log::*;
 use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
+// We use the instant crate for WASM compatiblity.
+use instant::Instant;
 
 use crate::channels::Channelizer;
 use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT};
@@ -80,11 +82,6 @@ impl ProtocolBuilder {
     }
 }
 
-// enum StreamState {
-//     Handshaking,
-//     Established,
-// }
-
 /// A Protocol stream.
 pub struct Protocol<R, W>
 where
@@ -98,7 +95,6 @@ where
     channels: Channelizer,
     handlers: StreamHandlerType,
     error: Option<Error>,
-    // stream_state: StreamState,
 }
 
 impl<R, W> Protocol<R, W>
@@ -114,11 +110,6 @@ where
             .handlers
             .take()
             .unwrap_or_else(|| DefaultHandlers::new());
-        // let stream_state = if options.noise {
-        //     StreamState::Handshaking
-        // } else {
-        //     StreamState::Established
-        // };
         Protocol {
             writer,
             reader,
@@ -136,12 +127,12 @@ where
     // The returned future resolves either if an error occurrs, if the connection
     // is dropped, or if all channels are closed (TODO: implement the latter).
     pub async fn listen(&mut self) -> Result<()> {
-        info!("start");
+        // debug!("start");
         if self.options.noise {
-            info!("now handshake");
+            // debug!("now handshake");
             self.perform_handshake().await?;
         }
-        info!("now main loop");
+        // debug!("now main loop");
         self.main_loop().await
     }
 
@@ -161,9 +152,6 @@ where
     }
 
     async fn main_loop(&mut self) -> Result<()> {
-        let keepalive_secs = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-        // let timeout_secs = Duration::from_secs(DEFAULT_TIMEOUT as u64);
-
         #[derive(Debug)]
         struct State {
             buf: Vec<u8>,
@@ -176,6 +164,9 @@ where
             Reading { header_len: usize, len: usize },
         }
 
+        let keepalive_secs = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
+        let timeout_secs = Duration::from_secs(DEFAULT_TIMEOUT as u64);
+
         let mut state = State {
             buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
             cap: 0,
@@ -186,9 +177,11 @@ where
         };
 
         let mut keepalive = Some(futures_timer::Delay::new(keepalive_secs.clone()));
+        let mut timeout = Instant::now();
+
         loop {
             // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
-            // If data was received, keep the keepalive.
+            // If data was received, keep the previous keepalive timer.
             let read_fut = self.reader.read(&mut state.buf[state.cap..]);
             let keepalive_fut = keepalive.take().unwrap();
             let (bytes_read, next_keepalive) = match select(keepalive_fut, read_fut).await {
@@ -205,9 +198,12 @@ where
             // Store our keepalive for the next iteration.
             keepalive = Some(next_keepalive);
 
-            // If we read some bytes, increase cap.
+            // If we read some bytes, increase cap and reset the timeout timer.
             if let Some(n) = bytes_read {
                 state.cap = state.cap + n;
+                timeout = Instant::now()
+            } else if timeout.elapsed() > timeout_secs {
+                return Err(Error::new(ErrorKind::TimedOut, "Remote timeout"));
             }
 
             // If there's no data to process, re-enter the select loop.

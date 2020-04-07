@@ -11,6 +11,8 @@ use crate::constants::CAP_NS_BUF;
 use crate::prefixed::{read_prefixed as recv, write_prefixed as send};
 use crate::schema::NoisePayload;
 
+const CIPHERKEYLEN: usize = 32;
+
 #[derive(Debug, Clone)]
 pub struct HandshakeResult {
     pub is_initiator: bool,
@@ -19,8 +21,8 @@ pub struct HandshakeResult {
     pub remote_pubkey: Vec<u8>,
     pub local_nonce: Vec<u8>,
     pub remote_nonce: Vec<u8>,
-    pub split_tx: Vec<u8>,
-    pub split_rx: Vec<u8>,
+    pub split_tx: [u8; CIPHERKEYLEN],
+    pub split_rx: [u8; CIPHERKEYLEN],
 }
 
 impl HandshakeResult {

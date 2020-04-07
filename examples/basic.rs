@@ -138,20 +138,23 @@ impl ChannelHandler for Feed {
     async fn on_have<'a>(&self, channel: &mut Channel<'a>, msg: Have) -> Result<()> {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
-        log::info!("receive have: {} (state {})", msg.start, state.remote_head);
-        if msg.start > state.remote_head {
-            // Store the new remote head.
-            state.remote_head = msg.start;
-            // If we didn't start reading, request first data block.
-            if !state.started {
-                state.started = true;
-                let msg = Request {
-                    index: 0,
-                    bytes: None,
-                    hash: None,
-                    nodes: None,
-                };
-                channel.request(msg).await?;
+        log::info!(
+            "receive have: {} (remote_head {:?})",
+            msg.start,
+            state.remote_head
+        );
+        if state.remote_head == None {
+            state.remote_head = Some(msg.start);
+            let msg = Request {
+                index: 0,
+                bytes: None,
+                hash: None,
+                nodes: None,
+            };
+            channel.request(msg).await?;
+        } else if let Some(remote_head) = state.remote_head {
+            if remote_head < msg.start {
+                state.remote_head = Some(msg.start)
             }
         }
         Ok(())
@@ -160,7 +163,7 @@ impl ChannelHandler for Feed {
     async fn on_data<'a>(&self, channel: &mut Channel<'a>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
         log::info!(
-            "receive data: idx {}, {} bytes (remote_head {})",
+            "receive data: idx {}, {} bytes (remote_head {:?})",
             msg.index,
             msg.value.as_ref().map_or(0, |v| v.len()),
             state.remote_head
@@ -173,15 +176,17 @@ impl ChannelHandler for Feed {
         }
 
         let next = msg.index + 1;
-        if state.remote_head >= next {
-            // Request next data block.
-            let msg = Request {
-                index: next,
-                bytes: None,
-                hash: None,
-                nodes: None,
-            };
-            channel.request(msg).await?;
+        if let Some(remote_head) = state.remote_head {
+            if remote_head >= next {
+                // Request next data block.
+                let msg = Request {
+                    index: next,
+                    bytes: None,
+                    hash: None,
+                    nodes: None,
+                };
+                channel.request(msg).await?;
+            }
         }
 
         Ok(())
@@ -192,14 +197,10 @@ impl ChannelHandler for Feed {
 /// This would have a bitfield to support sparse sync in the actual impl.
 #[derive(Debug)]
 struct FeedState {
-    remote_head: u64,
-    started: bool,
+    remote_head: Option<u64>,
 }
 impl Default for FeedState {
     fn default() -> Self {
-        FeedState {
-            remote_head: 0,
-            started: false,
-        }
+        FeedState { remote_head: None }
     }
 }
