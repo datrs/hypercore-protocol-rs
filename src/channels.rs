@@ -124,7 +124,7 @@ impl Channelizer {
                 remote_id: None,
                 handlers,
             };
-            self.channels.insert(hdkey.clone(), channel);
+            self.channels.insert(hdkey, channel);
         }
 
         discovery_key

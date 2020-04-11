@@ -26,6 +26,8 @@
 //!
 //! See [examples/basic.rs](https://github.com/Frando/hypercore-protocol-rust-experiments/blob/master/examples/basic.rs) for an actual example of how to use a protocol stream.
 
+#![allow(clippy::assign_op_pattern)]
+
 mod channels;
 mod constants;
 mod encrypt;

@@ -59,7 +59,7 @@ pub struct Channel<'a> {
 impl<'a> Channel<'a> {
     pub fn new(protocol: &'a mut dyn DynProtocol, discovery_key: &'a [u8]) -> Self {
         Self {
-            discovery_key: discovery_key,
+            discovery_key,
             protocol,
         }
     }

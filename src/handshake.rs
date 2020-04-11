@@ -63,7 +63,7 @@ impl HandshakeResult {
 pub fn build_handshake_state(
     is_initiator: bool,
 ) -> std::result::Result<(HandshakeState, Keypair), SnowError> {
-    static PATTERN: &'static str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
+    static PATTERN: &str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
     // log::trace!("hs local pubkey: {:x?}", &key_pair.public);

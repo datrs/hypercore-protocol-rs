@@ -41,7 +41,7 @@ impl Message {
 /// Note: `buf` has to have a valid length, and the length prefixed
 /// has to be removed already.
 pub fn decode_message(buf: &[u8]) -> Result<Message, Error> {
-    if buf.len() == 0 {
+    if buf.is_empty() {
         return Err(Error::new(
             ErrorKind::UnexpectedEof,
             "received empty message",
@@ -53,7 +53,7 @@ pub fn decode_message(buf: &[u8]) -> Result<Message, Error> {
     let channel = header >> 4;
     let typ = header & 0b1111;
     let message = Message {
-        channel: channel,
+        channel,
         typ: typ as u8,
         message: msg.to_vec(),
     };
@@ -77,6 +77,6 @@ pub fn encode_message(msg: &Message) -> Result<Vec<u8>, Error> {
     varinteger::encode(len_body as u64, &mut buf[..len_prefix]);
     let end = len_prefix + len_header;
     varinteger::encode(header, &mut buf[len_prefix..end]);
-    &mut buf[end..].copy_from_slice(&msg.message);
+    buf[end..].copy_from_slice(&msg.message);
     Ok(buf)
 }

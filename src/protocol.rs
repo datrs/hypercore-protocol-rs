@@ -70,7 +70,7 @@ impl ProtocolBuilder {
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
     {
-        Protocol::new(stream.clone(), stream.clone(), self.0)
+        Protocol::new(stream.clone(), stream, self.0)
     }
 
     pub fn from_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
@@ -176,7 +176,7 @@ where
             },
         };
 
-        let mut keepalive = Some(futures_timer::Delay::new(keepalive_secs.clone()));
+        let mut keepalive = Some(futures_timer::Delay::new(keepalive_secs));
         let mut timeout = Instant::now();
 
         loop {
@@ -188,7 +188,7 @@ where
                 Either::Left(_) => {
                     self.ping().await?;
                     // Create a new keepalive future for the next ping.
-                    let keepalive = futures_timer::Delay::new(keepalive_secs.clone());
+                    let keepalive = futures_timer::Delay::new(keepalive_secs);
                     (None, keepalive)
                 }
                 Either::Right((Err(e), _)) => return Err(e),
@@ -224,14 +224,14 @@ where
                         if byte == &0 {
                             continue;
                         }
-                        *varint = *varint + (byte.clone() as u64 & 127) * *factor;
+                        *varint = *varint + (*byte as u64 & 127) * *factor;
                         if *varint > MAX_MESSAGE_SIZE {
                             return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
                         }
                         if byte < &128 {
                             state.step = Step::Reading {
-                                len: varint.clone() as usize,
-                                header_len: varint_bytes.clone() as usize,
+                                len: *varint as usize,
+                                header_len: varint_bytes as usize,
                             };
                             needs_more_bytes = false;
                             break;
@@ -315,7 +315,7 @@ where
         let channel = self
             .channels
             .get(&discovery_key)
-            .ok_or(Error::new(ErrorKind::BrokenPipe, "Channel is not open"))?;
+            .ok_or_else(|| Error::new(ErrorKind::BrokenPipe, "Channel is not open"))?;
         let handlers = channel.handlers.clone();
         let context = Channel::new(&mut *self, &discovery_key);
         Ok((handlers, context))
@@ -338,7 +338,7 @@ where
     async fn on_close(&mut self, ch: u64, msg: Close) -> Result<()> {
         let ch = ch as usize;
         if let Some(discovery_key) = msg.discovery_key {
-            self.channels.remove(&discovery_key.clone());
+            self.channels.remove(&discovery_key);
         } else if let Some(channel) = self.channels.get_remote(ch) {
             let discovery_key = channel.discovery_key.clone();
             self.channels.remove(&discovery_key);
