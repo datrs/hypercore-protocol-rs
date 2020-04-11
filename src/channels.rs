@@ -112,20 +112,19 @@ impl Channelizer {
         let local_id = self.alloc_local();
         self.local_id[local_id] = Some(hdkey.clone());
 
-        if self.channels.contains_key(&hdkey) {
-            let channel = self.channels.get_mut(&hdkey).unwrap();
-            channel.local_id = Some(local_id);
-            channel.key = Some(key);
-        } else {
-            let channel = ChannelInfo {
+        self.channels
+            .entry(hdkey)
+            .and_modify(|channel| {
+                channel.local_id = Some(local_id);
+                channel.key = Some(key.clone());
+            })
+            .or_insert_with(|| ChannelInfo {
                 key: Some(key),
                 discovery_key: discovery_key.clone(),
                 local_id: Some(local_id),
                 remote_id: None,
                 handlers,
-            };
-            self.channels.insert(hdkey, channel);
-        }
+            });
 
         discovery_key
     }

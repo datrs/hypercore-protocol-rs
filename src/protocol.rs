@@ -8,7 +8,7 @@ use std::time::Duration;
 use instant::Instant;
 
 use crate::channels::Channelizer;
-use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT};
+use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handlers::{Channel, ChannelHandlerType, DefaultHandlers, StreamHandlerType};
 use crate::handshake::{handshake, HandshakeResult};
@@ -16,9 +16,6 @@ use crate::message::Message;
 use crate::schema::*;
 use crate::util::discovery_key;
 use crate::wire_message::Message as WireMessage;
-
-// 4MB is the max message size (will be much smaller usually).
-const MAX_MESSAGE_SIZE: u64 = 1024 * 1024 * 4;
 
 /// Options for a Protocol instance.
 pub struct ProtocolOptions {
@@ -66,14 +63,14 @@ impl ProtocolBuilder {
         self
     }
 
-    pub fn from_stream<S>(self, stream: S) -> Protocol<S, S>
+    pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
     {
         Protocol::new(stream.clone(), stream, self.0)
     }
 
-    pub fn from_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -151,26 +148,30 @@ where
         Ok(())
     }
 
+    /// The main protocol loop.
     async fn main_loop(&mut self) -> Result<()> {
-        #[derive(Debug)]
+        /// The reading state.
         struct State {
+            /// The read buffer.
             buf: Vec<u8>,
+            /// The number of relevant bytes in the read buffer.
             cap: usize,
+            /// The logical state of the reading (either header or body).
             step: Step,
         }
-        #[derive(Debug)]
+        // The reading step.
         enum Step {
-            Varint { factor: u64, varint: u64 },
-            Reading { header_len: usize, len: usize },
+            Header { factor: u64, varint: u64 },
+            Body { header_len: usize, body_len: usize },
         }
 
         let keepalive_secs = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
         let timeout_secs = Duration::from_secs(DEFAULT_TIMEOUT as u64);
 
         let mut state = State {
-            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
+            buf: vec![0u8; MAX_MESSAGE_SIZE as usize + 8],
             cap: 0,
-            step: Step::Varint {
+            step: Step::Header {
                 factor: 1,
                 varint: 0,
             },
@@ -200,7 +201,7 @@ where
 
             // If we read some bytes, increase cap and reset the timeout timer.
             if let Some(n) = bytes_read {
-                state.cap = state.cap + n;
+                state.cap += n;
                 timeout = Instant::now()
             } else if timeout.elapsed() > timeout_secs {
                 return Err(Error::new(ErrorKind::TimedOut, "Remote timeout"));
@@ -214,58 +215,69 @@ where
             // Keep processing our current buffer until we need more bytes.
             let mut needs_more_bytes = false;
             while !needs_more_bytes {
-                // Read a varint.
-                if let Step::Varint { factor, varint } = &mut state.step {
-                    let mut varint_bytes = 0;
-                    needs_more_bytes = true;
-                    for byte in &state.buf[..state.cap] {
-                        varint_bytes = varint_bytes + 1;
-                        // Ignore empty keepalive bytes.
-                        if byte == &0 {
-                            continue;
+                match state.step {
+                    // Read a varint.
+                    Step::Header {
+                        ref mut factor,
+                        ref mut varint,
+                    } => {
+                        needs_more_bytes = true;
+                        for (i, byte) in state.buf[..state.cap].iter().enumerate() {
+                            // Ignore empty keepalive bytes.
+                            if byte == &0 {
+                                continue;
+                            }
+                            *varint += (*byte as u64 & 127) * *factor;
+                            if *varint > MAX_MESSAGE_SIZE {
+                                return Err(Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "Message too long",
+                                ));
+                            }
+                            if byte < &128 {
+                                state.step = Step::Body {
+                                    header_len: i + 1,
+                                    body_len: *varint as usize,
+                                };
+                                needs_more_bytes = false;
+                                break;
+                            }
+                            *factor *= 128;
                         }
-                        *varint = *varint + (*byte as u64 & 127) * *factor;
-                        if *varint > MAX_MESSAGE_SIZE {
-                            return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
-                        }
-                        if byte < &128 {
-                            state.step = Step::Reading {
-                                len: *varint as usize,
-                                header_len: varint_bytes as usize,
-                            };
-                            needs_more_bytes = false;
-                            break;
-                        }
-                        *factor = *factor * 128;
                     }
-                }
-                if let Step::Reading { len, header_len } = state.step {
-                    let message_len = (len + header_len) as usize;
-                    if message_len > state.cap {
-                        needs_more_bytes = true
-                    // We have enough bytes for a full message!
-                    } else {
-                        let message_buf = &state.buf[header_len..message_len];
-                        self.on_message(message_buf).await?;
-
-                        // If we have even more bytes, copy them to the beginning of our read
-                        // buffer and adjust the cap accordingly.
-                        if state.cap > message_len {
-                            // TODO: If we were using a ring buffer we wouldn't have to copy and
-                            // allocate here.
-                            let overflow_buf = &state.buf[message_len..state.cap].to_vec();
-                            state.cap = state.cap - message_len;
-                            state.buf[..state.cap].copy_from_slice(&overflow_buf[..]);
-                        // Otherwise, read again!
+                    // Read the actual message.
+                    Step::Body {
+                        header_len,
+                        body_len,
+                    } => {
+                        let message_len = header_len + body_len;
+                        if message_len > state.cap {
+                            // Not enough bytes for a full message, return to reading.
+                            needs_more_bytes = true
                         } else {
-                            state.cap = 0;
-                            needs_more_bytes = true;
+                            // We have enough bytes for a full message!
+                            let message_buf = &state.buf[header_len..message_len];
+                            self.on_message(message_buf).await?;
+
+                            // If we have even more bytes, copy them to the beginning of our read
+                            // buffer and adjust the cap accordingly.
+                            if state.cap > message_len {
+                                // TODO: If we were using a ring buffer we wouldn't have to copy and
+                                // allocate here.
+                                let overflow_buf = &state.buf[message_len..state.cap].to_vec();
+                                state.cap -= message_len;
+                                state.buf[..state.cap].copy_from_slice(&overflow_buf[..]);
+                            // Otherwise, read again!
+                            } else {
+                                state.cap = 0;
+                                needs_more_bytes = true;
+                            }
+                            // In any case, after reading a message the next step is to read a varint.
+                            state.step = Step::Header {
+                                factor: 1,
+                                varint: 0,
+                            };
                         }
-                        // In any case, after reading a message the next step is to read a varint.
-                        state.step = Step::Varint {
-                            factor: 1,
-                            varint: 0,
-                        };
                     }
                 }
             }
@@ -363,11 +375,14 @@ where
             key = self.channels.get_key(&discovery_key);
         }
 
+        // If we still have no key for this channel after invoking the on_discoverykey handler,
+        // we return.
         if key.is_none() {
             // TODO: Do something if a channel is opened without us having the key,
             // maybe close the channel to singal this back to the remote?
             return Ok(());
         }
+        // This is save because of the check above.
         let key = key.unwrap();
 
         // Verify the remote capability.

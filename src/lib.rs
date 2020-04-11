@@ -11,7 +11,7 @@
 //!
 //! let protocol = ProtocolBuilder::new(true)
 //!     .set_handlers(handlers)
-//!     .from_stream(stream);
+//!     .build_from_stream(stream);
 //!
 //! protocol.listen.await();
 //!
@@ -26,15 +26,12 @@
 //!
 //! See [examples/basic.rs](https://github.com/Frando/hypercore-protocol-rust-experiments/blob/master/examples/basic.rs) for an actual example of how to use a protocol stream.
 
-#![allow(clippy::assign_op_pattern)]
-
 mod channels;
 mod constants;
 mod encrypt;
 mod handlers;
 mod handshake;
 mod message;
-mod prefixed;
 mod protocol;
 mod util;
 mod wire_message;

@@ -120,6 +120,7 @@ impl<'a> Channel<'a> {
     }
 
     pub async fn destroy(&mut self, error: Error) {
+        // TODO: Do not destroy the full protoocl but just this channel.
         self.protocol.destroy(error).await
     }
 }
@@ -174,11 +175,7 @@ pub trait StreamHandler: Sync {
 /// implemented this trait into [protocol.open](Protocol::open).
 #[async_trait]
 pub trait ChannelHandler: Send + Sync {
-    async fn on_message<'a>(
-        &self,
-        mut channel: &'a mut Channel<'a>,
-        message: Message,
-    ) -> Result<()> {
+    async fn on_message(&self, mut channel: &'_ mut Channel<'_>, message: Message) -> Result<()> {
         match message {
             Message::Options(msg) => self.on_options(&mut channel, msg).await,
             Message::Status(msg) => self.on_status(&mut channel, msg).await,
@@ -197,43 +194,43 @@ pub trait ChannelHandler: Send + Sync {
         }
     }
 
-    async fn on_open<'a>(&self, _protocol: &mut Channel<'a>, _discovery_key: &[u8]) -> Result<()> {
+    async fn on_open(&self, _protocol: &mut Channel<'_>, _discovery_key: &[u8]) -> Result<()> {
         Ok(())
     }
 
-    async fn on_status<'a>(&self, _channel: &mut Channel<'a>, _message: Status) -> Result<()> {
+    async fn on_status(&self, _channel: &mut Channel<'_>, _message: Status) -> Result<()> {
         Ok(())
     }
-    async fn on_options<'a>(&self, _channel: &mut Channel<'a>, _message: Options) -> Result<()> {
+    async fn on_options(&self, _channel: &mut Channel<'_>, _message: Options) -> Result<()> {
         Ok(())
     }
-    async fn on_have<'a>(&self, _channel: &mut Channel<'a>, _message: Have) -> Result<()> {
+    async fn on_have(&self, _channel: &mut Channel<'_>, _message: Have) -> Result<()> {
         Ok(())
     }
-    async fn on_unhave<'a>(&self, _channel: &mut Channel<'a>, _message: Unhave) -> Result<()> {
+    async fn on_unhave(&self, _channel: &mut Channel<'_>, _message: Unhave) -> Result<()> {
         Ok(())
     }
-    async fn on_want<'a>(&self, _channel: &mut Channel<'a>, _message: Want) -> Result<()> {
+    async fn on_want(&self, _channel: &mut Channel<'_>, _message: Want) -> Result<()> {
         Ok(())
     }
-    async fn on_unwant<'a>(&self, _channel: &mut Channel<'a>, _message: Unwant) -> Result<()> {
+    async fn on_unwant(&self, _channel: &mut Channel<'_>, _message: Unwant) -> Result<()> {
         Ok(())
     }
-    async fn on_request<'a>(&self, _channel: &mut Channel<'a>, _message: Request) -> Result<()> {
+    async fn on_request(&self, _channel: &mut Channel<'_>, _message: Request) -> Result<()> {
         Ok(())
     }
-    async fn on_cancel<'a>(&self, _channel: &mut Channel<'a>, _message: Cancel) -> Result<()> {
+    async fn on_cancel(&self, _channel: &mut Channel<'_>, _message: Cancel) -> Result<()> {
         Ok(())
     }
-    async fn on_data<'a>(&self, _channel: &mut Channel<'a>, _message: Data) -> Result<()> {
+    async fn on_data(&self, _channel: &mut Channel<'_>, _message: Data) -> Result<()> {
         Ok(())
     }
-    async fn on_close<'a>(&self, _channel: &mut Channel<'a>, _message: Close) -> Result<()> {
+    async fn on_close(&self, _channel: &mut Channel<'_>, _message: Close) -> Result<()> {
         Ok(())
     }
-    async fn on_extension<'a>(
+    async fn on_extension(
         &self,
-        _channel: &mut Channel<'a>,
+        _channel: &mut Channel<'_>,
         _message: ExtensionMessage,
     ) -> Result<()> {
         Ok(())

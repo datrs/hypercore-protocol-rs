@@ -1,6 +1,6 @@
 // use async_std::io::{BufReader, BufWriter};
 use blake2_rfc::blake2b::Blake2b;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message;
 use rand::Rng;
 use snow;
@@ -8,9 +8,9 @@ use snow::{Builder, Error as SnowError, HandshakeState, Keypair};
 use std::io::{Error, ErrorKind, Result};
 
 use crate::constants::CAP_NS_BUF;
-use crate::prefixed::{read_prefixed as recv, write_prefixed as send};
 use crate::schema::NoisePayload;
 
+const MAX_MESSAGE_SIZE: u64 = 1024;
 const CIPHERKEYLEN: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -138,15 +138,11 @@ where
     let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
 
     let split = noise.dangerously_get_raw_split();
-    let split_tx;
-    let split_rx;
-    if is_initiator {
-        split_tx = split.0;
-        split_rx = split.1;
+    let (split_tx, split_rx) = if is_initiator {
+        (split.0, split.1)
     } else {
-        split_tx = split.1;
-        split_rx = split.0;
-    }
+        (split.1, split.0)
+    };
 
     log::trace!("handshake complete");
     // log::trace!("local pubkey {:x?}", &local_keypair.public);
@@ -185,4 +181,54 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
+}
+
+/// Send a message with a varint prefix.
+pub async fn send<W>(writer: &mut W, buf: &[u8]) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    // Write varint prefix.
+    let len = buf.len();
+    let prefix_len = varinteger::length(len as u64);
+    let mut prefix_buf = vec![0u8; prefix_len];
+    varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
+    writer.write_all(&prefix_buf).await?;
+    // Write the actual data.
+    writer.write_all(&buf).await?;
+    writer.flush().await
+}
+
+/// Receive a varint-prefixed message.
+pub async fn recv<R>(reader: &mut R) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Send + Unpin,
+{
+    let mut varint: u64 = 0;
+    let mut factor = 1;
+    let mut headerbuf = vec![0u8; 1];
+    // Read initial varint (message length).
+    loop {
+        reader.read_exact(&mut headerbuf).await?;
+        let byte = headerbuf[0];
+        // Skip empty bytes (may be keepalive pings).
+        if byte == 0 {
+            continue;
+        }
+
+        varint += (byte as u64 & 127) * factor;
+        if byte < 128 {
+            break;
+        }
+        if varint > MAX_MESSAGE_SIZE {
+            return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
+        }
+        factor *= 128;
+    }
+
+    // Read main message.
+    let mut messagebuf = vec![0u8; varint as usize];
+    reader.read_exact(&mut messagebuf).await?;
+    // log::trace!("recv len {}", messagebuf.len());
+    Ok(messagebuf)
 }

@@ -73,7 +73,7 @@ where
 {
     let mut protocol = ProtocolBuilder::new(is_initiator)
         .set_handlers(feedstore)
-        .from_stream(stream);
+        .build_from_stream(stream);
 
     protocol.listen().await
 }
@@ -159,7 +159,7 @@ impl<T> ChannelHandler for FeedWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    async fn on_open<'a>(&self, channel: &mut Channel<'a>, discovery_key: &[u8]) -> Result<()> {
+    async fn on_open(&self, channel: &mut Channel<'_>, discovery_key: &[u8]) -> Result<()> {
         log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
         let msg = Want {
             start: 0,
@@ -168,7 +168,7 @@ where
         channel.want(msg).await
     }
 
-    async fn on_have<'a>(&self, channel: &mut Channel<'a>, msg: Have) -> Result<()> {
+    async fn on_have(&self, channel: &mut Channel<'_>, msg: Have) -> Result<()> {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
         log::info!(
@@ -193,7 +193,7 @@ where
         Ok(())
     }
 
-    async fn on_data<'a>(&self, channel: &mut Channel<'a>, msg: Data) -> Result<()> {
+    async fn on_data(&self, channel: &mut Channel<'_>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
         // log::info!(
         //     "receive data: idx {}, {} bytes (remote_head {:?})",
