@@ -1,7 +1,8 @@
 use futures::future::{select, Either};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures::io::{BufReader, BufWriter};
-// use log::*;
+use log::*;
+use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
 // We use the instant crate for WASM compatiblity.
@@ -11,7 +12,7 @@ use crate::channels::Channelizer;
 use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handlers::{Channel, ChannelHandlerType, DefaultHandlers, StreamHandlerType};
-use crate::handshake::{handshake, HandshakeResult};
+use crate::handshake::{Handshake, HandshakeResult};
 use crate::message::Message;
 use crate::schema::*;
 use crate::util::discovery_key;
@@ -23,6 +24,16 @@ pub struct ProtocolOptions {
     pub noise: bool,
     pub encrypted: bool,
     pub handlers: Option<StreamHandlerType>,
+}
+
+impl fmt::Debug for ProtocolOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProtocolOptions")
+            .field("is_initiator", &self.is_initiator)
+            .field("noise", &self.noise)
+            .field("encrypted", &self.encrypted)
+            .finish()
+    }
 }
 
 /// Build a Protocol instance with options.
@@ -79,6 +90,24 @@ impl ProtocolBuilder {
     }
 }
 
+/// Protocol state
+#[allow(clippy::large_enum_variant)]
+pub enum State {
+    // The Handshake struct sits behind an option only so that we can .take()
+    // it out, it's never actually empty when in State::Handshake.
+    Handshake(Option<Handshake>),
+    Established,
+}
+
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            State::Handshake(_) => write!(f, "Handshake"),
+            State::Established => write!(f, "Established"),
+        }
+    }
+}
+
 /// A Protocol stream.
 pub struct Protocol<R, W>
 where
@@ -87,6 +116,7 @@ where
 {
     writer: EncryptedWriter<BufWriter<W>>,
     reader: EncryptedReader<BufReader<R>>,
+    state: State,
     options: ProtocolOptions,
     handshake: Option<HandshakeResult>,
     channels: Channelizer,
@@ -107,11 +137,19 @@ where
             .handlers
             .take()
             .unwrap_or_else(|| DefaultHandlers::new());
+
+        let state = if options.noise {
+            State::Handshake(Some(Handshake::new(options.is_initiator).unwrap()))
+        } else {
+            State::Established
+        };
+
         Protocol {
             writer,
             reader,
             handlers,
             options,
+            state,
             channels: Channelizer::new(),
             handshake: None,
             error: None,
@@ -124,33 +162,23 @@ where
     // The returned future resolves either if an error occurrs, if the connection
     // is dropped, or if all channels are closed (TODO: implement the latter).
     pub async fn listen(&mut self) -> Result<()> {
-        // debug!("start");
-        if self.options.noise {
-            // debug!("now handshake");
-            self.perform_handshake().await?;
+        trace!("protocol init, options {:?}", self.options);
+        // If we are the initiator, first send the initial handshake payload.
+        if let State::Handshake(ref mut handshake) = self.state {
+            let mut handshake = handshake.take().unwrap();
+            if let Some(buf) = handshake.start()? {
+                self.send_prefixed(buf).await?;
+            }
+            self.state = State::Handshake(Some(handshake))
         }
-        // debug!("now main loop");
+        // Enter the main receive loop.
         self.main_loop().await
-    }
-
-    async fn perform_handshake(&mut self) -> Result<()> {
-        let handshake = handshake(
-            &mut self.reader,
-            &mut self.writer,
-            self.options.is_initiator,
-        )
-        .await?;
-        if self.options.encrypted {
-            self.reader.upgrade_with_handshake(&handshake)?;
-            self.writer.upgrade_with_handshake(&handshake)?;
-        }
-        self.handshake = Some(handshake);
-        Ok(())
     }
 
     /// The main protocol loop.
     async fn main_loop(&mut self) -> Result<()> {
         /// The reading state.
+        #[derive(Debug)]
         struct State {
             /// The read buffer.
             buf: Vec<u8>,
@@ -160,6 +188,7 @@ where
             step: Step,
         }
         // The reading step.
+        #[derive(Debug)]
         enum Step {
             Header { factor: u64, varint: u64 },
             Body { header_len: usize, body_len: usize },
@@ -289,7 +318,36 @@ where
         self.error = Some(error)
     }
 
-    async fn on_message(&mut self, message_buf: &[u8]) -> Result<()> {
+    async fn on_message(&mut self, buf: &[u8]) -> Result<()> {
+        match self.state {
+            State::Handshake(ref mut handshake) => {
+                let handshake = handshake.take().unwrap();
+                self.on_handshake_message(buf, handshake).await
+            }
+            State::Established => self.on_proto_message(buf).await,
+        }
+    }
+
+    async fn on_handshake_message(&mut self, buf: &[u8], mut handshake: Handshake) -> Result<()> {
+        if let Some(send) = handshake.read(buf)? {
+            self.send_prefixed(send).await?;
+        }
+        if handshake.complete() {
+            let result = handshake.into_result()?;
+            if self.options.encrypted {
+                self.reader.upgrade_with_handshake(&result)?;
+                self.writer.upgrade_with_handshake(&result)?;
+            }
+            log::trace!("handshake completed");
+            self.handshake = Some(result);
+            self.state = State::Established;
+        } else {
+            self.state = State::Handshake(Some(handshake))
+        }
+        Ok(())
+    }
+
+    async fn on_proto_message(&mut self, message_buf: &[u8]) -> Result<()> {
         let message = WireMessage::from_buf(&message_buf)?;
         let channel = message.channel;
         let message = Message::decode(message.typ, message.message)?;
@@ -395,13 +453,26 @@ where
         Ok(())
     }
 
+    pub async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await
+    }
+
+    pub async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
+        let len = buf.len();
+        let prefix_len = varinteger::length(len as u64);
+        let mut prefix_buf = vec![0u8; prefix_len];
+        varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
+        self.writer.write_all(&prefix_buf).await?;
+        self.writer.write_all(&buf).await?;
+        self.writer.flush().await
+    }
+
     pub async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
-        log::trace!("send {} {}", ch, msg);
+        log::trace!("send: {}", msg);
         let message = msg.encode(ch)?;
         let buf = message.encode()?;
-        self.writer.write_all(&buf).await?;
-        self.writer.flush().await?;
-        Ok(())
+        self.send_prefixed(&buf).await
     }
 
     pub async fn send_channel(&mut self, discovery_key: &[u8], msg: Message) -> Result<()> {

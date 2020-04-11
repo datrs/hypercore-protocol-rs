@@ -28,6 +28,7 @@ node.once('stdout-line', line => {
     name: 'rust',
     color: 'blue',
     env: {
+      ...process.env,
       RUST_LOG_STYLE: 'always'
     }
   })

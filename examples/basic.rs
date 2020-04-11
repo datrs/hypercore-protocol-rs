@@ -4,6 +4,7 @@ use async_std::prelude::*;
 use async_std::sync::{Arc, RwLock};
 use async_std::task;
 use async_trait::async_trait;
+use log::*;
 use pretty_hash::fmt as pretty_fmt;
 use std::collections::HashMap;
 use std::env;
@@ -127,7 +128,7 @@ impl Feed {
 #[async_trait]
 impl ChannelHandler for Feed {
     async fn on_open(&self, channel: &mut Channel<'_>, discovery_key: &[u8]) -> Result<()> {
-        log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
+        debug!("open channel {}", pretty_fmt(&discovery_key).unwrap());
         let msg = Want {
             start: 0,
             length: None,
@@ -138,10 +139,9 @@ impl ChannelHandler for Feed {
     async fn on_have(&self, channel: &mut Channel<'_>, msg: Have) -> Result<()> {
         let mut state = self.state.write().await;
         // Check if the remote announces a new head.
-        log::info!(
+        debug!(
             "receive have: {} (remote_head {:?})",
-            msg.start,
-            state.remote_head
+            msg.start, state.remote_head
         );
         if state.remote_head == None {
             state.remote_head = Some(msg.start);
@@ -162,7 +162,7 @@ impl ChannelHandler for Feed {
 
     async fn on_data(&self, channel: &mut Channel<'_>, msg: Data) -> Result<()> {
         let state = self.state.read().await;
-        log::info!(
+        debug!(
             "receive data: idx {}, {} bytes (remote_head {:?})",
             msg.index,
             msg.value.as_ref().map_or(0, |v| v.len()),

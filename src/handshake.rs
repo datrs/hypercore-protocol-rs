@@ -1,19 +1,18 @@
 // use async_std::io::{BufReader, BufWriter};
 use blake2_rfc::blake2b::Blake2b;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use prost::Message;
 use rand::Rng;
 use snow;
-use snow::{Builder, Error as SnowError, HandshakeState, Keypair};
+pub use snow::Keypair;
+use snow::{Builder, Error as SnowError, HandshakeState};
 use std::io::{Error, ErrorKind, Result};
 
 use crate::constants::CAP_NS_BUF;
 use crate::schema::NoisePayload;
 
-const MAX_MESSAGE_SIZE: u64 = 1024;
 const CIPHERKEYLEN: usize = 32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HandshakeResult {
     pub is_initiator: bool,
     pub local_pubkey: Vec<u8>,
@@ -66,111 +65,135 @@ pub fn build_handshake_state(
     static PATTERN: &str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
     let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
+    let builder = builder.local_private_key(&key_pair.private);
     // log::trace!("hs local pubkey: {:x?}", &key_pair.public);
     let handshake_state = if is_initiator {
-        builder
-            .local_private_key(&key_pair.private)
-            .build_initiator()
+        builder.build_initiator()?
     } else {
-        builder
-            .local_private_key(&key_pair.private)
-            .build_responder()
+        builder.build_responder()?
     };
-    Ok((handshake_state?, key_pair))
+    Ok((handshake_state, key_pair))
 }
 
-pub async fn handshake<R, W>(
-    mut reader: &mut R,
-    mut writer: &mut W,
-    is_initiator: bool,
-) -> std::result::Result<HandshakeResult, Error>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin + Send + 'static,
-{
-    log::trace!(
-        "handshake start, role: {}",
-        if is_initiator {
-            "initiator"
+pub struct Handshake {
+    result: HandshakeResult,
+    state: HandshakeState,
+    payload: Vec<u8>,
+    tx_buf: Vec<u8>,
+    rx_buf: Vec<u8>,
+    complete: bool,
+    did_receive: bool,
+}
+
+impl Handshake {
+    pub fn new(is_initiator: bool) -> Result<Self> {
+        let (state, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
+
+        let local_nonce = generate_nonce();
+        let payload = encode_nonce(local_nonce.clone());
+
+        let result = HandshakeResult {
+            is_initiator,
+            local_pubkey: local_keypair.public,
+            local_seckey: local_keypair.private,
+            // local_keypair,
+            local_nonce,
+            ..Default::default()
+        };
+        Ok(Self {
+            state,
+            result,
+            payload,
+            tx_buf: vec![0u8; 512],
+            rx_buf: vec![0u8; 512],
+            complete: false,
+            did_receive: false,
+        })
+    }
+
+    pub fn start(&mut self) -> Result<Option<&'_ [u8]>> {
+        if self.is_initiator() {
+            let tx_len = self.send()?;
+            Ok(Some(&self.tx_buf[..tx_len]))
         } else {
-            "responder"
+            Ok(None)
         }
-    );
-
-    let map_err = |e| {
-        Error::new(
-            ErrorKind::PermissionDenied,
-            format!("handshake error: {}", e),
-        )
-    };
-
-    let (mut noise, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
-
-    let local_nonce = generate_nonce();
-    let payload = encode_nonce(local_nonce.clone());
-
-    let mut tx_buf = vec![0u8; 512];
-    let mut rx_buf = vec![0u8; 512];
-    let mut rx_len;
-    let mut tx_len;
-
-    if is_initiator {
-        tx_len = noise
-            .write_message(&payload, &mut tx_buf)
-            .map_err(map_err)?;
-        send(&mut writer, &tx_buf[..tx_len]).await?;
     }
 
-    let msg = recv(&mut reader).await?;
-    rx_len = noise.read_message(&msg, &mut rx_buf).map_err(map_err)?;
-
-    tx_len = noise
-        .write_message(&payload, &mut tx_buf)
-        .map_err(map_err)?;
-    send(&mut writer, &tx_buf[..tx_len]).await?;
-
-    if !is_initiator {
-        let msg = recv(&mut reader).await?;
-        rx_len = noise.read_message(&msg, &mut rx_buf).map_err(map_err)?;
+    pub fn complete(&self) -> bool {
+        self.complete
     }
 
-    let remote_nonce = decode_nonce(&rx_buf[..rx_len])?;
-    let remote_pubkey = noise.get_remote_static().unwrap().to_vec();
+    pub fn is_initiator(&self) -> bool {
+        self.result.is_initiator
+    }
 
-    let split = noise.dangerously_get_raw_split();
-    let (split_tx, split_rx) = if is_initiator {
-        (split.0, split.1)
-    } else {
-        (split.1, split.0)
-    };
+    fn recv(&mut self, msg: &[u8]) -> Result<usize> {
+        self.state
+            .read_message(&msg, &mut self.rx_buf)
+            .map_err(map_err)
+    }
+    fn send(&mut self) -> Result<usize> {
+        self.state
+            .write_message(&self.payload, &mut self.tx_buf)
+            .map_err(map_err)
+    }
 
-    log::trace!("handshake complete");
-    // log::trace!("local pubkey {:x?}", &local_keypair.public);
-    // log::trace!("remot pubkey {:x?}", &remote_pubkey));
-    // log::trace!("split rx: {:x?}", &split_rx);
-    // log::trace!("split tx: {:x?}", &split_tx);
-    // log::trace!("remot nonce: {:x?}", &local_nonce);
-    // log::trace!("local nonce: {:x?}", &remote_nonce));
+    pub fn read(&mut self, msg: &[u8]) -> Result<Option<&'_ [u8]>> {
+        if self.complete() {
+            return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
+        }
 
-    let result = HandshakeResult {
-        is_initiator,
-        local_nonce,
-        remote_nonce,
-        local_pubkey: local_keypair.public,
-        local_seckey: local_keypair.private,
-        remote_pubkey,
-        split_tx,
-        split_rx,
-    };
+        let rx_len = self.recv(&msg)?;
+        let tx_len = self.send()?;
 
-    Ok(result)
+        if !self.is_initiator() && !self.did_receive {
+            self.did_receive = true;
+            return Ok(Some(&self.tx_buf[..tx_len]));
+        }
+
+        let split = self.state.dangerously_get_raw_split();
+        if self.is_initiator() {
+            self.result.split_tx = split.0;
+            self.result.split_rx = split.1;
+        } else {
+            self.result.split_tx = split.1;
+            self.result.split_rx = split.0;
+        }
+        self.result.remote_nonce = decode_nonce(&self.rx_buf[..rx_len])?;
+        self.result.remote_pubkey = self.state.get_remote_static().unwrap().to_vec();
+        self.complete = true;
+
+        if self.is_initiator() {
+            Ok(Some(&self.tx_buf[..tx_len]))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn into_result(self) -> Result<HandshakeResult> {
+        if !self.complete() {
+            Err(Error::new(ErrorKind::Other, "Handshake is not complete"))
+        } else {
+            Ok(self.result)
+        }
+    }
 }
 
+fn map_err(e: SnowError) -> Error {
+    Error::new(
+        ErrorKind::PermissionDenied,
+        format!("handshake error: {}", e),
+    )
+}
+
+#[inline]
 fn generate_nonce() -> Vec<u8> {
     let random_bytes = rand::thread_rng().gen::<[u8; 24]>();
     random_bytes.to_vec()
 }
 
+#[inline]
 fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
     let nonce_msg = NoisePayload { nonce };
     let mut buf = vec![0u8; 0];
@@ -178,57 +201,8 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
     buf
 }
 
+#[inline]
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
-}
-
-/// Send a message with a varint prefix.
-pub async fn send<W>(writer: &mut W, buf: &[u8]) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    // Write varint prefix.
-    let len = buf.len();
-    let prefix_len = varinteger::length(len as u64);
-    let mut prefix_buf = vec![0u8; prefix_len];
-    varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
-    writer.write_all(&prefix_buf).await?;
-    // Write the actual data.
-    writer.write_all(&buf).await?;
-    writer.flush().await
-}
-
-/// Receive a varint-prefixed message.
-pub async fn recv<R>(reader: &mut R) -> Result<Vec<u8>>
-where
-    R: AsyncRead + Send + Unpin,
-{
-    let mut varint: u64 = 0;
-    let mut factor = 1;
-    let mut headerbuf = vec![0u8; 1];
-    // Read initial varint (message length).
-    loop {
-        reader.read_exact(&mut headerbuf).await?;
-        let byte = headerbuf[0];
-        // Skip empty bytes (may be keepalive pings).
-        if byte == 0 {
-            continue;
-        }
-
-        varint += (byte as u64 & 127) * factor;
-        if byte < 128 {
-            break;
-        }
-        if varint > MAX_MESSAGE_SIZE {
-            return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
-        }
-        factor *= 128;
-    }
-
-    // Read main message.
-    let mut messagebuf = vec![0u8; varint as usize];
-    reader.read_exact(&mut messagebuf).await?;
-    // log::trace!("recv len {}", messagebuf.len());
-    Ok(messagebuf)
 }
