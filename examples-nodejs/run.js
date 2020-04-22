@@ -11,20 +11,31 @@ const EXAMPLE_RUST = process.argv[2]
 if (!EXAMPLE_RUST) {
   usage()
 }
+const SERVER = process.argv[3] || 'node'
 
-const procs = []
-const node = start({
-  bin: 'node',
-  args: [EXAMPLE_NODE, 'server', PORT, FILE],
-  name: 'node',
-  color: 'red'
-})
-procs.push(node)
-node.once('stdout-line', line => {
-  const [, key] = line.split('=')
+function startNode (mode, key) {
+  const args = [EXAMPLE_NODE, mode, PORT]
+  if (key) args.push(key)
+  else args.push(FILE)
+  const node = start({
+    bin: 'node',
+    args,
+    name: 'node',
+    color: 'red',
+    env: {
+      ...process.env,
+      DEBUG: '*'
+    }
+  })
+  return node
+}
+
+function startRust (mode, key) {
+  const args =  ['run', '--example', EXAMPLE_RUST, '--', mode, PORT]
+  if (key) args.push(key)
   const rust = start({
     bin: 'cargo',
-    args: ['run', '--example', EXAMPLE_RUST, '--', 'client', PORT, key],
+    args,
     name: 'rust',
     color: 'blue',
     env: {
@@ -32,8 +43,49 @@ node.once('stdout-line', line => {
       RUST_LOG_STYLE: 'always'
     }
   })
-  procs.push(rust)
+  return rust
+}
+
+// let server = startNode
+// let client = startRust
+let client, server
+if (SERVER === 'node') {
+  server = startNode
+  client = startRust
+} else {
+  server = startRust
+  client = startNode
+}
+
+const procs = []
+const proc = server('server')
+procs.push(proc)
+proc.once('stdout-line', line => {
+  const [, key] = line.split('=')
+  client('client', key)
 })
+
+// const node = start({
+//   bin: 'node',
+//   args: [EXAMPLE_NODE, 'server', PORT, FILE],
+//   name: 'node',
+//   color: 'red'
+// })
+// procs.push(node)
+// node.once('stdout-line', line => {
+//   const [, key] = line.split('=')
+//   const rust = start({
+//     bin: 'cargo',
+//     args: ['run', '--example', EXAMPLE_RUST, '--', 'client', PORT, key],
+//     name: 'rust',
+//     color: 'blue',
+//     env: {
+//       ...process.env,
+//       RUST_LOG_STYLE: 'always'
+//     }
+//   })
+//   procs.push(rust)
+// })
 
 process.on('SIGINT', onclose)
 

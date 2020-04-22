@@ -65,6 +65,7 @@ impl Message {
     pub fn decode(typ: u8, buf: Vec<u8>) -> Result<Self> {
         let bytes = Bytes::from(buf);
         // log::trace!("decode msg typ {}", typ);
+        // eprintln!("typ {}, buf {:?}", typ, bytes);
         match typ {
             0 => Ok(Self::Open(Open::decode(bytes)?)),
             1 => Ok(Self::Options(Options::decode(bytes)?)),

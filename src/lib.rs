@@ -29,11 +29,9 @@
 mod channels;
 mod constants;
 mod encrypt;
-mod handlers;
 mod handshake;
 mod message;
 mod protocol;
-// mod read_stream;
 mod stream;
 mod util;
 mod wire_message;
@@ -44,8 +42,7 @@ pub mod schema {
     pub use crate::message::ExtensionMessage;
 }
 
-pub use handlers::{Channel, ChannelHandler, DynProtocol, StreamContext, StreamHandler};
 pub use handshake::{Handshake, HandshakeResult};
 pub use message::Message;
-pub use protocol::{Protocol, ProtocolBuilder, ProtocolOptions};
+pub use protocol::{Channel, Event, Protocol, ProtocolBuilder, ProtocolOptions};
 pub use util::discovery_key;

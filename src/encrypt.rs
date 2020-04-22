@@ -1,6 +1,6 @@
 use crate::handshake::HandshakeResult;
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::{Stream, StreamExt};
+use futures::stream::{FusedStream, Stream, StreamExt};
 use futures_timer::Delay;
 use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
 use salsa20::XSalsa20;
@@ -74,6 +74,7 @@ where
     }
 
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
+        eprintln!("upgrade reader");
         let cipher = Cipher::from_handshake_rx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
@@ -160,6 +161,7 @@ struct State {
     // closed: bool,
     // last_recv: Option<instant::Instant>,
     timeout: Delay,
+    decrypted: bool,
 }
 
 impl Default for State {
@@ -169,7 +171,7 @@ impl Default for State {
             cap: 0,
             step: Step::default(),
             timeout: Delay::new(Duration::from_secs(DEFAULT_TIMEOUT as u64)),
-            // last_recv: None, // closed: false,
+            decrypted: false, // last_recv: None, // closed: false,
         }
     }
 }
@@ -198,9 +200,15 @@ where
             return Poll::Ready(None);
         }
         let mut state = self.state.take().unwrap();
+        if !state.decrypted {
+            if let Some(cipher) = &mut self.cipher {
+                cipher.apply(&mut state.buf[..state.cap]);
+                state.decrypted = true
+            }
+        }
 
         // First process our existing buffer, if any.
-        let result = process_state(&mut state);
+        let mut result = process_state(&mut state);
         if result.is_some() {
             self.state = Some(state);
             return Poll::Ready(result);
@@ -208,7 +216,7 @@ where
 
         // Try to read from our reader.
         let n = match Pin::new(&mut self).poll_read(cx, &mut state.buf[state.cap..]) {
-            Poll::Ready(result) => result?,
+            Poll::Ready(n) => n?,
             // If the reader is pending, poll the timeout.
             Poll::Pending => match Pin::new(&mut state.timeout).poll(cx) {
                 // If the timeout is pending, return Pending.
@@ -238,6 +246,15 @@ where
             Some(_) => Poll::Ready(result),
             None => Poll::Pending,
         }
+    }
+}
+
+impl<R> FusedStream for EncryptedReader<R>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+{
+    fn is_terminated(&self) -> bool {
+        self.state.is_none()
     }
 }
 
