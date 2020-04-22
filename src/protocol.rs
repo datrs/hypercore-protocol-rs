@@ -1,6 +1,8 @@
 use futures::future::{select, Either};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use futures::io::{BufReader, BufWriter};
+use futures::stream::{Stream, StreamExt};
+use futures_timer::Delay;
 use log::*;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
@@ -162,6 +164,10 @@ where
     // The returned future resolves either if an error occurrs, if the connection
     // is dropped, or if all channels are closed (TODO: implement the latter).
     pub async fn listen(&mut self) -> Result<()> {
+        self.main_loop().await
+    }
+
+    async fn main_loop(&mut self) -> Result<()> {
         trace!("protocol init, options {:?}", self.options);
         // If we are the initiator, first send the initial handshake payload.
         if let State::Handshake(ref mut handshake) = self.state {
@@ -171,143 +177,25 @@ where
             }
             self.state = State::Handshake(Some(handshake))
         }
-        // Enter the main receive loop.
-        self.main_loop().await
-    }
 
-    /// The main protocol loop.
-    async fn main_loop(&mut self) -> Result<()> {
-        /// The reading state.
-        #[derive(Debug)]
-        struct State {
-            /// The read buffer.
-            buf: Vec<u8>,
-            /// The number of relevant bytes in the read buffer.
-            cap: usize,
-            /// The logical state of the reading (either header or body).
-            step: Step,
-        }
-        // The reading step.
-        #[derive(Debug)]
-        enum Step {
-            Header { factor: u64, varint: u64 },
-            Body { header_len: usize, body_len: usize },
-        }
+        let keepalive_duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
+        let mut keepalive = Delay::new(keepalive_duration);
 
-        let keepalive_secs = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-        let timeout_secs = Duration::from_secs(DEFAULT_TIMEOUT as u64);
-
-        let mut state = State {
-            buf: vec![0u8; MAX_MESSAGE_SIZE as usize + 8],
-            cap: 0,
-            step: Step::Header {
-                factor: 1,
-                varint: 0,
-            },
-        };
-
-        let mut keepalive = Some(futures_timer::Delay::new(keepalive_secs));
-        let mut timeout = Instant::now();
-
+        // Now enter the receive loop.
         loop {
             // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
-            // If data was received, keep the previous keepalive timer.
-            let read_fut = self.reader.read(&mut state.buf[state.cap..]);
-            let keepalive_fut = keepalive.take().unwrap();
-            let (bytes_read, next_keepalive) = match select(keepalive_fut, read_fut).await {
+            // If data was received, reset the keepalive timer.
+            match select(&mut keepalive, self.reader.next()).await {
                 Either::Left(_) => {
                     self.ping().await?;
-                    // Create a new keepalive future for the next ping.
-                    let keepalive = futures_timer::Delay::new(keepalive_secs);
-                    (None, keepalive)
+                    keepalive.reset(keepalive_duration);
                 }
-                Either::Right((Err(e), _)) => return Err(e),
-                Either::Right((Ok(0), _)) => return Ok(()),
-                Either::Right((Ok(n), last_keepalive)) => (Some(n), last_keepalive),
-            };
-            // Store our keepalive for the next iteration.
-            keepalive = Some(next_keepalive);
-
-            // If we read some bytes, increase cap and reset the timeout timer.
-            if let Some(n) = bytes_read {
-                state.cap += n;
-                timeout = Instant::now()
-            } else if timeout.elapsed() > timeout_secs {
-                return Err(Error::new(ErrorKind::TimedOut, "Remote timeout"));
-            }
-
-            // If there's no data to process, re-enter the select loop.
-            if state.cap == 0 {
-                continue;
-            }
-
-            // Keep processing our current buffer until we need more bytes.
-            let mut needs_more_bytes = false;
-            while !needs_more_bytes {
-                match state.step {
-                    // Read a varint.
-                    Step::Header {
-                        ref mut factor,
-                        ref mut varint,
-                    } => {
-                        needs_more_bytes = true;
-                        for (i, byte) in state.buf[..state.cap].iter().enumerate() {
-                            // Ignore empty keepalive bytes.
-                            if byte == &0 {
-                                continue;
-                            }
-                            *varint += (*byte as u64 & 127) * *factor;
-                            if *varint > MAX_MESSAGE_SIZE {
-                                return Err(Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "Message too long",
-                                ));
-                            }
-                            if byte < &128 {
-                                state.step = Step::Body {
-                                    header_len: i + 1,
-                                    body_len: *varint as usize,
-                                };
-                                needs_more_bytes = false;
-                                break;
-                            }
-                            *factor *= 128;
-                        }
-                    }
-                    // Read the actual message.
-                    Step::Body {
-                        header_len,
-                        body_len,
-                    } => {
-                        let message_len = header_len + body_len;
-                        if message_len > state.cap {
-                            // Not enough bytes for a full message, return to reading.
-                            needs_more_bytes = true
-                        } else {
-                            // We have enough bytes for a full message!
-                            let message_buf = &state.buf[header_len..message_len];
-                            self.on_message(message_buf).await?;
-
-                            // If we have even more bytes, copy them to the beginning of our read
-                            // buffer and adjust the cap accordingly.
-                            if state.cap > message_len {
-                                // TODO: If we were using a ring buffer we wouldn't have to copy and
-                                // allocate here.
-                                let overflow_buf = &state.buf[message_len..state.cap].to_vec();
-                                state.cap -= message_len;
-                                state.buf[..state.cap].copy_from_slice(&overflow_buf[..]);
-                            // Otherwise, read again!
-                            } else {
-                                state.cap = 0;
-                                needs_more_bytes = true;
-                            }
-                            // In any case, after reading a message the next step is to read a varint.
-                            state.step = Step::Header {
-                                factor: 1,
-                                varint: 0,
-                            };
-                        }
-                    }
+                Either::Right((message, _)) => {
+                    match message {
+                        Some(Ok(message)) => self.on_message(&message).await?,
+                        Some(Err(err)) => return Err(err),
+                        None => return Ok(()),
+                    };
                 }
             }
         }
@@ -405,6 +293,13 @@ where
         Ok(())
     }
 
+    // use futures::channel::mpsc::{Sender, Receiver};
+    pub async fn open2(&mut self, key: Vec<u8>) -> Result<()> {
+        let (send_tx, send_rx) = futures::channel::mpsc::channel(100);
+        let (recv_tx, recv_rx) = futures::channel::mpsc::channel(100);
+        return (send_tx, recv_rx);
+    }
+
     async fn on_close(&mut self, ch: u64, msg: Close) -> Result<()> {
         let ch = ch as usize;
         if let Some(discovery_key) = msg.discovery_key {
@@ -484,9 +379,7 @@ where
 
     async fn ping(&mut self) -> Result<()> {
         let buf = vec![0u8];
-        self.writer.write_all(&buf).await?;
-        self.writer.flush().await?;
-        Ok(())
+        self.send_raw(&buf).await
     }
 
     fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {

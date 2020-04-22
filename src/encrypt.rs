@@ -1,10 +1,16 @@
 use crate::handshake::HandshakeResult;
 use futures::io::{AsyncRead, AsyncWrite};
+use futures::stream::{Stream, StreamExt};
+use futures_timer::Delay;
 use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
 use salsa20::XSalsa20;
+use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
+use std::time::Duration;
 
 // TODO: Don't define here but use the values from the XSalsa20 impl.
 const KEY_SIZE: usize = 32;
@@ -52,6 +58,7 @@ where
 {
     cipher: Option<Cipher>,
     reader: R,
+    state: Option<State>,
 }
 
 impl<R> EncryptedReader<R>
@@ -62,6 +69,7 @@ where
         Self {
             cipher: None,
             reader,
+            state: Some(State::default()),
         }
     }
 
@@ -139,4 +147,172 @@ where
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
         Pin::new(&mut self.writer).poll_close(cx)
     }
+}
+
+#[derive(Debug)]
+struct State {
+    /// The read buffer.
+    buf: Vec<u8>,
+    /// The number of relevant bytes in the read buffer.
+    cap: usize,
+    /// The logical state of the reading (either header or body).
+    step: Step,
+    // closed: bool,
+    // last_recv: Option<instant::Instant>,
+    timeout: Delay,
+}
+
+impl Default for State {
+    fn default() -> State {
+        State {
+            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
+            cap: 0,
+            step: Step::default(),
+            timeout: Delay::new(Duration::from_secs(DEFAULT_TIMEOUT as u64)),
+            // last_recv: None, // closed: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Step {
+    Header { factor: u64, varint: u64 },
+    Body { header_len: usize, body_len: usize },
+}
+impl Default for Step {
+    fn default() -> Step {
+        Step::Header {
+            factor: 1,
+            varint: 0,
+        }
+    }
+}
+
+impl<R> Stream for EncryptedReader<R>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+{
+    type Item = Result<Vec<u8>>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.state.is_none() {
+            return Poll::Ready(None);
+        }
+        let mut state = self.state.take().unwrap();
+
+        // First process our existing buffer, if any.
+        let result = process_state(&mut state);
+        if result.is_some() {
+            self.state = Some(state);
+            return Poll::Ready(result);
+        }
+
+        // Try to read from our reader.
+        let n = match Pin::new(&mut self).poll_read(cx, &mut state.buf[state.cap..]) {
+            Poll::Ready(result) => result?,
+            // If the reader is pending, poll the timeout.
+            Poll::Pending => match Pin::new(&mut state.timeout).poll(cx) {
+                // If the timeout is pending, return Pending.
+                Poll::Pending => {
+                    self.state = Some(state);
+                    return Poll::Pending;
+                }
+                // If the timeout is ready, return a timeout error and close by not resetting state.
+                Poll::Ready(_) => {
+                    return Poll::Ready(Some(Err(Error::new(
+                        ErrorKind::TimedOut,
+                        "Remote timed out",
+                    ))));
+                }
+            },
+        };
+
+        state.cap += n;
+        state
+            .timeout
+            .reset(Duration::from_secs(DEFAULT_TIMEOUT as u64));
+
+        // Now process our buffer again.
+        let result = process_state(&mut state);
+        self.state = Some(state);
+        match result {
+            Some(_) => Poll::Ready(result),
+            None => Poll::Pending,
+        }
+    }
+}
+
+fn process_state(state: &mut State) -> Option<Result<Vec<u8>>> {
+    // Keep processing our current buffer until we need more bytes or have a full message.
+    if state.cap == 0 {
+        return None;
+    }
+    let mut needs_more_bytes = false;
+    let mut result = None;
+    while !needs_more_bytes && result.is_none() {
+        match state.step {
+            // Read a varint.
+            Step::Header {
+                ref mut factor,
+                ref mut varint,
+            } => {
+                needs_more_bytes = true;
+                for (i, byte) in state.buf[..state.cap].iter().enumerate() {
+                    // Ignore empty keepalive bytes.
+                    if byte == &0 {
+                        continue;
+                    }
+                    *varint += (*byte as u64 & 127) * *factor;
+                    if *varint > MAX_MESSAGE_SIZE {
+                        return Some(Err(Error::new(ErrorKind::InvalidInput, "Message too long")));
+                    }
+                    if byte < &128 {
+                        state.step = Step::Body {
+                            header_len: i + 1,
+                            body_len: *varint as usize,
+                        };
+                        needs_more_bytes = false;
+                        break;
+                    }
+                    *factor *= 128;
+                }
+            }
+            // Read the actual message.
+            Step::Body {
+                header_len,
+                body_len,
+            } => {
+                let message_len = header_len + body_len;
+                if message_len > state.cap {
+                    // Not enough bytes for a full message, return to reading.
+                    needs_more_bytes = true
+                } else {
+                    // We have enough bytes for a full message!
+                    let message_buf = &state.buf[header_len..message_len];
+
+                    result = Some(Ok(message_buf.to_vec()));
+                    // self.on_message(message_buf).await?;
+
+                    // If we have even more bytes, copy them to the beginning of our read
+                    // buffer and adjust the cap accordingly.
+                    if state.cap > message_len {
+                        // TODO: If we were using a ring buffer we wouldn't have to copy and
+                        // allocate here.
+                        let overflow_buf = &state.buf[message_len..state.cap].to_vec();
+                        state.cap -= message_len;
+                        state.buf[..state.cap].copy_from_slice(&overflow_buf[..]);
+                    // Otherwise, read again!
+                    } else {
+                        state.cap = 0;
+                        needs_more_bytes = true;
+                    }
+                    // In any case, after reading a message the next step is to read a varint.
+                    state.step = Step::Header {
+                        factor: 1,
+                        varint: 0,
+                    };
+                }
+            }
+        }
+    }
+    result
 }
