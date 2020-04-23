@@ -13,31 +13,30 @@ if (!EXAMPLE_RUST) {
 }
 const SERVER = process.argv[3] || 'node'
 
-function startNode (mode, key) {
+function startNode (mode, key, color, name) {
   const args = [EXAMPLE_NODE, mode, PORT]
   if (key) args.push(key)
   else args.push(FILE)
   const node = start({
     bin: 'node',
     args,
-    name: 'node',
-    color: 'red',
+    name: name || 'node',
+    color: color || 'red',
     env: {
       ...process.env,
-      DEBUG: '*'
     }
   })
   return node
 }
 
-function startRust (mode, key) {
+function startRust (mode, key, color, name) {
   const args =  ['run', '--example', EXAMPLE_RUST, '--', mode, PORT]
   if (key) args.push(key)
   const rust = start({
     bin: 'cargo',
     args,
-    name: 'rust',
-    color: 'blue',
+    name: name || 'rust',
+    color: color || 'blue',
     env: {
       ...process.env,
       RUST_LOG_STYLE: 'always'
@@ -58,11 +57,11 @@ if (SERVER === 'node') {
 }
 
 const procs = []
-const proc = server('server')
+const proc = server('server', null, 'red')
 procs.push(proc)
 proc.once('stdout-line', line => {
   const [, key] = line.split('=')
-  client('client', key)
+  client('client', key, 'blue')
 })
 
 // const node = start({

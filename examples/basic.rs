@@ -3,20 +3,23 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::sync::{Arc, RwLock};
 use async_std::task;
-use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::*;
-use pretty_hash::fmt as pretty_fmt;
 use std::collections::HashMap;
 use std::env;
 use std::io::Result;
-use std::pin::Pin;
 
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
 
 mod util;
 use util::{tcp_client, tcp_server};
+
+/// Print usage and exit.
+fn usage() {
+    println!("usage: cargo run --example basic -- [client|server] [port] [key]");
+    std::process::exit(1);
+}
 
 fn main() {
     util::init_logger();
@@ -34,9 +37,9 @@ fn main() {
     if let Some(key) = key {
         feedstore.add(Feed::new(key));
     } else {
-        let key = vec![0u8; 32];
+        let key = vec![9u8; 32];
+        feedstore.add(Feed::new(key.clone()));
         println!("KEY={}", hex::encode(&key));
-        feedstore.add(Feed::new(key));
     }
     let feedstore = Arc::new(feedstore);
 
@@ -50,12 +53,6 @@ fn main() {
     });
 }
 
-/// Print usage and exit.
-fn usage() {
-    println!("usage: cargo run --example basic -- [client|server] [port] [key]");
-    std::process::exit(1);
-}
-
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
 async fn onconnection(
@@ -67,13 +64,12 @@ async fn onconnection(
 
     loop {
         let event = protocol.loop_next().await?;
-        eprintln!("EVENT {:?}", event);
+        debug!("EVENT {:?}", event);
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
                     for feed in feedstore.feeds.values() {
-                        let key = feed.key.clone();
-                        protocol.open(key).await?;
+                        protocol.open(feed.key.clone()).await?;
                     }
                 }
             }
@@ -83,12 +79,10 @@ async fn onconnection(
                 }
             }
             Event::Channel(channel) => {
-                eprintln!("GOT CHANNEL!!");
                 if let Some(feed) = feedstore.get(&channel.discovery_key()) {
                     feed.onpeer(channel);
                 }
             }
-            _ => {}
         }
     }
 }
@@ -105,11 +99,6 @@ impl FeedStore {
     pub fn add(&mut self, feed: Feed) {
         let hdkey = hex::encode(&feed.discovery_key);
         self.feeds.insert(hdkey, Arc::new(feed));
-    }
-
-    pub fn has(&self, discovery_key: &[u8]) -> bool {
-        let hdkey = hex::encode(discovery_key);
-        self.feeds.get(&hdkey).is_some()
     }
 
     pub fn get(&self, discovery_key: &[u8]) -> Option<&Arc<Feed>> {
@@ -144,6 +133,18 @@ impl Feed {
     }
 }
 
+/// A FeedState stores the head seq of the remote.
+/// This would have a bitfield to support sparse sync in the actual impl.
+#[derive(Debug)]
+struct FeedState {
+    remote_head: Option<u64>,
+}
+impl Default for FeedState {
+    fn default() -> Self {
+        FeedState { remote_head: None }
+    }
+}
+
 async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mut Channel) {
     match message {
         Message::Open(_) => {
@@ -166,7 +167,7 @@ async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mu
                     hash: None,
                     nodes: None,
                 };
-                channel.send(Message::Request(msg)).await;
+                channel.send(Message::Request(msg)).await.unwrap();
             } else if let Some(remote_head) = state.remote_head {
                 if remote_head < msg.start {
                     state.remote_head = Some(msg.start)
@@ -202,20 +203,6 @@ async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mu
                 }
             }
         }
-
-        //         Ok(())
         _ => {}
-    }
-}
-
-/// A FeedState stores the head seq of the remote.
-/// This would have a bitfield to support sparse sync in the actual impl.
-#[derive(Debug)]
-struct FeedState {
-    remote_head: Option<u64>,
-}
-impl Default for FeedState {
-    fn default() -> Self {
-        FeedState { remote_head: None }
     }
 }

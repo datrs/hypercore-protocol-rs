@@ -1,19 +1,16 @@
-use futures::future::{select, Either, Future, FutureExt};
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::channel::mpsc::{Receiver, Sender};
+use futures::future::{Fuse, FutureExt};
+use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use futures::io::{BufReader, BufWriter};
 use futures::sink::SinkExt;
-use futures::stream::{Fuse, Map, SelectAll, Stream, StreamExt};
+use futures::stream::{SelectAll, Stream, StreamExt};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
-use std::task::Poll;
-use std::time::Duration;
-// We use the instant crate for WASM compatiblity.
-use futures::channel::mpsc::{Receiver, Sender};
-use instant::Instant;
 use std::pin::Pin;
+use std::time::Duration;
 
 use crate::channels::Channelizer;
 use crate::constants::DEFAULT_KEEPALIVE;
@@ -21,21 +18,42 @@ use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handshake::{Handshake, HandshakeResult};
 use crate::message::Message;
 use crate::schema::*;
-use crate::util::discovery_key;
+use crate::util::{discovery_key, pretty_hash};
 use crate::wire_message::Message as WireMessage;
 
-#[derive(Debug)]
+const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
+
 pub enum Event {
     Handshake(Vec<u8>),
     DiscoveryKey(Vec<u8>),
     Channel(Channel),
 }
+impl fmt::Debug for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Event::Handshake(remote_key) => {
+                write!(f, "Handshake(remote_key={})", &pretty_hash(remote_key))
+            }
+            Event::DiscoveryKey(discovery_key) => {
+                write!(f, "DiscoveryKey({})", &pretty_hash(discovery_key))
+            }
+            Event::Channel(channel) => write!(f, "{:?}", channel),
+        }
+    }
+}
 
-#[derive(Debug)]
 pub struct Channel {
     receiver: Receiver<Message>,
     sender: Sender<Message>,
     discovery_key: Vec<u8>, // id: usize, // discovery_key: Vec<u8>,
+}
+
+impl fmt::Debug for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Channel")
+            .field("discovery_key", &pretty_hash(&self.discovery_key))
+            .finish()
+    }
 }
 
 impl Channel {
@@ -61,21 +79,22 @@ impl Stream for Channel {
 }
 
 /// Options for a Protocol instance.
+#[derive(Debug)]
 pub struct ProtocolOptions {
     pub is_initiator: bool,
     pub noise: bool,
     pub encrypted: bool,
 }
 
-impl fmt::Debug for ProtocolOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProtocolOptions")
-            .field("is_initiator", &self.is_initiator)
-            .field("noise", &self.noise)
-            .field("encrypted", &self.encrypted)
-            .finish()
-    }
-}
+// impl fmt::Debug for ProtocolOptions {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         f.debug_struct("ProtocolOptions")
+//             .field("is_initiator", &self.is_initiator)
+//             .field("noise", &self.noise)
+//             .field("encrypted", &self.encrypted)
+//             .finish()
+//     }
+// }
 
 /// Build a Protocol instance with options.
 pub struct ProtocolBuilder(ProtocolOptions);
@@ -99,11 +118,6 @@ impl ProtocolBuilder {
     pub fn responder() -> Self {
         Self::new(false)
     }
-
-    // pub fn set_handlers(mut self, handlers: StreamHandlerType) -> Self {
-    //     self.0.handlers = Some(handlers);
-    //     self
-    // }
 
     pub fn set_encrypted(mut self, encrypted: bool) -> Self {
         self.0.encrypted = encrypted;
@@ -144,8 +158,8 @@ pub enum State {
 impl fmt::Debug for State {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            State::NotInitialized => write!(f, "Not initialized"),
-            State::Handshake(_) => write!(f, "Handshake"),
+            State::NotInitialized => write!(f, "NotInitialized"),
+            State::Handshake(_) => write!(f, "Handshaking"),
             State::Established => write!(f, "Established"),
         }
     }
@@ -166,9 +180,10 @@ where
     handshake: Option<HandshakeResult>,
     channels: Channelizer,
     error: Option<Error>,
-    outbound_recv: CombinedOutputStream,
+    outbound_rx: CombinedOutputStream,
     messages: VecDeque<(u64, Message)>,
     events: VecDeque<Event>,
+    keepalive: Option<Fuse<Delay>>,
 }
 
 impl<R, W> Protocol<R, W>
@@ -177,7 +192,7 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     /// Create a new Protocol instance.
-    pub fn new(reader: R, writer: W, mut options: ProtocolOptions) -> Self {
+    pub fn new(reader: R, writer: W, options: ProtocolOptions) -> Self {
         let reader = EncryptedReader::new(BufReader::new(reader));
         let writer = EncryptedWriter::new(BufWriter::new(writer));
         Protocol {
@@ -188,9 +203,10 @@ where
             channels: Channelizer::new(),
             handshake: None,
             error: None,
-            outbound_recv: SelectAll::new(), // stream_state,
+            outbound_rx: SelectAll::new(), // stream_state,
             events: VecDeque::new(),
             messages: VecDeque::new(),
+            keepalive: None,
         }
     }
 
@@ -202,23 +218,24 @@ where
         };
 
         self.state = if self.options.noise {
-            State::Handshake(Some(Handshake::new(self.options.is_initiator).unwrap()))
+            let mut handshake = Handshake::new(self.options.is_initiator)?;
+            // If the handshake start returns a buffer, send it now.
+            if let Some(buf) = handshake.start()? {
+                self.send_prefixed(buf).await?;
+            }
+            State::Handshake(Some(handshake))
         } else {
             State::Established
         };
 
-        // If we are the initiator, first send the initial handshake payload.
-        if let State::Handshake(ref mut handshake) = self.state {
-            eprintln!("yes here");
-            let mut handshake = handshake.take().unwrap();
-            if let Some(buf) = handshake.start()? {
-                eprintln!("ok good");
-                self.send_prefixed(buf).await?;
-            }
-            self.state = State::Handshake(Some(handshake))
-        }
+        self.reset_keepalive();
 
         Ok(())
+    }
+
+    fn reset_keepalive(&mut self) {
+        let keepalive_duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
+        self.keepalive = Some(Delay::new(keepalive_duration).fuse());
     }
 
     pub async fn loop_next(&mut self) -> Result<Event> {
@@ -234,8 +251,11 @@ where
             return Ok(event);
         }
 
-        let keepalive_duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-        let mut keepalive = Delay::new(keepalive_duration).fuse();
+        let mut keepalive = if let Some(keepalive) = self.keepalive.take() {
+            keepalive
+        } else {
+            Delay::new(KEEPALIVE_DURATION).fuse()
+        };
 
         // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
         // If data was received, reset the keepalive timer.
@@ -243,24 +263,23 @@ where
             let event = futures::select! {
                 _ = keepalive => {
                     self.ping().await?;
-                    keepalive = Delay::new(keepalive_duration).fuse();
+                    // TODO: It would be better to `reset` the keepalive and not recreate it.
+                    // I couldn't get this to work with `fuse()` though which is needed for
+                    // the `select!` macro.
+                    keepalive = Delay::new(KEEPALIVE_DURATION).fuse();
                     None
-                    // keepalive.reset(keepalive_duration);
                 },
-                message = self.reader.select_next_some() => {
-                    match message {
-                        Ok(message) => self.on_message(&message).await?,
-                        Err(err) => return Err(err),
-                        // None => return Ok(()),
-                    }
+                buf = self.reader.select_next_some() => {
+                    let buf = buf?;
+                    self.on_message(&buf).await?
                 },
-                (ch, message) = self.outbound_recv.select_next_some() => {
+                (ch, message) = self.outbound_rx.select_next_some() => {
                     self.send(ch as u64, message).await?;
                     None
                 }
             };
-            trace!("main loop out, event {}", event.is_some());
             if let Some(event) = event {
+                self.keepalive = Some(keepalive);
                 return Ok(event);
             }
         }
@@ -279,14 +298,14 @@ where
     }
 
     async fn on_message(&mut self, buf: &[u8]) -> Result<Option<Event>> {
-        eprintln!("onmessage, state {:?} msg len {}", self.state, buf.len());
+        // trace!("onmessage, state {:?} msg len {}", self.state, buf.len());
         match self.state {
             State::Handshake(ref mut handshake) => {
                 let handshake = handshake.take().unwrap();
                 self.on_handshake_message(buf, handshake).await
             }
             State::Established => self.on_proto_message(buf).await,
-            _ => panic!("invalid state"),
+            _ => panic!("cannot receive messages before starting the protocol"),
         }
     }
 
@@ -304,7 +323,7 @@ where
                 self.reader.upgrade_with_handshake(&result)?;
                 self.writer.upgrade_with_handshake(&result)?;
             }
-            log::trace!("handshake completed");
+            log::trace!("handshake complete");
             self.handshake = Some(result);
             self.state = State::Established;
             Ok(Some(Event::Handshake(self.remote_key().unwrap().to_vec())))
@@ -318,7 +337,7 @@ where
         let message = WireMessage::from_buf(&message_buf)?;
         let channel = message.channel;
         let message = Message::decode(message.typ, message.message)?;
-        log::trace!("recv: {}", message);
+        log::trace!("recv (ch {}): {}", channel, message);
         match message {
             Message::Open(msg) => self.on_open(channel, msg).await,
             Message::Close(msg) => {
@@ -363,7 +382,7 @@ where
             discovery_key: discovery_key.to_vec(), // id: id.clone(),
         };
         let send_rx_mapped = send_rx.map(move |message| (id, message));
-        self.outbound_recv.push(Box::new(send_rx_mapped));
+        self.outbound_rx.push(Box::new(send_rx_mapped));
         self.channels.open(&discovery_key, recv_tx).await.unwrap();
         channel
     }
@@ -393,12 +412,12 @@ where
         if key.is_none() {
             return Ok(Some(Event::DiscoveryKey(discovery_key.clone())));
         } else {
-            if let Some(channel) = self.channels.get(&discovery_key) {
-                let key = key.unwrap();
+            let key = key.unwrap();
+            let channel = self.channels.get(&discovery_key);
+            if let Some(channel) = channel {
+                let local_id = channel.local_id.clone().unwrap();
                 self.verify_remote_capability(capability, &key)?;
-                let channel = self
-                    .create_channel(channel.local_id.clone().unwrap(), &discovery_key)
-                    .await;
+                let channel = self.create_channel(local_id, &discovery_key).await;
                 self.channels
                     .forward(ch as usize, Message::Open(msg))
                     .await?;
@@ -408,36 +427,27 @@ where
         }
     }
 
-    pub async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
+    pub(crate) async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
         self.writer.write_all(&buf).await?;
         self.writer.flush().await
     }
 
-    pub async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
+    pub(crate) async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
         let len = buf.len();
         let prefix_len = varinteger::length(len as u64);
         let mut prefix_buf = vec![0u8; prefix_len];
         varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
+        // trace!("send len {} {:?}", buf.len(), buf);
         self.writer.write_all(&prefix_buf).await?;
         self.writer.write_all(&buf).await?;
         self.writer.flush().await
     }
 
-    pub async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
-        log::trace!("send: {}", msg);
+    pub(crate) async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
+        log::trace!("send (ch {}): {}", ch, msg);
         let message = msg.encode(ch)?;
         let buf = message.encode()?;
         self.send_prefixed(&buf).await
-    }
-
-    pub async fn send_channel(&mut self, discovery_key: &[u8], msg: Message) -> Result<()> {
-        match self.channels.get_local_id(&discovery_key) {
-            None => Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "Cannot send: Channel is not open",
-            )),
-            Some(local_id) => self.send(local_id as u64, msg).await,
-        }
     }
 
     async fn ping(&mut self) -> Result<()> {

@@ -103,15 +103,15 @@ impl Channelizer {
         }
     }
 
-    pub fn resolve_remote(&self, id: usize) -> Result<Vec<u8>> {
-        match self.get_remote(id) {
-            Some(channel) => Ok(channel.discovery_key.clone()),
-            None => Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "Remote channel is not open",
-            )),
-        }
-    }
+    // pub fn resolve_remote(&self, id: usize) -> Result<Vec<u8>> {
+    //     match self.get_remote(id) {
+    //         Some(channel) => Ok(channel.discovery_key.clone()),
+    //         None => Err(Error::new(
+    //             ErrorKind::BrokenPipe,
+    //             "Remote channel is not open",
+    //         )),
+    //     }
+    // }
 
     pub fn get_remote(&self, id: usize) -> Option<&ChannelInfo> {
         match self.remote_id.get(id) {
@@ -127,12 +127,12 @@ impl Channelizer {
         }
     }
 
-    pub fn get_local_id(&self, discovery_key: &[u8]) -> Option<usize> {
-        match self.get(&discovery_key) {
-            Some(channel) => channel.local_id,
-            None => None,
-        }
-    }
+    // pub fn get_local_id(&self, discovery_key: &[u8]) -> Option<usize> {
+    //     match self.get(&discovery_key) {
+    //         Some(channel) => channel.local_id,
+    //         None => None,
+    //     }
+    // }
 
     pub fn _get_local(&self, id: usize) -> Option<&ChannelInfo> {
         match self.local_id.get(id) {

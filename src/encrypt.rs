@@ -1,6 +1,6 @@
 use crate::handshake::HandshakeResult;
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::{FusedStream, Stream, StreamExt};
+use futures::stream::{FusedStream, Stream};
 use futures_timer::Delay;
 use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
 use salsa20::XSalsa20;
@@ -9,7 +9,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::constants::{DEFAULT_KEEPALIVE, DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
+use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use std::time::Duration;
 
 // TODO: Don't define here but use the values from the XSalsa20 impl.
@@ -74,7 +74,6 @@ where
     }
 
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        eprintln!("upgrade reader");
         let cipher = Cipher::from_handshake_rx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
@@ -208,7 +207,7 @@ where
         }
 
         // First process our existing buffer, if any.
-        let mut result = process_state(&mut state);
+        let result = process_state(&mut state);
         if result.is_some() {
             self.state = Some(state);
             return Poll::Ready(result);

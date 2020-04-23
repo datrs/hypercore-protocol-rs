@@ -140,7 +140,7 @@ impl Handshake {
     }
 
     pub fn read(&mut self, msg: &[u8]) -> Result<Option<&'_ [u8]>> {
-        eprintln!("hs read len {}", msg.len());
+        // eprintln!("hs read len {}", msg.len());
         if self.complete() {
             return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
         }

@@ -33,6 +33,7 @@ pretty-hash = "0.4"
 futures-timer = "3.0"
 instant = "0.1"
 getrandom = "0.1"
+pin-project-lite = "0.1.4"
 
 [dev-dependencies]
 async-std = "1.5.0"

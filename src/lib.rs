@@ -32,7 +32,6 @@ mod encrypt;
 mod handshake;
 mod message;
 mod protocol;
-mod stream;
 mod util;
 mod wire_message;
 
