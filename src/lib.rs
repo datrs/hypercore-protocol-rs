@@ -26,6 +26,9 @@
 //!
 //! See [examples/basic.rs](https://github.com/Frando/hypercore-protocol-rust-experiments/blob/master/examples/basic.rs) for an actual example of how to use a protocol stream.
 
+// Otherwise some macro calls in the next_loop are prohibited.
+#![recursion_limit = "256"]
+
 mod channels;
 mod constants;
 mod encrypt;

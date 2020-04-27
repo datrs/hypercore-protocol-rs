@@ -18,7 +18,7 @@ use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handshake::{Handshake, HandshakeResult};
 use crate::message::Message;
 use crate::schema::*;
-use crate::util::{discovery_key, pretty_hash};
+use crate::util::pretty_hash;
 use crate::wire_message::Message as WireMessage;
 
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
@@ -183,7 +183,7 @@ where
     outbound_rx: CombinedOutputStream,
     control_rx: Receiver<stream::ControlEvent>,
     control_tx: Sender<stream::ControlEvent>,
-    messages: VecDeque<(u64, Message)>,
+    // messages: VecDeque<(u64, Message)>,
     events: VecDeque<Event>,
     keepalive: Option<Fuse<Delay>>,
 }
@@ -209,9 +209,8 @@ where
             outbound_rx: SelectAll::new(), // stream_state,
             control_rx,
             control_tx,
-            /* control_rx: None, */
             events: VecDeque::new(),
-            messages: VecDeque::new(),
+            // messages: VecDeque::new(),
             keepalive: None,
         }
     }
@@ -245,16 +244,9 @@ where
     }
 
     pub async fn next(&mut self) -> Result<Event> {
+        // trace!("NEXT IN, msg len {}", self.messages.len());
         if let State::NotInitialized = self.state {
             self.init().await?;
-        }
-
-        while let Some((ch, message)) = self.messages.pop_front() {
-            self.send(ch, message).await?;
-        }
-
-        if let Some(event) = self.events.pop_front() {
-            return Ok(event);
         }
 
         let mut keepalive = if let Some(keepalive) = self.keepalive.take() {
@@ -266,6 +258,14 @@ where
         // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
         // If data was received, reset the keepalive timer.
         loop {
+            // while let Some((ch, message)) = self.messages.pop_front() {
+            //     self.send(ch, message).await?;
+            // }
+
+            if let Some(event) = self.events.pop_front() {
+                return Ok(event);
+            }
+
             let event = futures::select! {
                 _ = keepalive => {
                     self.ping().await?;
@@ -314,36 +314,37 @@ where
     async fn on_message(&mut self, buf: &[u8]) -> Result<Option<Event>> {
         // trace!("onmessage, state {:?} msg len {}", self.state, buf.len());
         match self.state {
-            State::Handshake(ref mut handshake) => {
-                let handshake = handshake.take().unwrap();
-                self.on_handshake_message(buf, handshake).await
-            }
+            State::Handshake(_) => self.on_handshake_message(buf).await,
             State::Established => self.on_proto_message(buf).await,
-            _ => panic!("cannot receive messages before starting the protocol"),
+            State::NotInitialized => panic!("cannot receive messages before starting the protocol"),
         }
     }
 
-    async fn on_handshake_message(
-        &mut self,
-        buf: &[u8],
-        mut handshake: Handshake,
-    ) -> Result<Option<Event>> {
-        if let Some(send) = handshake.read(buf)? {
-            self.send_prefixed(send).await?;
+    async fn on_handshake_message(&mut self, buf: &[u8]) -> Result<Option<Event>> {
+        let mut handshake = match &mut self.state {
+            State::Handshake(handshake) => handshake.take().unwrap(),
+            _ => panic!("cannot call on_handshake_message when not in Handshake state"),
+        };
+        if let Some(response_buf) = handshake.read(buf)? {
+            self.send_prefixed(response_buf).await?;
         }
-        if handshake.complete() {
+        if !handshake.complete() {
+            self.state = State::Handshake(Some(handshake));
+            Ok(None)
+        } else {
             let result = handshake.into_result()?;
             if self.options.encrypted {
                 self.reader.upgrade_with_handshake(&result)?;
                 self.writer.upgrade_with_handshake(&result)?;
             }
-            log::trace!("handshake complete");
+            let remote_key = result.remote_pubkey.to_vec();
+            log::trace!(
+                "handshake complete, remote_key {}",
+                pretty_hash(&remote_key)
+            );
             self.handshake = Some(result);
             self.state = State::Established;
-            Ok(Some(Event::Handshake(self.remote_key().unwrap().to_vec())))
-        } else {
-            self.state = State::Handshake(Some(handshake));
-            Ok(None)
+            Ok(Some(Event::Handshake(remote_key)))
         }
     }
 
@@ -367,24 +368,49 @@ where
     }
 
     pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-        let discovery_key = discovery_key(&key);
-        let id = self.channels.attach_local(key.clone());
-        if let Some(channel) = self.channels.get(&discovery_key) {
-            if let Some(_remote_id) = channel.remote_id {
-                self.verify_remote_capability(channel.remote_capability.clone(), &key)?;
-                let channel = self.create_channel(id, &discovery_key).await;
-                self.events.push_back(Event::Channel(channel));
-            }
+        // Create a new channel.
+        let channel_info = self.channels.attach_local(key.clone());
+        // Safe because attach_local always puts Some(local_id)
+        let local_id = channel_info.local_id.unwrap();
+        let discovery_key = channel_info.discovery_key.clone();
+
+        // If the channel was already opened from the remote end, verify, and if
+        // verification is ok, push a channel open event.
+        if let Some(_remote_id) = channel_info.remote_id {
+            let remote_capability = channel_info.remote_capability.clone();
+            self.verify_remote_capability(remote_capability, &key)?;
+            let channel = self.create_channel(local_id, &discovery_key).await;
+            self.events.push_back(Event::Channel(channel));
         }
 
+        // Tell the remote end about the new channel.
         let capability = self.capability(&key);
         let message = Message::Open(Open {
-            discovery_key: discovery_key.clone(),
+            discovery_key,
             capability,
         });
-        self.messages.push_back((id as u64, message));
+        self.outbound_rx.push(Box::new(
+            futures::future::ready((local_id, message)).into_stream(),
+        ));
 
         Ok(())
+    }
+
+    async fn on_open(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
+        let channel_info = self.channels.attach_remote(
+            msg.discovery_key.clone(),
+            ch as usize,
+            msg.capability.clone(),
+        );
+
+        // This means there is not yet a locally-opened channel for this discovery_key.
+        if let Some(local_id) = channel_info.local_id {
+            let key = channel_info.key.as_ref().unwrap().clone();
+            self.verify_remote_capability(msg.capability, &key)?;
+            let channel = self.create_channel(local_id, &msg.discovery_key).await;
+            return Ok(Some(Event::Channel(channel)));
+        }
+        return Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())));
     }
 
     async fn create_channel(&mut self, id: usize, discovery_key: &[u8]) -> Channel {
@@ -410,35 +436,6 @@ where
             self.channels.remove(&discovery_key);
         }
         Ok(())
-    }
-
-    async fn on_open(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
-        let Open {
-            discovery_key,
-            capability,
-        } = msg.clone();
-
-        let key = self.channels.get_key(&discovery_key);
-        self.channels
-            .attach_remote(discovery_key.clone(), ch as usize, capability.clone())?;
-
-        // This means there is not yet a locally-opened channel for this discovery_key.
-        if key.is_none() {
-            return Ok(Some(Event::DiscoveryKey(discovery_key.clone())));
-        } else {
-            let key = key.unwrap();
-            let channel = self.channels.get(&discovery_key);
-            if let Some(channel) = channel {
-                let local_id = channel.local_id.clone().unwrap();
-                self.verify_remote_capability(capability, &key)?;
-                let channel = self.create_channel(local_id, &discovery_key).await;
-                self.channels
-                    .forward(ch as usize, Message::Open(msg))
-                    .await?;
-                return Ok(Some(Event::Channel(channel)));
-            }
-            return Ok(None);
-        }
     }
 
     pub(crate) async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
@@ -512,6 +509,7 @@ mod stream {
     use std::pin::Pin;
     use std::task::Poll;
 
+    #[derive(Debug)]
     pub enum ControlEvent {
         Open(Vec<u8>),
     }
@@ -545,10 +543,12 @@ mod stream {
         }
 
         pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-            self.tx
+            let res = self
+                .tx
                 .send(ControlEvent::Open(key))
                 .await
-                .map_err(map_channel_err)
+                .map_err(map_channel_err);
+            res
         }
     }
 
