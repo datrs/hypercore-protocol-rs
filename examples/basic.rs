@@ -60,10 +60,13 @@ async fn onconnection(
     is_initiator: bool,
     feedstore: Arc<FeedStore>,
 ) -> Result<()> {
-    let mut protocol = ProtocolBuilder::new(is_initiator).build_from_stream(stream);
-
-    loop {
-        let event = protocol.loop_next().await?;
+    let mut protocol = ProtocolBuilder::new(is_initiator)
+        .build_from_stream(stream)
+        .into_stream();
+    /* let mut protocol = protocol.into_stream(); */
+    while let Some(event) = protocol.next().await {
+        let event = event?;
+        /* let event = protocol.next().await; */
         debug!("EVENT {:?}", event);
         match event {
             Event::Handshake(_) => {
@@ -85,6 +88,7 @@ async fn onconnection(
             }
         }
     }
+    Ok(())
 }
 
 struct FeedStore {

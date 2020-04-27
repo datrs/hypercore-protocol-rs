@@ -181,6 +181,8 @@ where
     channels: Channelizer,
     error: Option<Error>,
     outbound_rx: CombinedOutputStream,
+    control_rx: Receiver<stream::ControlEvent>,
+    control_tx: Sender<stream::ControlEvent>,
     messages: VecDeque<(u64, Message)>,
     events: VecDeque<Event>,
     keepalive: Option<Fuse<Delay>>,
@@ -195,6 +197,7 @@ where
     pub fn new(reader: R, writer: W, options: ProtocolOptions) -> Self {
         let reader = EncryptedReader::new(BufReader::new(reader));
         let writer = EncryptedWriter::new(BufWriter::new(writer));
+        let (control_tx, control_rx) = futures::channel::mpsc::channel(100);
         Protocol {
             writer,
             reader,
@@ -204,6 +207,9 @@ where
             handshake: None,
             error: None,
             outbound_rx: SelectAll::new(), // stream_state,
+            control_rx,
+            control_tx,
+            /* control_rx: None, */
             events: VecDeque::new(),
             messages: VecDeque::new(),
             keepalive: None,
@@ -238,7 +244,7 @@ where
         self.keepalive = Some(Delay::new(keepalive_duration).fuse());
     }
 
-    pub async fn loop_next(&mut self) -> Result<Event> {
+    pub async fn next(&mut self) -> Result<Event> {
         if let State::NotInitialized = self.state {
             self.init().await?;
         }
@@ -276,7 +282,15 @@ where
                 (ch, message) = self.outbound_rx.select_next_some() => {
                     self.send(ch as u64, message).await?;
                     None
-                }
+                },
+                ev = self.control_rx.select_next_some() => {
+                    match ev {
+                        stream::ControlEvent::Open(key) => {
+                            self.open(key).await?;
+                            None
+                        }
+                    }
+                },
             };
             if let Some(event) = event {
                 self.keepalive = Some(keepalive);
@@ -471,6 +485,11 @@ where
             )),
         }
     }
+
+    pub fn into_stream(self) -> stream::ProtocolStream<R, W> {
+        let tx = self.control_tx.clone();
+        stream::ProtocolStream::new(self, tx)
+    }
 }
 
 fn map_channel_err(err: futures::channel::mpsc::SendError) -> Error {
@@ -478,4 +497,80 @@ fn map_channel_err(err: futures::channel::mpsc::SendError) -> Error {
         ErrorKind::BrokenPipe,
         format!("Cannot forward on channel: {}", err),
     )
+}
+
+pub use stream::ProtocolStream;
+mod stream {
+    use super::{map_channel_err, Event, Protocol};
+    use futures::channel::mpsc::Sender;
+    use futures::future::FutureExt;
+    use futures::io::{AsyncRead, AsyncWrite};
+    use futures::sink::SinkExt;
+    use futures::stream::Stream;
+    use std::future::Future;
+    use std::io::Result;
+    use std::pin::Pin;
+    use std::task::Poll;
+
+    pub enum ControlEvent {
+        Open(Vec<u8>),
+    }
+
+    async fn loop_next<R, W>(mut protocol: Protocol<R, W>) -> (Result<Event>, Protocol<R, W>)
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        let event = protocol.next().await;
+        (event, protocol)
+    }
+
+    pub struct ProtocolStream<R, W>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        fut: Pin<Box<dyn Future<Output = (Result<Event>, Protocol<R, W>)> + Send>>,
+        tx: Sender<ControlEvent>,
+    }
+
+    impl<R, W> ProtocolStream<R, W>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        pub fn new(protocol: Protocol<R, W>, tx: Sender<ControlEvent>) -> Self {
+            let fut = loop_next(protocol).boxed();
+            Self { fut, tx }
+        }
+
+        pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
+            self.tx
+                .send(ControlEvent::Open(key))
+                .await
+                .map_err(map_channel_err)
+        }
+    }
+
+    impl<R, W> Stream for ProtocolStream<R, W>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        type Item = Result<Event>;
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            let fut = Pin::as_mut(&mut self.fut);
+            match fut.poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(result) => {
+                    let (result, protocol) = result;
+                    self.fut = loop_next(protocol).boxed();
+                    Poll::Ready(Some(result))
+                }
+            }
+        }
+    }
 }
