@@ -19,7 +19,7 @@ categories = [
 
 [dependencies]
 futures = "0.3"
-snow = { git = "https://github.com/Frando/snow.git", branch = "datrs", features = ["risky-raw-split", "xchachapoly"] }
+snow = { git = "https://github.com/mcginty/snow.git", branch = "master", features = ["risky-raw-split", "xchachapoly"] }
 prost = "0.6"
 bytes = "0.5"
 varinteger = "1.0"
