@@ -419,7 +419,7 @@ where
         let channel = Channel {
             receiver: recv_rx,
             sender: send_tx,
-            discovery_key: discovery_key.to_vec(), // id: id.clone(),
+            discovery_key: discovery_key.to_vec(),
         };
         let send_rx_mapped = send_rx.map(move |message| (id, message));
         self.outbound_rx.push(Box::new(send_rx_mapped));
