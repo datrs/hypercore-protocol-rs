@@ -6,7 +6,7 @@
 
 This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
 
-It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake (currently with two patches: [(1)](https://github.com/mcginty/snow/pull/73), [(2)](https://github.com/mcginty/snow/pull/78)).
+It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake (currently depending on unreleased changes on its master branch).
 
 Current features are:
 
@@ -32,7 +32,7 @@ npm install
 
 * `node examples-nodejs/run.js hypercore`
 
-    Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a hypercore and tries to insert them into a hypercore. This currently fails, see [this issue](https://github.com/datrs/hypercore/pull/108) for details.
+    Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a hypercore and tries to insert them into a hypercore. This currently depends on uncommitted pull requests on datrs/hypercore: [#110](https://github.com/datrs/hypercore/pull/110), [#103](https://github.com/datrs/hypercore/pull/103)
 
 
 ### [basic.rs](examples/basic.rs)
