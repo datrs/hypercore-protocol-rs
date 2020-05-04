@@ -23,11 +23,13 @@ use crate::wire_message::Message as WireMessage;
 
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
+/// A protocol event.
 pub enum Event {
     Handshake(Vec<u8>),
     DiscoveryKey(Vec<u8>),
     Channel(Channel),
 }
+
 impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -42,10 +44,11 @@ impl fmt::Debug for Event {
     }
 }
 
+/// A protocol channel.
 pub struct Channel {
     receiver: Receiver<Message>,
     sender: Sender<Message>,
-    discovery_key: Vec<u8>, // id: usize, // discovery_key: Vec<u8>,
+    discovery_key: Vec<u8>,
 }
 
 impl fmt::Debug for Channel {
@@ -86,16 +89,6 @@ pub struct ProtocolOptions {
     pub encrypted: bool,
 }
 
-// impl fmt::Debug for ProtocolOptions {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         f.debug_struct("ProtocolOptions")
-//             .field("is_initiator", &self.is_initiator)
-//             .field("noise", &self.noise)
-//             .field("encrypted", &self.encrypted)
-//             .finish()
-//     }
-// }
-
 /// Build a Protocol instance with options.
 pub struct ProtocolBuilder(ProtocolOptions);
 
@@ -105,7 +98,6 @@ impl ProtocolBuilder {
             is_initiator,
             noise: true,
             encrypted: true,
-            // handlers: None,
         })
     }
 
@@ -165,6 +157,7 @@ impl fmt::Debug for State {
     }
 }
 
+/// The output of the set of channel senders.
 type CombinedOutputStream = SelectAll<Box<dyn Stream<Item = (usize, Message)> + Send + Unpin>>;
 
 /// A Protocol stream.
@@ -183,7 +176,6 @@ where
     outbound_rx: CombinedOutputStream,
     control_rx: Receiver<stream::ControlEvent>,
     control_tx: Sender<stream::ControlEvent>,
-    // messages: VecDeque<(u64, Message)>,
     events: VecDeque<Event>,
     keepalive: Option<Fuse<Delay>>,
 }
@@ -210,7 +202,6 @@ where
             control_rx,
             control_tx,
             events: VecDeque::new(),
-            // messages: VecDeque::new(),
             keepalive: None,
         }
     }
@@ -243,6 +234,9 @@ where
         self.keepalive = Some(Delay::new(keepalive_duration).fuse());
     }
 
+    /// Wait for the next protocol event.
+    ///
+    /// This function should be called in a loop until this returns an error.
     pub async fn next(&mut self) -> Result<Event> {
         // trace!("NEXT IN, msg len {}", self.messages.len());
         if let State::NotInitialized = self.state {
@@ -299,6 +293,9 @@ where
         }
     }
 
+    /// Get the peer's Noise public key.
+    ///
+    /// Empty before the handshake completed.
     pub fn remote_key(&self) -> Option<&[u8]> {
         match &self.handshake {
             None => None,
@@ -367,6 +364,10 @@ where
         }
     }
 
+    /// Open a new protocol channel.
+    ///
+    /// Once the other side proofed that it also knows the `key`, the channel is emitted as
+    /// `Event::Channel` on the protocol event stream.
     pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
         // Create a new channel.
         let channel_info = self.channels.attach_local(key.clone());
@@ -523,6 +524,7 @@ mod stream {
         (event, protocol)
     }
 
+    /// Event stream interface for a Protocol instance.
     pub struct ProtocolStream<R, W>
     where
         R: AsyncRead + Send + Unpin + 'static,
