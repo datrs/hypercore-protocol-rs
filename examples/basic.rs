@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_std::io;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
@@ -7,7 +8,6 @@ use futures::stream::StreamExt;
 use log::*;
 use std::collections::HashMap;
 use std::env;
-use std::io::Result;
 
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
@@ -9,7 +10,6 @@ use random_access_storage::RandomAccess;
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
-use std::io::Result;
 
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
@@ -199,10 +199,7 @@ where
                 start: 0,
                 length: None,
             };
-            channel
-                .send(Message::Want(msg))
-                .await
-                .expect("failed to send");
+            channel.send(Message::Want(msg)).await?;
         }
         Message::Have(msg) => {
             if state.remote_head == None {
@@ -213,7 +210,7 @@ where
                     hash: None,
                     nodes: None,
                 };
-                channel.send(Message::Request(msg)).await.unwrap();
+                channel.send(Message::Request(msg)).await?;
             } else if let Some(remote_head) = state.remote_head {
                 if remote_head < msg.start {
                     state.remote_head = Some(msg.start)
@@ -235,7 +232,7 @@ where
             };
 
             let signature = match msg.signature {
-                Some(bytes) => Some(Signature::from_bytes(&bytes).unwrap()),
+                Some(bytes) => Some(Signature::from_bytes(&bytes)?),
                 None => None,
             };
             let nodes = msg
@@ -249,10 +246,10 @@ where
                 signature,
             };
 
-            feed.put(msg.index, value, proof.clone()).await.unwrap();
+            feed.put(msg.index, value, proof.clone()).await?;
 
             let i = msg.index;
-            let node = feed.get(i).await.unwrap();
+            let node = feed.get(i).await?;
             if let Some(value) = node {
                 println!("feed idx {}: {:?}", i, String::from_utf8(value).unwrap());
             } else {
