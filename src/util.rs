@@ -10,7 +10,7 @@ pub fn discovery_key(key: &[u8]) -> Vec<u8> {
 }
 
 pub fn pretty_hash(key: &[u8]) -> String {
-    pretty_hash::fmt(key).unwrap_or("<invalid>".into())
+    pretty_hash::fmt(key).unwrap_or_else(|_| "<invalid>".into())
 }
 
 pub fn map_channel_err(err: futures::channel::mpsc::SendError) -> Error {

@@ -237,7 +237,7 @@ where
     /// Wait for the next protocol event.
     ///
     /// This function should be called in a loop until this returns an error.
-    pub async fn next(&mut self) -> Result<Event> {
+    pub async fn loop_next(&mut self) -> Result<Event> {
         // trace!("NEXT IN, msg len {}", self.messages.len());
         if let State::NotInitialized = self.state {
             self.init().await?;
@@ -411,7 +411,7 @@ where
             let channel = self.create_channel(local_id, &msg.discovery_key).await;
             return Ok(Some(Event::Channel(channel)));
         }
-        return Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())));
+        Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())))
     }
 
     async fn create_channel(&mut self, local_id: usize, discovery_key: &[u8]) -> Channel {
@@ -492,12 +492,14 @@ mod stream {
         Open(Vec<u8>),
     }
 
+    type LoopFuture<R, W> = Pin<Box<dyn Future<Output = (Result<Event>, Protocol<R, W>)> + Send>>;
+
     async fn loop_next<R, W>(mut protocol: Protocol<R, W>) -> (Result<Event>, Protocol<R, W>)
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        let event = protocol.next().await;
+        let event = protocol.loop_next().await;
         (event, protocol)
     }
 
@@ -507,7 +509,7 @@ mod stream {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        fut: Pin<Box<dyn Future<Output = (Result<Event>, Protocol<R, W>)> + Send>>,
+        fut: LoopFuture<R, W>,
         tx: Sender<ControlEvent>,
     }
 
@@ -522,12 +524,10 @@ mod stream {
         }
 
         pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-            let res = self
-                .tx
+            self.tx
                 .send(ControlEvent::Open(key))
                 .await
-                .map_err(map_channel_err);
-            res
+                .map_err(map_channel_err)
         }
     }
 

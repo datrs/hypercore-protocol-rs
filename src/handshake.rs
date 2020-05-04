@@ -152,10 +152,13 @@ impl Handshake {
             let tx_len = self.send()?;
             return Ok(Some(&self.tx_buf[..tx_len]));
         }
-        let mut tx_len = 0;
-        if self.is_initiator() {
-            tx_len = self.send()?;
-        }
+
+        let tx_buf = if self.is_initiator() {
+            let tx_len = self.send()?;
+            Some(&self.tx_buf[..tx_len])
+        } else {
+            None
+        };
 
         let split = self.state.dangerously_get_raw_split();
         if self.is_initiator() {
@@ -169,11 +172,7 @@ impl Handshake {
         self.result.remote_pubkey = self.state.get_remote_static().unwrap().to_vec();
         self.complete = true;
 
-        if self.is_initiator() {
-            Ok(Some(&self.tx_buf[..tx_len]))
-        } else {
-            Ok(None)
-        }
+        Ok(tx_buf)
     }
 
     pub fn into_result(self) -> Result<HandshakeResult> {
