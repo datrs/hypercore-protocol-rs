@@ -1,6 +1,6 @@
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::future::{Fuse, FutureExt};
-use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use futures::io::{AsyncRead, AsyncWrite};
 use futures::io::{BufReader, BufWriter};
 use futures::sink::SinkExt;
 use futures::stream::{SelectAll, Stream, StreamExt};
@@ -18,7 +18,7 @@ use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handshake::{Handshake, HandshakeResult};
 use crate::message::Message;
 use crate::schema::*;
-use crate::util::pretty_hash;
+use crate::util::{map_channel_err, pretty_hash};
 use crate::wire_message::Message as WireMessage;
 
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
@@ -198,7 +198,7 @@ where
             channels: Channelizer::new(),
             handshake: None,
             error: None,
-            outbound_rx: SelectAll::new(), // stream_state,
+            outbound_rx: SelectAll::new(),
             control_rx,
             control_tx,
             events: VecDeque::new(),
@@ -217,7 +217,7 @@ where
             let mut handshake = Handshake::new(self.options.is_initiator)?;
             // If the handshake start returns a buffer, send it now.
             if let Some(buf) = handshake.start()? {
-                self.send_prefixed(buf).await?;
+                self.writer.send_prefixed(buf).await?;
             }
             State::Handshake(Some(handshake))
         } else {
@@ -323,7 +323,7 @@ where
             _ => panic!("cannot call on_handshake_message when not in Handshake state"),
         };
         if let Some(response_buf) = handshake.read(buf)? {
-            self.send_prefixed(response_buf).await?;
+            self.writer.send_prefixed(response_buf).await?;
         }
         if !handshake.complete() {
             self.state = State::Handshake(Some(handshake));
@@ -414,7 +414,7 @@ where
         return Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())));
     }
 
-    async fn create_channel(&mut self, id: usize, discovery_key: &[u8]) -> Channel {
+    async fn create_channel(&mut self, local_id: usize, discovery_key: &[u8]) -> Channel {
         let (send_tx, send_rx) = futures::channel::mpsc::channel(100);
         let (recv_tx, recv_rx) = futures::channel::mpsc::channel(100);
         let channel = Channel {
@@ -422,7 +422,7 @@ where
             sender: send_tx,
             discovery_key: discovery_key.to_vec(),
         };
-        let send_rx_mapped = send_rx.map(move |message| (id, message));
+        let send_rx_mapped = send_rx.map(move |message| (local_id, message));
         self.outbound_rx.push(Box::new(send_rx_mapped));
         self.channels.open(&discovery_key, recv_tx).await.unwrap();
         channel
@@ -439,32 +439,15 @@ where
         Ok(())
     }
 
-    pub(crate) async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
-        self.writer.write_all(&buf).await?;
-        self.writer.flush().await
-    }
-
-    pub(crate) async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
-        let len = buf.len();
-        let prefix_len = varinteger::length(len as u64);
-        let mut prefix_buf = vec![0u8; prefix_len];
-        varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
-        // trace!("send len {} {:?}", buf.len(), buf);
-        self.writer.write_all(&prefix_buf).await?;
-        self.writer.write_all(&buf).await?;
-        self.writer.flush().await
-    }
-
     pub(crate) async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
         log::trace!("send (ch {}): {}", ch, msg);
         let message = msg.encode(ch)?;
         let buf = message.encode()?;
-        self.send_prefixed(&buf).await
+        self.writer.send_prefixed(&buf).await
     }
 
     async fn ping(&mut self) -> Result<()> {
-        let buf = vec![0u8];
-        self.send_raw(&buf).await
+        self.writer.ping().await
     }
 
     fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -490,16 +473,10 @@ where
     }
 }
 
-fn map_channel_err(err: futures::channel::mpsc::SendError) -> Error {
-    Error::new(
-        ErrorKind::BrokenPipe,
-        format!("Cannot forward on channel: {}", err),
-    )
-}
-
 pub use stream::ProtocolStream;
 mod stream {
-    use super::{map_channel_err, Event, Protocol};
+    use crate::util::map_channel_err;
+    use crate::{Event, Protocol};
     use futures::channel::mpsc::Sender;
     use futures::future::FutureExt;
     use futures::io::{AsyncRead, AsyncWrite};

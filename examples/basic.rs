@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_std::io;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
-use async_std::sync::{Arc, RwLock};
+use async_std::sync::Arc;
 use async_std::task;
 use futures::stream::StreamExt;
 use log::*;
@@ -79,9 +79,15 @@ async fn onconnection(
                     protocol.open(feed.key.clone()).await?;
                 }
             }
-            Event::Channel(channel) => {
+            Event::Channel(mut channel) => {
                 if let Some(feed) = feedstore.get(&channel.discovery_key()) {
-                    feed.onpeer(channel);
+                    let feed = feed.clone();
+                    let mut state = FeedState::default();
+                    task::spawn(async move {
+                        while let Some(message) = channel.next().await {
+                            onmessage(&*feed, &mut state, &mut channel, message).await;
+                        }
+                    });
                 }
             }
         }
@@ -115,23 +121,13 @@ impl FeedStore {
 struct Feed {
     key: Vec<u8>,
     discovery_key: Vec<u8>,
-    state: Arc<RwLock<FeedState>>,
 }
 impl Feed {
     pub fn new(key: Vec<u8>) -> Self {
         Feed {
             discovery_key: discovery_key(&key),
             key,
-            state: Arc::new(RwLock::new(FeedState::default())),
         }
-    }
-    pub fn onpeer(&self, mut channel: Channel) {
-        let state = self.state.clone();
-        task::spawn(async move {
-            while let Some(message) = channel.next().await {
-                onmessage(state.clone(), message, &mut channel).await;
-            }
-        });
     }
 }
 
@@ -147,7 +143,7 @@ impl Default for FeedState {
     }
 }
 
-async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mut Channel) {
+async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, message: Message) {
     match message {
         Message::Open(_) => {
             let msg = Want {
@@ -160,7 +156,6 @@ async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mu
                 .expect("failed to send");
         }
         Message::Have(msg) => {
-            let mut state = state.write().await;
             if state.remote_head == None {
                 state.remote_head = Some(msg.start);
                 let msg = Request {
@@ -177,7 +172,6 @@ async fn onmessage(state: Arc<RwLock<FeedState>>, message: Message, channel: &mu
             }
         }
         Message::Data(msg) => {
-            let state = state.read().await;
             debug!(
                 "receive data: idx {}, {} bytes (remote_head {:?})",
                 msg.index,

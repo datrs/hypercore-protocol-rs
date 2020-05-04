@@ -1,5 +1,5 @@
 use crate::handshake::HandshakeResult;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use futures::stream::{FusedStream, Stream};
 use futures_timer::Delay;
 use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
@@ -103,6 +103,27 @@ where
         let cipher = Cipher::from_handshake_tx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
+    }
+
+    pub async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
+        self.write_all(&buf).await?;
+        self.flush().await
+    }
+
+    pub async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
+        let len = buf.len();
+        let prefix_len = varinteger::length(len as u64);
+        let mut prefix_buf = vec![0u8; prefix_len];
+        varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
+        // trace!("send len {} {:?}", buf.len(), buf);
+        self.write_all(&prefix_buf).await?;
+        self.write_all(&buf).await?;
+        self.flush().await
+    }
+
+    pub async fn ping(&mut self) -> Result<()> {
+        let buf = vec![0u8];
+        self.send_raw(&buf).await
     }
 }
 

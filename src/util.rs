@@ -1,5 +1,5 @@
 use blake2_rfc::blake2b::Blake2b;
-// use pretty_hash::fmt as pretty_hash;
+use std::io::{Error, ErrorKind};
 
 use crate::constants::DISCOVERY_NS_BUF;
 
@@ -11,4 +11,11 @@ pub fn discovery_key(key: &[u8]) -> Vec<u8> {
 
 pub fn pretty_hash(key: &[u8]) -> String {
     pretty_hash::fmt(key).unwrap_or("<invalid>".into())
+}
+
+pub fn map_channel_err(err: futures::channel::mpsc::SendError) -> Error {
+    Error::new(
+        ErrorKind::BrokenPipe,
+        format!("Cannot forward on channel: {}", err),
+    )
 }
