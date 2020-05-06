@@ -140,17 +140,25 @@ impl Handshake {
     }
 
     pub fn read(&mut self, msg: &[u8]) -> Result<Option<&'_ [u8]>> {
+        // eprintln!("hs read len {}", msg.len());
         if self.complete() {
             return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
         }
 
         let rx_len = self.recv(&msg)?;
-        let tx_len = self.send()?;
 
         if !self.is_initiator() && !self.did_receive {
             self.did_receive = true;
+            let tx_len = self.send()?;
             return Ok(Some(&self.tx_buf[..tx_len]));
         }
+
+        let tx_buf = if self.is_initiator() {
+            let tx_len = self.send()?;
+            Some(&self.tx_buf[..tx_len])
+        } else {
+            None
+        };
 
         let split = self.state.dangerously_get_raw_split();
         if self.is_initiator() {
@@ -164,11 +172,7 @@ impl Handshake {
         self.result.remote_pubkey = self.state.get_remote_static().unwrap().to_vec();
         self.complete = true;
 
-        if self.is_initiator() {
-            Ok(Some(&self.tx_buf[..tx_len]))
-        } else {
-            Ok(None)
-        }
+        Ok(tx_buf)
     }
 
     pub fn into_result(self) -> Result<HandshakeResult> {

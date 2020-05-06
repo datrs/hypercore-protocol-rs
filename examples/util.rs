@@ -1,8 +1,8 @@
+use anyhow::Result;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::task;
 use env_logger::Env;
-use std::io::Result;
 
 /// Init EnvLogger, logging info, warn and error messages to stdout.
 pub fn init_logger() {

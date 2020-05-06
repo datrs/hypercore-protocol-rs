@@ -1,18 +1,43 @@
-use crate::{discovery_key, handlers::ChannelHandlerType};
+use crate::discovery_key;
+use crate::schema::Open;
+use crate::Message;
+use futures::channel::mpsc::Sender;
+use futures::sink::SinkExt;
 use hex;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Result};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChannelInfo {
-    pub(crate) handlers: ChannelHandlerType,
+    // pub(crate) handlers: ChannelHandlerType,
     pub(crate) discovery_key: Vec<u8>,
     pub(crate) key: Option<Vec<u8>>,
     pub(crate) local_id: Option<usize>,
     pub(crate) remote_id: Option<usize>,
+    pub(crate) send_tx: Option<Sender<Message>>,
+    pub(crate) remote_capability: Option<Vec<u8>>,
+}
+
+impl ChannelInfo {
+    async fn send(&mut self, message: Message) -> Result<()> {
+        if let Some(send_tx) = self.send_tx.as_mut() {
+            send_tx.send(message).await.map_err(|_| {
+                Error::new(
+                    ErrorKind::WouldBlock,
+                    "Cannot forward on channel: Channel is full",
+                )
+            })
+        } else {
+            Err(Error::new(
+                ErrorKind::BrokenPipe,
+                "Cannot forward on channel: Channel is not open",
+            ))
+        }
+    }
 }
 
 /// The Channelizer maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
+#[derive(Debug)]
 pub struct Channelizer {
     channels: HashMap<String, ChannelInfo>,
     local_id: Vec<Option<String>>,
@@ -47,26 +72,21 @@ impl Channelizer {
         }
     }
 
-    pub fn get(&self, discovery_key: &[u8]) -> Option<&ChannelInfo> {
+    pub fn get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut ChannelInfo> {
         let hdkey = hex::encode(discovery_key);
-        self.channels.get(&hdkey)
+        self.channels.get_mut(&hdkey)
     }
 
-    pub fn get_key(&self, discovery_key: &[u8]) -> Option<Vec<u8>> {
-        match self.get(&discovery_key) {
-            None => None,
-            Some(channel) => channel.key.as_ref().map(|k| k.to_vec()),
-        }
-    }
-
-    pub fn resolve_remote(&self, id: usize) -> Result<Vec<u8>> {
-        match self.get_remote(id) {
-            Some(channel) => Ok(channel.discovery_key.clone()),
-            None => Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "Remote channel is not open",
-            )),
-        }
+    pub async fn forward(&mut self, remote_id: usize, message: Message) -> Result<()> {
+        self.get_remote_mut(remote_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::BrokenPipe,
+                    format!("Cannot forward: Channel {} is not open", remote_id),
+                )
+            })?
+            .send(message)
+            .await
     }
 
     pub fn get_remote(&self, id: usize) -> Option<&ChannelInfo> {
@@ -76,18 +96,10 @@ impl Channelizer {
         }
     }
 
-    pub fn get_local_id(&self, discovery_key: &[u8]) -> Option<usize> {
-        match self.get(&discovery_key) {
-            Some(channel) => channel.local_id,
-            None => None,
-        }
-    }
-
-    pub fn _get_local(&self, id: usize) -> Option<&ChannelInfo> {
-        match self.local_id.get(id) {
-            None => None,
-            Some(None) => None,
-            Some(Some(hdkey)) => self.channels.get(hdkey),
+    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
+        match self.remote_id.get(id) {
+            Some(Some(hdkey)) => self.channels.get_mut(hdkey),
+            _ => None,
         }
     }
 
@@ -105,15 +117,27 @@ impl Channelizer {
         self.channels.remove(&hdkey);
     }
 
-    pub fn attach_local(&mut self, key: Vec<u8>, handlers: ChannelHandlerType) -> Vec<u8> {
+    pub async fn open(&mut self, discovery_key: &[u8], send_tx: Sender<Message>) -> Result<()> {
+        if let Some(channel) = self.get_mut(discovery_key) {
+            channel.send_tx = Some(send_tx);
+            channel
+                .send(Message::Open(Open {
+                    discovery_key: discovery_key.to_vec(),
+                    capability: None,
+                }))
+                .await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn attach_local(&mut self, key: Vec<u8>) -> &ChannelInfo {
         let discovery_key = discovery_key(&key);
         let hdkey = hex::encode(&discovery_key);
-
         let local_id = self.alloc_local();
-        self.local_id[local_id] = Some(hdkey.clone());
 
         self.channels
-            .entry(hdkey)
+            .entry(hdkey.clone())
             .and_modify(|channel| {
                 channel.local_id = Some(local_id);
                 channel.key = Some(key.clone());
@@ -123,25 +147,38 @@ impl Channelizer {
                 discovery_key: discovery_key.clone(),
                 local_id: Some(local_id),
                 remote_id: None,
-                handlers,
+                send_tx: None,
+                remote_capability: None,
             });
 
-        discovery_key
+        self.local_id[local_id] = Some(hdkey.clone());
+        self.channels.get(&hdkey).unwrap()
     }
 
-    pub fn attach_remote(&mut self, discovery_key: Vec<u8>, remote_id: usize) -> Result<()> {
+    pub fn attach_remote(
+        &mut self,
+        discovery_key: Vec<u8>,
+        remote_id: usize,
+        remote_capability: Option<Vec<u8>>,
+    ) -> &ChannelInfo {
         let hdkey = hex::encode(&discovery_key);
-        match self.channels.get_mut(&hdkey) {
-            Some(mut channel) => {
+        self.alloc_remote(remote_id);
+
+        self.channels
+            .entry(hdkey.clone())
+            .and_modify(|channel| {
                 channel.remote_id = Some(remote_id);
-                self.alloc_remote(remote_id);
-                self.remote_id[remote_id] = Some(hdkey.clone());
-                Ok(())
-            }
-            None => Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "Cannot attach channel if not opened locally before",
-            )),
-        }
+                channel.remote_capability = remote_capability.clone();
+            })
+            .or_insert_with(|| ChannelInfo {
+                discovery_key: discovery_key.clone(),
+                remote_id: Some(remote_id),
+                remote_capability,
+                local_id: None,
+                key: None,
+                send_tx: None,
+            });
+        self.remote_id[remote_id] = Some(hdkey.clone());
+        self.channels.get(&hdkey).unwrap()
     }
 }

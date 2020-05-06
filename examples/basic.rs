@@ -1,21 +1,25 @@
+use anyhow::Result;
 use async_std::io;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
-use async_std::sync::{Arc, RwLock};
+use async_std::sync::Arc;
 use async_std::task;
-use async_trait::async_trait;
+use futures::stream::StreamExt;
 use log::*;
-use pretty_hash::fmt as pretty_fmt;
 use std::collections::HashMap;
 use std::env;
-use std::io::Result;
 
 use hypercore_protocol::schema::*;
-use hypercore_protocol::{discovery_key, ProtocolBuilder};
-use hypercore_protocol::{Channel, ChannelHandler, StreamContext, StreamHandler};
+use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
 
 mod util;
 use util::{tcp_client, tcp_server};
+
+/// Print usage and exit.
+fn usage() {
+    println!("usage: cargo run --example basic -- [client|server] [port] [key]");
+    std::process::exit(1);
+}
 
 fn main() {
     util::init_logger();
@@ -32,6 +36,10 @@ fn main() {
     let mut feedstore = FeedStore::new();
     if let Some(key) = key {
         feedstore.add(Feed::new(key));
+    } else {
+        let key = vec![9u8; 32];
+        feedstore.add(Feed::new(key.clone()));
+        println!("KEY={}", hex::encode(&key));
     }
     let feedstore = Arc::new(feedstore);
 
@@ -45,12 +53,6 @@ fn main() {
     });
 }
 
-/// Print usage and exit.
-fn usage() {
-    println!("usage: cargo run --example basic -- [client|server] [port] [key]");
-    std::process::exit(1);
-}
-
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
 async fn onconnection(
@@ -59,14 +61,42 @@ async fn onconnection(
     feedstore: Arc<FeedStore>,
 ) -> Result<()> {
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .set_handlers(feedstore)
-        .build_from_stream(stream);
-
-    protocol.listen().await
+        .build_from_stream(stream)
+        .into_stream();
+    while let Some(event) = protocol.next().await {
+        let event = event?;
+        debug!("EVENT {:?}", event);
+        match event {
+            Event::Handshake(_) => {
+                if is_initiator {
+                    for feed in feedstore.feeds.values() {
+                        protocol.open(feed.key.clone()).await?;
+                    }
+                }
+            }
+            Event::DiscoveryKey(dkey) => {
+                if let Some(feed) = feedstore.get(&dkey) {
+                    protocol.open(feed.key.clone()).await?;
+                }
+            }
+            Event::Channel(mut channel) => {
+                if let Some(feed) = feedstore.get(&channel.discovery_key()) {
+                    let feed = feed.clone();
+                    let mut state = FeedState::default();
+                    task::spawn(async move {
+                        while let Some(message) = channel.next().await {
+                            onmessage(&*feed, &mut state, &mut channel, message).await;
+                        }
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 struct FeedStore {
-    feeds: HashMap<String, Arc<Feed>>,
+    pub feeds: HashMap<String, Arc<Feed>>,
 }
 impl FeedStore {
     pub fn new() -> Self {
@@ -85,111 +115,19 @@ impl FeedStore {
     }
 }
 
-/// We implement the StreamHandler trait on the FeedStore.
-#[async_trait]
-impl StreamHandler for FeedStore {
-    async fn on_discoverykey(
-        &self,
-        protocol: &mut StreamContext,
-        discovery_key: &[u8],
-    ) -> Result<()> {
-        log::trace!("open discovery_key: {}", pretty_fmt(discovery_key).unwrap());
-        if let Some(feed) = self.get(discovery_key) {
-            protocol.open(feed.key.clone(), feed.clone()).await
-        } else {
-            Ok(())
-        }
-    }
-}
-
 /// A Feed is a single unit of replication, an append-only log.
 /// This toy feed can only read sequentially and does not save or buffer anything.
 #[derive(Debug)]
 struct Feed {
     key: Vec<u8>,
     discovery_key: Vec<u8>,
-    state: RwLock<FeedState>,
 }
 impl Feed {
     pub fn new(key: Vec<u8>) -> Self {
         Feed {
             discovery_key: discovery_key(&key),
             key,
-            state: RwLock::new(FeedState::default()),
         }
-    }
-}
-
-/// The Feed structs implements the ChannelHandler trait.
-/// This allows to pass a Feed struct into the protocol when `open`ing a channel,
-/// making it the handler for all messages that arrive on this channel.
-/// The trait fns all receive a `channel` arg that allows to send messages over
-/// the current channel.
-#[async_trait]
-impl ChannelHandler for Feed {
-    async fn on_open(&self, channel: &mut Channel<'_>, discovery_key: &[u8]) -> Result<()> {
-        debug!("open channel {}", pretty_fmt(&discovery_key).unwrap());
-        let msg = Want {
-            start: 0,
-            length: None,
-        };
-        channel.want(msg).await
-    }
-
-    async fn on_have(&self, channel: &mut Channel<'_>, msg: Have) -> Result<()> {
-        let mut state = self.state.write().await;
-        // Check if the remote announces a new head.
-        debug!(
-            "receive have: {} (remote_head {:?})",
-            msg.start, state.remote_head
-        );
-        if state.remote_head == None {
-            state.remote_head = Some(msg.start);
-            let msg = Request {
-                index: 0,
-                bytes: None,
-                hash: None,
-                nodes: None,
-            };
-            channel.request(msg).await?;
-        } else if let Some(remote_head) = state.remote_head {
-            if remote_head < msg.start {
-                state.remote_head = Some(msg.start)
-            }
-        }
-        Ok(())
-    }
-
-    async fn on_data(&self, channel: &mut Channel<'_>, msg: Data) -> Result<()> {
-        let state = self.state.read().await;
-        debug!(
-            "receive data: idx {}, {} bytes (remote_head {:?})",
-            msg.index,
-            msg.value.as_ref().map_or(0, |v| v.len()),
-            state.remote_head
-        );
-
-        if let Some(value) = msg.value {
-            let mut stdout = io::stdout();
-            stdout.write_all(&value).await?;
-            stdout.flush().await?;
-        }
-
-        let next = msg.index + 1;
-        if let Some(remote_head) = state.remote_head {
-            if remote_head >= next {
-                // Request next data block.
-                let msg = Request {
-                    index: next,
-                    bytes: None,
-                    hash: None,
-                    nodes: None,
-                };
-                channel.request(msg).await?;
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -202,5 +140,65 @@ struct FeedState {
 impl Default for FeedState {
     fn default() -> Self {
         FeedState { remote_head: None }
+    }
+}
+
+async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, message: Message) {
+    match message {
+        Message::Open(_) => {
+            let msg = Want {
+                start: 0,
+                length: None,
+            };
+            channel
+                .send(Message::Want(msg))
+                .await
+                .expect("failed to send");
+        }
+        Message::Have(msg) => {
+            if state.remote_head == None {
+                state.remote_head = Some(msg.start);
+                let msg = Request {
+                    index: 0,
+                    bytes: None,
+                    hash: None,
+                    nodes: None,
+                };
+                channel.send(Message::Request(msg)).await.unwrap();
+            } else if let Some(remote_head) = state.remote_head {
+                if remote_head < msg.start {
+                    state.remote_head = Some(msg.start)
+                }
+            }
+        }
+        Message::Data(msg) => {
+            debug!(
+                "receive data: idx {}, {} bytes (remote_head {:?})",
+                msg.index,
+                msg.value.as_ref().map_or(0, |v| v.len()),
+                state.remote_head
+            );
+
+            if let Some(value) = msg.value {
+                let mut stdout = io::stdout();
+                stdout.write_all(&value).await.unwrap();
+                stdout.flush().await.unwrap();
+            }
+
+            let next = msg.index + 1;
+            if let Some(remote_head) = state.remote_head {
+                if remote_head >= next {
+                    // Request next data block.
+                    let msg = Request {
+                        index: next,
+                        bytes: None,
+                        hash: None,
+                        nodes: None,
+                    };
+                    channel.send(Message::Request(msg)).await.unwrap();
+                }
+            }
+        }
+        _ => {}
     }
 }

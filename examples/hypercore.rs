@@ -1,19 +1,18 @@
+use anyhow::Result;
 use async_std::net::TcpStream;
-use async_std::sync::{Arc, Mutex, RwLock};
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
-use async_trait::async_trait;
+use futures::stream::StreamExt;
 use hypercore::{Feed, Node, Proof, PublicKey, Signature, Storage};
-use pretty_hash::fmt as pretty_fmt;
+use log::*;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
-use std::io::Result;
 
 use hypercore_protocol::schema::*;
-use hypercore_protocol::{discovery_key, ProtocolBuilder};
-use hypercore_protocol::{Channel, ChannelHandler, StreamContext, StreamHandler};
+use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
 
 mod util;
 use util::{tcp_client, tcp_server};
@@ -72,10 +71,33 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .set_handlers(feedstore)
-        .build_from_stream(stream);
+        .build_from_stream(stream)
+        .into_stream();
 
-    protocol.listen().await
+    while let Some(event) = protocol.next().await {
+        let event = event?;
+        debug!("protocol event {:?}", event);
+        match event {
+            Event::Handshake(_) => {
+                if is_initiator {
+                    for feed in feedstore.feeds.values() {
+                        protocol.open(feed.key().to_vec()).await?;
+                    }
+                }
+            }
+            Event::DiscoveryKey(dkey) => {
+                if let Some(feed) = feedstore.get(&dkey) {
+                    protocol.open(feed.key().to_vec()).await?;
+                }
+            }
+            Event::Channel(channel) => {
+                if let Some(feed) = feedstore.get(&channel.discovery_key()) {
+                    feed.onpeer(channel);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A container for hypercores.
@@ -105,184 +127,150 @@ where
     }
 }
 
-/// We implement the StreamHandler trait on the FeedStore.
-#[async_trait]
-impl<T: 'static> StreamHandler for FeedStore<T>
-where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
-{
-    async fn on_discoverykey(
-        &self,
-        protocol: &mut StreamContext,
-        discovery_key: &[u8],
-    ) -> Result<()> {
-        log::trace!("open discovery_key: {}", pretty_fmt(discovery_key).unwrap());
-        if let Some(feed) = self.get(discovery_key) {
-            protocol.open(feed.key.clone(), feed.clone()).await
-        } else {
-            Ok(())
-        }
-    }
-}
-
 /// A Feed is a single unit of replication, an append-only log.
-/// This toy feed can only read sequentially and does not save or buffer anything.
 #[derive(Debug, Clone)]
 struct FeedWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    key: Vec<u8>,
     discovery_key: Vec<u8>,
-    state: Arc<RwLock<FeedState>>,
+    key: Vec<u8>,
     feed: Arc<Mutex<Feed<T>>>,
 }
+
 impl FeedWrapper<RandomAccessMemory> {
     pub fn from_memory_feed(feed: Feed<RandomAccessMemory>) -> Self {
         let key = feed.public_key().to_bytes();
         FeedWrapper {
-            discovery_key: discovery_key(&key),
             key: key.to_vec(),
-            state: Arc::new(RwLock::new(FeedState::default())),
+            discovery_key: discovery_key(&key),
             feed: Arc::new(Mutex::new(feed)),
         }
     }
 }
 
-/// The Feed structs implements the ChannelHandler trait.
-/// This allows to pass a Feed struct into the protocol when `open`ing a channel,
-/// making it the handler for all messages that arrive on this channel.
-/// The trait fns all receive a `channel` arg that allows to send messages over
-/// the current channel.
-#[async_trait]
-impl<T> ChannelHandler for FeedWrapper<T>
+impl<T> FeedWrapper<T>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
+    pub fn key(&self) -> &[u8] {
+        &self.key
+    }
+
+    pub fn onpeer(&self, mut channel: Channel) {
+        let mut state = PeerState::default();
+        let mut feed = self.feed.clone();
+        task::spawn(async move {
+            while let Some(message) = channel.next().await {
+                let result = onmessage(&mut feed, &mut state, &mut channel, message).await;
+                if let Err(e) = result {
+                    error!("protocol error: {}", e);
+                    break;
+                }
+            }
+        });
+    }
+}
+
+/// A PeerState stores the head seq of the remote.
+/// This would have a bitfield to support sparse sync in the actual impl.
+#[derive(Debug)]
+struct PeerState {
+    remote_head: Option<u64>,
+}
+impl Default for PeerState {
+    fn default() -> Self {
+        PeerState { remote_head: None }
+    }
+}
+
+async fn onmessage<T>(
+    feed: &mut Arc<Mutex<Feed<T>>>,
+    state: &mut PeerState,
+    channel: &mut Channel,
+    message: Message,
+) -> Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    async fn on_open(&self, channel: &mut Channel<'_>, discovery_key: &[u8]) -> Result<()> {
-        log::info!("open channel {}", pretty_fmt(&discovery_key).unwrap());
-        let msg = Want {
-            start: 0,
-            length: None,
-        };
-        channel.want(msg).await
-    }
-
-    async fn on_have(&self, channel: &mut Channel<'_>, msg: Have) -> Result<()> {
-        let mut state = self.state.write().await;
-        // Check if the remote announces a new head.
-        log::info!(
-            "receive have: {} (remote_head {:?})",
-            msg.start,
-            state.remote_head
-        );
-        if state.remote_head == None {
-            state.remote_head = Some(msg.start);
-            let msg = Request {
-                index: 0,
-                bytes: None,
-                hash: None,
-                nodes: None,
+    match message {
+        Message::Open(_) => {
+            let msg = Want {
+                start: 0,
+                length: None,
             };
-            channel.request(msg).await?;
-        } else if let Some(remote_head) = state.remote_head {
-            if remote_head < msg.start {
-                state.remote_head = Some(msg.start)
-            }
+            channel.send(Message::Want(msg)).await?;
         }
-        Ok(())
-    }
-
-    async fn on_data(&self, channel: &mut Channel<'_>, msg: Data) -> Result<()> {
-        let state = self.state.read().await;
-        // log::info!(
-        //     "receive data: idx {}, {} bytes (remote_head {:?})",
-        //     msg.index,
-        //     msg.value.as_ref().map_or(0, |v| v.len()),
-        //     state.remote_head
-        // );
-
-        // Lock our feed.
-        let mut feed = self.feed.lock().await;
-        let value: Option<&[u8]> = match msg.value.as_ref() {
-            None => None,
-            Some(value) => {
-                eprintln!(
-                    "recv idx {}: {:?}",
-                    msg.index,
-                    String::from_utf8(value.clone()).unwrap()
-                );
-                Some(value)
-            }
-        };
-
-        let signature = match msg.signature {
-            Some(bytes) => Some(Signature::from_bytes(&bytes).unwrap()),
-            None => None,
-        };
-        let nodes = msg
-            .nodes
-            .iter()
-            .map(|n| Node::new(n.index, n.hash.clone(), n.size))
-            .collect();
-        let proof = Proof {
-            index: msg.index,
-            nodes,
-            signature,
-        };
-
-        // println!("idx {} data {:?}", msg.index, &value);
-        // println!(
-        //     "Proof: {:#?}",
-        //     proof
-        //         .clone()
-        //         .nodes
-        //         .iter()
-        //         .map(|n| {
-        //             let n = n.clone();
-        //             format!("index {} len {} parent {}", n.index(), n.len(), n.parent())
-        //         })
-        //         .collect::<Vec<String>>()
-        // );
-        // feed.put(msg.index, None, proof.clone()).await.unwrap();
-
-        // This does not fail, but the data is incorrectly inserted.
-        feed.put(msg.index, value, proof.clone()).await.unwrap();
-
-        let i = msg.index;
-        let node = feed.get(i).await.unwrap();
-        if let Some(value) = node {
-            println!("feed idx {}: {:?}", i, String::from_utf8(value).unwrap());
-        } else {
-            println!("feed idx {}: {:?}", i, "NONE");
-        }
-
-        let next = msg.index + 1;
-        if let Some(remote_head) = state.remote_head {
-            if remote_head >= next {
-                // Request next data block.
+        Message::Have(msg) => {
+            if state.remote_head == None {
+                state.remote_head = Some(msg.start);
                 let msg = Request {
-                    index: next,
+                    index: 0,
                     bytes: None,
                     hash: None,
                     nodes: None,
                 };
-                channel.request(msg).await?;
+                channel.send(Message::Request(msg)).await?;
+            } else if let Some(remote_head) = state.remote_head {
+                if remote_head < msg.start {
+                    state.remote_head = Some(msg.start)
+                }
             }
         }
+        Message::Data(msg) => {
+            let mut feed = feed.lock().await;
+            let value: Option<&[u8]> = match msg.value.as_ref() {
+                None => None,
+                Some(value) => {
+                    eprintln!(
+                        "recv idx {}: {:?}",
+                        msg.index,
+                        String::from_utf8(value.clone()).unwrap()
+                    );
+                    Some(value)
+                }
+            };
 
-        Ok(())
-    }
-}
+            let signature = match msg.signature {
+                Some(bytes) => Some(Signature::from_bytes(&bytes)?),
+                None => None,
+            };
+            let nodes = msg
+                .nodes
+                .iter()
+                .map(|n| Node::new(n.index, n.hash.clone(), n.size))
+                .collect();
+            let proof = Proof {
+                index: msg.index,
+                nodes,
+                signature,
+            };
 
-/// A FeedState stores the head seq of the remote.
-/// This would have a bitfield to support sparse sync in the actual impl.
-#[derive(Debug)]
-struct FeedState {
-    remote_head: Option<u64>,
-}
-impl Default for FeedState {
-    fn default() -> Self {
-        FeedState { remote_head: None }
-    }
+            feed.put(msg.index, value, proof.clone()).await?;
+
+            let i = msg.index;
+            let node = feed.get(i).await?;
+            if let Some(value) = node {
+                println!("feed idx {}: {:?}", i, String::from_utf8(value).unwrap());
+            } else {
+                println!("feed idx {}: {:?}", i, "NONE");
+            }
+
+            let next = msg.index + 1;
+            if let Some(remote_head) = state.remote_head {
+                if remote_head >= next {
+                    // Request next data block.
+                    let msg = Request {
+                        index: next,
+                        bytes: None,
+                        hash: None,
+                        nodes: None,
+                    };
+                    channel.send(Message::Request(msg)).await?;
+                }
+            };
+        }
+        _ => {}
+    };
+    Ok(())
 }

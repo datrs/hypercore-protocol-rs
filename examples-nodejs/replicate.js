@@ -14,7 +14,7 @@ if (['client', 'server'].indexOf(mode) === -1 || !port || !keyOrFilename) {
   exit('usage: node index.js [client|server] PORT [KEY|FILENAME]')
 }
 
-const KEY_REGEX = /^[\dabcdef]{64}$/i
+const KEY_REGEX = /^[d0-9a-f]{64}$/i
 let key, filename
 if (keyOrFilename.match(KEY_REGEX)) {
   key = keyOrFilename

@@ -1,8 +1,8 @@
 [package]
 name = "hypercore-protocol"
-version = "0.1.0"
+version = "0.0.1"
 license = "MIT OR Apache-2.0"
-description = "Binary replication protocol for Hypercore feeds"
+description = "Replication protocol for Hypercore feeds"
 authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
 documentation = "https://docs.rs/hypercore-protocol"
 repository = "https://github.com/Frando/hypercore-protocol-rs"
@@ -19,7 +19,7 @@ categories = [
 
 [dependencies]
 futures = "0.3"
-snow = { git = "https://github.com/Frando/snow.git", branch = "datrs", features = ["risky-raw-split", "xchachapoly"] }
+snow = { git = "https://github.com/mcginty/snow.git", branch = "master", features = ["risky-raw-split", "xchachapoly"] }
 prost = "0.6"
 bytes = "0.5"
 varinteger = "1.0"
@@ -36,13 +36,12 @@ getrandom = "0.1"
 
 [dev-dependencies]
 async-std = "1.5.0"
-simple-message-channels = "0.2.0"
 env_logger = "0.7.1"
-hypercore = { git = "https://github.com/bltavares/hypercore", branch = "async-trait" }
-# hypercore = { path = "../hypercore" }
+hypercore = { git = "https://github.com/Frando/datrs-hypercore", branch = "protocol-dev" }
 random-access-disk = "2.0.0"
 random-access-memory = "2.0.0"
 random-access-storage = "4.0.0"
+anyhow = "1.0.28"
 
 [build-dependencies]
 prost-build = "0.6.1"
