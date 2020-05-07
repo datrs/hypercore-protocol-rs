@@ -78,6 +78,10 @@ where
         self.cipher = Some(cipher);
         Ok(())
     }
+
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
 }
 
 pub struct EncryptedWriter<W>
@@ -97,6 +101,10 @@ where
             cipher: None,
             writer,
         }
+    }
+
+    pub fn into_inner(self) -> W {
+        self.writer
     }
 
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {

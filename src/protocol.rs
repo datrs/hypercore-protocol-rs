@@ -28,6 +28,7 @@ pub enum Event {
     Handshake(Vec<u8>),
     DiscoveryKey(Vec<u8>),
     Channel(Channel),
+    Close(Vec<u8>),
 }
 
 impl fmt::Debug for Event {
@@ -39,6 +40,7 @@ impl fmt::Debug for Event {
             Event::DiscoveryKey(discovery_key) => {
                 write!(f, "DiscoveryKey({})", &pretty_hash(discovery_key))
             }
+            Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
             Event::Channel(channel) => write!(f, "{:?}", channel),
         }
     }
@@ -207,7 +209,11 @@ where
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        trace!("protocol init, options {:?}", self.options);
+        trace!(
+            "protocol init, state {:?}, options {:?}",
+            self.state,
+            self.options
+        );
         match self.state {
             State::NotInitialized => {}
             _ => return Ok(()),
@@ -274,8 +280,13 @@ where
                     self.on_message(&buf).await?
                 },
                 (ch, message) = self.outbound_rx.select_next_some() => {
+                    let ret = if let Message::Close(_) = &message {
+                        self.close(ch as u64).await?
+                    } else {
+                        None
+                    };
                     self.send(ch as u64, message).await?;
-                    None
+                    ret
                 },
                 ev = self.control_rx.select_next_some() => {
                     match ev {
@@ -428,15 +439,25 @@ where
         channel
     }
 
-    async fn on_close(&mut self, ch: u64, msg: Close) -> Result<()> {
-        let ch = ch as usize;
-        if let Some(discovery_key) = msg.discovery_key {
-            self.channels.remove(&discovery_key);
-        } else if let Some(channel) = self.channels.get_remote(ch) {
+    async fn on_close(&mut self, ch: u64, _msg: Close) -> Result<()> {
+        self.close(ch).await?;
+        // if let Some(discovery_key) = msg.discovery_key {
+        //     self.channels.remove(&discovery_key);
+        // } else if let Some(channel) = self.channels.get_remote(ch) {
+        //     let discovery_key = channel.discovery_key.clone();
+        //     self.channels.remove(&discovery_key);
+        // }
+        Ok(())
+    }
+
+    async fn close(&mut self, remote_id: u64) -> Result<Option<Event>> {
+        if let Some(channel) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = channel.discovery_key.clone();
             self.channels.remove(&discovery_key);
+            Ok(Some(Event::Close(discovery_key)))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     pub(crate) async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
@@ -448,6 +469,13 @@ where
 
     async fn ping(&mut self) -> Result<()> {
         self.writer.ping().await
+    }
+
+    pub fn release(self) -> (R, W) {
+        (
+            self.reader.into_inner().into_inner(),
+            self.writer.into_inner().into_inner(),
+        )
     }
 
     fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
