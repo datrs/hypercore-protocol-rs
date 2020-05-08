@@ -17,6 +17,10 @@ categories = [
   "encoding",
 ]
 
+[lib]
+# benchmarks are using criterion
+bench = false
+
 [dependencies]
 futures = "0.3"
 snow = { git = "https://github.com/mcginty/snow.git", branch = "master", features = ["risky-raw-split", "xchachapoly"] }
@@ -35,13 +39,15 @@ instant = "0.1"
 getrandom = "0.1"
 
 [dev-dependencies]
-async-std = "1.5.0"
+async-std = "1.5"
 env_logger = "0.7.1"
 hypercore = { git = "https://github.com/Frando/datrs-hypercore", branch = "protocol-dev" }
 random-access-disk = "2.0.0"
 random-access-memory = "2.0.0"
 random-access-storage = "4.0.0"
 anyhow = "1.0.28"
+criterion = "0.3.2"
+pretty-bytes = "0.2.2"
 
 [build-dependencies]
 prost-build = "0.6.1"
@@ -52,3 +58,10 @@ wasm-bindgen = [
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
+
+[profile.bench]
+debug = true
+
+[[bench]]
+name = "throughput"
+harness = false
