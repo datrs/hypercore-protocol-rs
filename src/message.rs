@@ -1,10 +1,11 @@
 use crate::schema::*;
-use crate::wire_message::Message as ChannelMessage;
 use bytes::Bytes;
 use pretty_hash::fmt as pretty_fmt;
 use prost::Message as ProstMessage;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
+
+use crate::constants::MAX_MESSAGE_SIZE;
 
 /// A protocol message.
 #[derive(Debug)]
@@ -23,47 +24,9 @@ pub enum Message {
     Extension(ExtensionMessage),
 }
 
-/// A extension message (not yet supported properly).
-#[derive(Debug)]
-pub struct ExtensionMessage {
-    pub id: u64,
-    pub message: Vec<u8>,
-}
-impl ExtensionMessage {
-    fn _new(id: u64, message: Vec<u8>) -> Self {
-        Self { id, message }
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self> {
-        let mut id: u64 = 0;
-        let id_len = varinteger::decode(buf, &mut id);
-        Ok(Self {
-            id,
-            message: buf[id_len..].to_vec(),
-        })
-    }
-
-    fn encoded_len(&self) -> usize {
-        let id_len = varinteger::length(self.id);
-        id_len + self.message.len()
-    }
-
-    fn encode(&self, buf: &mut [u8]) {
-        let id_len = varinteger::length(self.id);
-        varinteger::encode(self.id, &mut buf[..id_len]);
-        buf[id_len..].copy_from_slice(&self.message)
-    }
-
-    fn to_vec(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; self.encoded_len()];
-        self.encode(&mut buf);
-        buf.to_vec()
-    }
-}
-
 impl Message {
-    pub fn decode(typ: u8, buf: Vec<u8>) -> Result<Self> {
-        let bytes = Bytes::from(buf);
+    pub fn decode(typ: u64, body: Vec<u8>) -> Result<Self> {
+        let bytes = Bytes::from(body);
         // log::trace!("decode msg typ {}", typ);
         match typ {
             0 => Ok(Self::Open(Open::decode(bytes)?)),
@@ -77,31 +40,30 @@ impl Message {
             8 => Ok(Self::Cancel(Cancel::decode(bytes)?)),
             9 => Ok(Self::Data(Data::decode(bytes)?)),
             10 => Ok(Self::Close(Close::decode(bytes)?)),
-            15 => Ok(Self::Extension(ExtensionMessage::decode(&bytes)?)),
+            15 => Ok(Self::Extension(ExtensionMessage::decode(bytes)?)),
             _ => Err(Error::new(ErrorKind::InvalidData, "Invalid message type")),
         }
     }
 
-    pub fn encode(&mut self, ch: u64) -> Result<ChannelMessage> {
+    pub fn encode(&self) -> Result<(u64, Vec<u8>)> {
         match self {
-            Self::Open(msg) => Ok(ChannelMessage::new(ch, 0, encode_msg(msg)?)),
-            Self::Options(msg) => Ok(ChannelMessage::new(ch, 1, encode_msg(msg)?)),
-            Self::Status(msg) => Ok(ChannelMessage::new(ch, 2, encode_msg(msg)?)),
-            Self::Have(msg) => Ok(ChannelMessage::new(ch, 3, encode_msg(msg)?)),
-            Self::Unhave(msg) => Ok(ChannelMessage::new(ch, 4, encode_msg(msg)?)),
-            Self::Want(msg) => Ok(ChannelMessage::new(ch, 5, encode_msg(msg)?)),
-            Self::Unwant(msg) => Ok(ChannelMessage::new(ch, 6, encode_msg(msg)?)),
-            Self::Request(msg) => Ok(ChannelMessage::new(ch, 7, encode_msg(msg)?)),
-            Self::Cancel(msg) => Ok(ChannelMessage::new(ch, 8, encode_msg(msg)?)),
-            Self::Data(msg) => Ok(ChannelMessage::new(ch, 9, encode_msg(msg)?)),
-            Self::Close(msg) => Ok(ChannelMessage::new(ch, 10, encode_msg(msg)?)),
-            Self::Extension(msg) => Ok(ChannelMessage::new(ch, 15, msg.to_vec())),
-            // _ => Err(Error::new(ErrorKind::InvalidData, "Invalid message type")),
+            Self::Open(msg) => Ok((0, encode_msg(msg)?)),
+            Self::Options(msg) => Ok((1, encode_msg(msg)?)),
+            Self::Status(msg) => Ok((2, encode_msg(msg)?)),
+            Self::Have(msg) => Ok((3, encode_msg(msg)?)),
+            Self::Unhave(msg) => Ok((4, encode_msg(msg)?)),
+            Self::Want(msg) => Ok((5, encode_msg(msg)?)),
+            Self::Unwant(msg) => Ok((6, encode_msg(msg)?)),
+            Self::Request(msg) => Ok((7, encode_msg(msg)?)),
+            Self::Cancel(msg) => Ok((8, encode_msg(msg)?)),
+            Self::Data(msg) => Ok((9, encode_msg(msg)?)),
+            Self::Close(msg) => Ok((10, encode_msg(msg)?)),
+            Self::Extension(msg) => Ok((15, msg.to_vec())),
         }
     }
 }
 
-fn encode_msg(msg: &mut impl ProstMessage) -> Result<Vec<u8>> {
+fn encode_msg(msg: &impl ProstMessage) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; msg.encoded_len()];
     msg.encode(&mut buf)?;
 
@@ -135,5 +97,108 @@ impl fmt::Display for Message {
             ),
             _ => write!(f, "{:?}", &self),
         }
+    }
+}
+
+/// A message on a channel.
+#[derive(Debug)]
+pub struct ChannelMessage {
+    pub channel: u64,
+    pub message: Message,
+}
+
+impl ChannelMessage {
+    /// Create a new message.
+    pub fn new(channel: u64, message: Message) -> Self {
+        Self { channel, message }
+    }
+
+    /// Consume self and return (channel, Message).
+    pub fn into_split(self) -> (u64, Message) {
+        (self.channel, self.message)
+    }
+
+    /// Decode a channel message from a buffer.
+    ///
+    /// Note: `buf` has to have a valid length, and the length
+    /// prefix has to be removed already.
+    pub fn decode(mut buf: Vec<u8>) -> Result<Self> {
+        if buf.is_empty() {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "received empty message",
+            ));
+        }
+        let mut header = 0 as u64;
+        let headerlen = varinteger::decode(&buf, &mut header);
+        let body = buf.split_off(headerlen);
+        let channel = header >> 4;
+        let typ = header & 0b1111;
+        let message = Message::decode(typ, body)?;
+
+        let channel_message = Self { channel, message };
+
+        Ok(channel_message)
+    }
+
+    /// Encode a channel message into a buffer.
+    ///
+    /// The result has to be prefixed with a varint containing the buffer length
+    /// before sending it over a stream.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let (typ, body) = self.message.encode()?;
+
+        let header = self.channel << 4 | typ;
+        let len_header = varinteger::length(header);
+        let len = body.len() + len_header;
+
+        if len as u64 > MAX_MESSAGE_SIZE {
+            return Err(Error::new(ErrorKind::InvalidInput, "Message too long"));
+        }
+
+        let mut buf = vec![0u8; len];
+        varinteger::encode(header, &mut buf[..len_header]);
+
+        buf[len_header..].copy_from_slice(&body);
+        Ok(buf)
+    }
+}
+
+/// A extension message (not yet supported properly).
+#[derive(Debug)]
+pub struct ExtensionMessage {
+    pub id: u64,
+    pub message: Vec<u8>,
+}
+impl ExtensionMessage {
+    fn _new(id: u64, message: Vec<u8>) -> Self {
+        Self { id, message }
+    }
+
+    fn decode(buf: impl AsRef<[u8]>) -> Result<Self> {
+        let buf = buf.as_ref();
+        let mut id: u64 = 0;
+        let id_len = varinteger::decode(&buf, &mut id);
+        Ok(Self {
+            id,
+            message: buf[id_len..].to_vec(),
+        })
+    }
+
+    fn encoded_len(&self) -> usize {
+        let id_len = varinteger::length(self.id);
+        id_len + self.message.len()
+    }
+
+    fn encode(&self, buf: &mut [u8]) {
+        let id_len = varinteger::length(self.id);
+        varinteger::encode(self.id, &mut buf[..id_len]);
+        buf[id_len..].copy_from_slice(&self.message)
+    }
+
+    fn to_vec(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; self.encoded_len()];
+        self.encode(&mut buf);
+        buf.to_vec()
     }
 }

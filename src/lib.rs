@@ -46,7 +46,6 @@ mod handshake;
 mod message;
 mod protocol;
 mod util;
-mod wire_message;
 
 /// The wire messages used by the protocol.
 pub mod schema {

@@ -16,10 +16,9 @@ use crate::channels::Channelizer;
 use crate::constants::DEFAULT_KEEPALIVE;
 use crate::encrypt::{EncryptedReader, EncryptedWriter};
 use crate::handshake::{Handshake, HandshakeResult};
-use crate::message::Message;
+use crate::message::{ChannelMessage, Message};
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
-use crate::wire_message::Message as WireMessage;
 
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
@@ -277,7 +276,7 @@ where
                 },
                 buf = self.reader.select_next_some() => {
                     let buf = buf?;
-                    self.on_message(&buf).await?
+                    self.on_message(buf).await?
                 },
                 (ch, message) = self.outbound_rx.select_next_some() => {
                     let ret = if let Message::Close(_) = &message {
@@ -319,7 +318,7 @@ where
         self.error = Some(error)
     }
 
-    async fn on_message(&mut self, buf: &[u8]) -> Result<Option<Event>> {
+    async fn on_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
         // trace!("onmessage, state {:?} msg len {}", self.state, buf.len());
         match self.state {
             State::Handshake(_) => self.on_handshake_message(buf).await,
@@ -328,12 +327,12 @@ where
         }
     }
 
-    async fn on_handshake_message(&mut self, buf: &[u8]) -> Result<Option<Event>> {
+    async fn on_handshake_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
         let mut handshake = match &mut self.state {
             State::Handshake(handshake) => handshake.take().unwrap(),
             _ => panic!("cannot call on_handshake_message when not in Handshake state"),
         };
-        if let Some(response_buf) = handshake.read(buf)? {
+        if let Some(response_buf) = handshake.read(&buf)? {
             self.writer.send_prefixed(response_buf).await?;
         }
         if !handshake.complete() {
@@ -356,11 +355,10 @@ where
         }
     }
 
-    async fn on_proto_message(&mut self, message_buf: &[u8]) -> Result<Option<Event>> {
-        let message = WireMessage::from_buf(&message_buf)?;
-        let channel = message.channel;
-        let message = Message::decode(message.typ, message.message)?;
-        log::trace!("recv (ch {}): {}", channel, message);
+    async fn on_proto_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
+        let channel_message = ChannelMessage::decode(buf)?;
+        log::trace!("recv {:?}", channel_message);
+        let (channel, message) = channel_message.into_split();
         match message {
             Message::Open(msg) => self.on_open(channel, msg).await,
             Message::Close(msg) => {
@@ -460,10 +458,10 @@ where
         }
     }
 
-    pub(crate) async fn send(&mut self, ch: u64, mut msg: Message) -> Result<()> {
-        log::trace!("send (ch {}): {}", ch, msg);
-        let message = msg.encode(ch)?;
-        let buf = message.encode()?;
+    pub(crate) async fn send(&mut self, ch: u64, message: Message) -> Result<()> {
+        let channel_message = ChannelMessage::new(ch, message);
+        log::trace!("send {:?}", channel_message);
+        let buf = channel_message.encode()?;
         self.writer.send_prefixed(&buf).await
     }
 
