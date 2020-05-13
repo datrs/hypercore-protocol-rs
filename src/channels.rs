@@ -1,5 +1,6 @@
 use crate::discovery_key;
 use crate::schema::Open;
+use crate::schema::*;
 use crate::Message;
 use futures::channel::mpsc::Sender;
 use futures::sink::SinkExt;
@@ -14,25 +15,54 @@ pub struct ChannelInfo {
     pub(crate) key: Option<Vec<u8>>,
     pub(crate) local_id: Option<usize>,
     pub(crate) remote_id: Option<usize>,
-    pub(crate) send_tx: Option<Sender<Message>>,
+    pub(crate) recv_tx: Option<Sender<Message>>,
     pub(crate) remote_capability: Option<Vec<u8>>,
 }
 
 impl ChannelInfo {
-    async fn send(&mut self, message: Message) -> Result<()> {
-        if let Some(send_tx) = self.send_tx.as_mut() {
-            send_tx.send(message).await.map_err(|_| {
-                Error::new(
-                    ErrorKind::WouldBlock,
-                    "Cannot forward on channel: Channel is full",
-                )
-            })
+    pub(crate) async fn recv(&mut self, message: Message) -> Result<()> {
+        if let Some(recv_tx) = self.recv_tx.as_mut() {
+            match recv_tx.send(message).await {
+                Ok(_) => Ok(()),
+                Err(err) => match err.is_disconnected() {
+                    // TODO: Close channel?
+                    true => Ok(()),
+                    false => Err(Error::new(
+                        ErrorKind::BrokenPipe,
+                        "Cannot forward on channel: Channel is full",
+                    )),
+                },
+            }
         } else {
             Err(Error::new(
                 ErrorKind::BrokenPipe,
-                "Cannot forward on channel: Channel is not open",
+                "Cannot forward: Channel missing",
             ))
         }
+    }
+
+    pub(crate) fn local_open(&self) -> bool {
+        self.local_id.is_some()
+    }
+
+    pub(crate) fn remote_open(&self) -> bool {
+        self.remote_id.is_some()
+    }
+
+    pub(crate) async fn recv_open(
+        &mut self,
+        recv_tx: Sender<Message>,
+        message: Open,
+    ) -> Result<()> {
+        self.recv_tx = Some(recv_tx);
+        self.recv(Message::Open(message)).await
+    }
+
+    pub(crate) async fn recv_close(&mut self, message: Option<Close>) -> Result<()> {
+        let message = message.unwrap_or_else(|| Close {
+            discovery_key: None,
+        });
+        self.recv(Message::Close(message)).await
     }
 }
 
@@ -85,21 +115,31 @@ impl Channelizer {
                     format!("Cannot forward: Channel {} is not open", remote_id),
                 )
             })?
-            .send(message)
+            .recv(message)
             .await
     }
 
-    pub fn get_remote(&self, id: usize) -> Option<&ChannelInfo> {
-        match self.remote_id.get(id) {
-            Some(Some(hdkey)) => self.channels.get(hdkey),
-            _ => None,
+    // pub fn get_remote(&self, id: usize) -> Option<&ChannelInfo> {
+    //     if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+    //         self.channels.get(hdkey)
+    //     } else {
+    //         None
+    //     }
+    // }
+
+    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
+        if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+            self.channels.get_mut(hdkey)
+        } else {
+            None
         }
     }
 
-    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
-        match self.remote_id.get(id) {
-            Some(Some(hdkey)) => self.channels.get_mut(hdkey),
-            _ => None,
+    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
+        if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
+            self.channels.get_mut(hdkey)
+        } else {
+            None
         }
     }
 
@@ -117,15 +157,13 @@ impl Channelizer {
         self.channels.remove(&hdkey);
     }
 
-    pub async fn open(&mut self, discovery_key: &[u8], send_tx: Sender<Message>) -> Result<()> {
+    pub async fn open(&mut self, discovery_key: &[u8], recv_tx: Sender<Message>) -> Result<()> {
         if let Some(channel) = self.get_mut(discovery_key) {
-            channel.send_tx = Some(send_tx);
-            channel
-                .send(Message::Open(Open {
-                    discovery_key: discovery_key.to_vec(),
-                    capability: None,
-                }))
-                .await
+            let message = Open {
+                discovery_key: discovery_key.to_vec(),
+                capability: None,
+            };
+            channel.recv_open(recv_tx, message).await
         } else {
             Ok(())
         }
@@ -147,7 +185,7 @@ impl Channelizer {
                 discovery_key: discovery_key.clone(),
                 local_id: Some(local_id),
                 remote_id: None,
-                send_tx: None,
+                recv_tx: None,
                 remote_capability: None,
             });
 
@@ -176,7 +214,7 @@ impl Channelizer {
                 remote_capability,
                 local_id: None,
                 key: None,
-                send_tx: None,
+                recv_tx: None,
             });
         self.remote_id[remote_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()

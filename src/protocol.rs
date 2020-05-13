@@ -49,8 +49,8 @@ impl fmt::Debug for Event {
 
 /// A protocol channel.
 pub struct Channel {
-    receiver: Receiver<Message>,
-    sender: Sender<Message>,
+    recv_rx: Receiver<Message>,
+    send_tx: Sender<Message>,
     discovery_key: Vec<u8>,
 }
 
@@ -64,13 +64,13 @@ impl fmt::Debug for Channel {
 
 impl Channel {
     pub fn sender(&self) -> Sender<Message> {
-        self.sender.clone()
+        self.send_tx.clone()
     }
     pub fn discovery_key(&self) -> &[u8] {
         &self.discovery_key
     }
     pub async fn send(&mut self, message: Message) -> Result<()> {
-        self.sender.send(message).await.map_err(map_channel_err)
+        self.send_tx.send(message).await.map_err(map_channel_err)
     }
 }
 
@@ -80,7 +80,7 @@ impl Stream for Channel {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        Pin::new(&mut self.receiver).poll_next(cx)
+        Pin::new(&mut self.recv_rx).poll_next(cx)
     }
 }
 
@@ -292,7 +292,7 @@ where
                     // trace!("[{}] loop_next ! outbound_rx", self.is_initiator());
                     let event = match channel_message {
                         ChannelMessage { channel, message: Message::Close(_) } => {
-                            self.close_channel(channel).await?
+                            self.close_local(channel).await?
                         },
                         _ => None
                     };
@@ -444,8 +444,8 @@ where
         let (send_tx, send_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
         let (recv_tx, recv_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
         let channel = Channel {
-            receiver: recv_rx,
-            sender: send_tx,
+            recv_rx,
+            send_tx,
             discovery_key: discovery_key.to_vec(),
         };
         let send_rx_mapped =
@@ -455,13 +455,25 @@ where
         channel
     }
 
-    async fn on_close(&mut self, ch: u64, _msg: Close) -> Result<Option<Event>> {
-        self.close_channel(ch).await
+    async fn on_close(&mut self, ch: u64, msg: Close) -> Result<Option<Event>> {
+        self.close_remote(ch, msg).await
     }
 
-    async fn close_channel(&mut self, remote_id: u64) -> Result<Option<Event>> {
-        if let Some(channel) = self.channels.get_remote(remote_id as usize) {
+    async fn close_local(&mut self, local_id: u64) -> Result<Option<Event>> {
+        if let Some(channel) = self.channels.get_local_mut(local_id as usize) {
             let discovery_key = channel.discovery_key.clone();
+            channel.recv_close(None).await?;
+            self.channels.remove(&discovery_key);
+            Ok(Some(Event::Close(discovery_key)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn close_remote(&mut self, remote_id: u64, msg: Close) -> Result<Option<Event>> {
+        if let Some(channel) = self.channels.get_remote_mut(remote_id as usize) {
+            let discovery_key = channel.discovery_key.clone();
+            channel.recv_close(Some(msg)).await?;
             self.channels.remove(&discovery_key);
             Ok(Some(Event::Close(discovery_key)))
         } else {
