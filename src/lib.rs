@@ -41,11 +41,12 @@
 
 mod channels;
 mod constants;
-mod encrypt;
-mod handshake;
 mod message;
+mod noise;
 mod protocol;
+mod reader;
 mod util;
+mod writer;
 
 /// The wire messages used by the protocol.
 pub mod schema {

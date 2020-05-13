@@ -1,9 +1,7 @@
-use crate::handshake::HandshakeResult;
-use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use crate::noise::{Cipher, HandshakeResult};
+use futures::io::AsyncRead;
 use futures::stream::{FusedStream, Stream};
 use futures_timer::Delay;
-use salsa20::stream_cipher::{NewStreamCipher, SyncStreamCipher};
-use salsa20::XSalsa20;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
@@ -12,47 +10,7 @@ use std::task::{Context, Poll};
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use std::time::Duration;
 
-// TODO: Don't define here but use the values from the XSalsa20 impl.
-const KEY_SIZE: usize = 32;
-const NONCE_SIZE: usize = 24;
-
-pub struct Cipher(XSalsa20);
-
-impl Cipher {
-    pub fn from_handshake_rx(handshake: &HandshakeResult) -> Result<Self> {
-        let cipher = XSalsa20::new_var(
-            &handshake.split_rx[..KEY_SIZE],
-            &handshake.remote_nonce[..NONCE_SIZE],
-        )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::PermissionDenied,
-                format!("Cannot initialize cipher: {}", e),
-            )
-        })?;
-        Ok(Self(cipher))
-    }
-
-    pub fn from_handshake_tx(handshake: &HandshakeResult) -> Result<Self> {
-        let cipher = XSalsa20::new_var(
-            &handshake.split_tx[..KEY_SIZE],
-            &handshake.local_nonce[..NONCE_SIZE],
-        )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::PermissionDenied,
-                format!("Cannot initialize cipher: {}", e),
-            )
-        })?;
-        Ok(Self(cipher))
-    }
-
-    pub fn apply(&mut self, buffer: &mut [u8]) {
-        self.0.apply_keystream(buffer);
-    }
-}
-
-pub struct EncryptedReader<R>
+pub struct ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
@@ -61,7 +19,7 @@ where
     state: Option<State>,
 }
 
-impl<R> EncryptedReader<R>
+impl<R> ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
@@ -84,58 +42,7 @@ where
     }
 }
 
-pub struct EncryptedWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    cipher: Option<Cipher>,
-    writer: W,
-}
-
-impl<W> EncryptedWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    pub fn new(writer: W) -> Self {
-        Self {
-            cipher: None,
-            writer,
-        }
-    }
-
-    pub fn into_inner(self) -> W {
-        self.writer
-    }
-
-    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        let cipher = Cipher::from_handshake_tx(handshake)?;
-        self.cipher = Some(cipher);
-        Ok(())
-    }
-
-    pub async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
-        self.write_all(&buf).await?;
-        self.flush().await
-    }
-
-    pub async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
-        let len = buf.len();
-        let prefix_len = varinteger::length(len as u64);
-        let mut prefix_buf = vec![0u8; prefix_len];
-        varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
-        // trace!("send len {} {:?}", buf.len(), buf);
-        self.write_all(&prefix_buf).await?;
-        self.write_all(&buf).await?;
-        self.flush().await
-    }
-
-    pub async fn ping(&mut self) -> Result<()> {
-        let buf = vec![0u8];
-        self.send_raw(&buf).await
-    }
-}
-
-impl<R> AsyncRead for EncryptedReader<R>
+impl<R> AsyncRead for ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
@@ -151,30 +58,6 @@ where
         }
 
         Poll::Ready(Ok(len))
-    }
-}
-
-impl<W> AsyncWrite for EncryptedWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        let mut buffer = buf.to_vec();
-
-        if let Some(ref mut cipher) = &mut self.cipher {
-            cipher.apply(&mut buffer);
-        }
-
-        let sent = futures::ready!(Pin::new(&mut self.writer).poll_write(cx, &buffer))?;
-        Poll::Ready(Ok(sent))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        Pin::new(&mut self.writer).poll_flush(cx)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        Pin::new(&mut self.writer).poll_close(cx)
     }
 }
 
@@ -218,7 +101,7 @@ impl Default for Step {
     }
 }
 
-impl<R> Stream for EncryptedReader<R>
+impl<R> Stream for ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
@@ -277,7 +160,7 @@ where
     }
 }
 
-impl<R> FusedStream for EncryptedReader<R>
+impl<R> FusedStream for ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {

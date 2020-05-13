@@ -14,11 +14,12 @@ use std::time::Duration;
 
 use crate::channels::Channelizer;
 use crate::constants::DEFAULT_KEEPALIVE;
-use crate::encrypt::{EncryptedReader, EncryptedWriter};
-use crate::handshake::{Handshake, HandshakeResult};
 use crate::message::{ChannelMessage, Message};
+use crate::noise::{Handshake, HandshakeResult};
+use crate::reader::ProtocolReader;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
+use crate::writer::ProtocolWriter;
 
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
@@ -168,8 +169,8 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    writer: EncryptedWriter<BufWriter<W>>,
-    reader: EncryptedReader<BufReader<R>>,
+    writer: ProtocolWriter<BufWriter<W>>,
+    reader: ProtocolReader<BufReader<R>>,
     state: State,
     options: ProtocolOptions,
     handshake: Option<HandshakeResult>,
@@ -189,8 +190,8 @@ where
 {
     /// Create a new Protocol instance.
     pub fn new(reader: R, writer: W, options: ProtocolOptions) -> Self {
-        let reader = EncryptedReader::new(BufReader::new(reader));
-        let writer = EncryptedWriter::new(BufWriter::new(writer));
+        let reader = ProtocolReader::new(BufReader::new(reader));
+        let writer = ProtocolWriter::new(BufWriter::new(writer));
         let (control_tx, control_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
         Protocol {
             writer,

@@ -11,6 +11,7 @@ use crate::constants::CAP_NS_BUF;
 use crate::schema::NoisePayload;
 
 const CIPHERKEYLEN: usize = 32;
+const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
 
 #[derive(Debug, Clone, Default)]
 pub struct HandshakeResult {
@@ -62,8 +63,7 @@ impl HandshakeResult {
 pub fn build_handshake_state(
     is_initiator: bool,
 ) -> std::result::Result<(HandshakeState, Keypair), SnowError> {
-    static PATTERN: &str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
-    let builder: Builder<'_> = Builder::new(PATTERN.parse()?);
+    let builder: Builder<'_> = Builder::new(HANDSHAKE_PATTERN.parse()?);
     let key_pair = builder.generate_keypair().unwrap();
     let builder = builder.local_private_key(&key_pair.private);
     // log::trace!("hs local pubkey: {:x?}", &key_pair.public);
