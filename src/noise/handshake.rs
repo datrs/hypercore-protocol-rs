@@ -11,7 +11,7 @@ use crate::constants::CAP_NS_BUF;
 use crate::schema::NoisePayload;
 
 const CIPHERKEYLEN: usize = 32;
-const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_XChaChaPoly_BLAKE2b";
+const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2b";
 
 #[derive(Debug, Clone, Default)]
 pub struct HandshakeResult {
