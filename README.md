@@ -30,7 +30,7 @@ npm install
 
 `node examples-nodejs/run.js hypercore`
 
-Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a Node.js hypercore and inserts them into a Rust in-memory hypercore. This currently depends on uncommitted pull requests on datrs/hypercore: [#110](https://github.com/datrs/hypercore/pull/110), [#103](https://github.com/datrs/hypercore/pull/103) (a patched datrs/hypercores dependency is included in `Cargo.toml`) and the patched Node.js hypercore (see above).
+Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a Node.js hypercore and inserts them into a Rust in-memory hypercore.
 
 ### [basic.rs](examples/basic.rs)
 
