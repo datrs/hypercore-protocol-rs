@@ -4,29 +4,27 @@
 
 *Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
 
-This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 8 (Dat 2) only.
+This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 9 (Dat 2) only.
 
 It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake (currently depending on unreleased changes on its master branch).
 
 Current features are:
 
-* Complete the Noise handshake (\*) and set up the transport encryption
+* Complete the Noise handshake and set up the transport encryption
 * Open channels with a key
 * Accept channels opened by the remote end if your end knows the key
 * Create and verify capability hashes
 * Send and receive all protocol messages
 
-_\*: The Noise handshake is not working with the released version of Hypercore. See [this issue](https://github.com/mafintosh/hypercore-protocol/issues/51) for details._
+*Note: To sync with NodeJS the minimum required version is hypercore `9` and hypercore-protocol `8`.*
 
 ## Examples
 
-To get started:
+These examples sync data between Rust and NodeJS hypercore-protocol implementations. To prepare, run
 ```
 cd examples-nodejs
 npm install
 ```
-
-Note that the rust impl works only against a patched version of hypercore that switches the NodeJS module [noise-protocol](https://github.com/emilbayes/noise-protocol) to a branch that changes to [Noise handshake DH calculation to the recommended standard](https://github.com/mafintosh/hypercore-protocol/issues/51). The package.json monkey-requires the patched `noise-protocol`. Other npm clients like yarn and pnpm won't make this work, but npm for me is OK with it.
 
 ### [hypercore.rs](examples/hypercore.rs)
 
