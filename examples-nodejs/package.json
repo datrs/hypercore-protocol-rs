@@ -11,9 +11,8 @@
   "license": "GPL-3.0",
   "dependencies": {
     "chalk": "^4.0.0",
-    "hypercore": "^8.6.0",
-    "hypercore-protocol": "^7.7.1",
-    "noise-protocol": "github:emilbayes/noise-protocol#standard-dh",
+    "hypercore": "mafintosh/hypercore#v9",
+    "hypercore-protocol": "^8.0",
     "random-access-memory": "^3.1.1",
     "split2": "^3.1.1"
   }
