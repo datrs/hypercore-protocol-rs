@@ -13,6 +13,7 @@
     "chalk": "^4.0.0",
     "hypercore": "mafintosh/hypercore#v9",
     "hypercore-protocol": "^8.0",
+    "pretty-bytes": "^5.3.0",
     "random-access-memory": "^3.1.1",
     "split2": "^3.1.1"
   }

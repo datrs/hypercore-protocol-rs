@@ -338,13 +338,13 @@ where
     async fn on_proto_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
         let channel_message = ChannelMessage::decode(buf)?;
         log::trace!("recv {:?}", channel_message);
-        let (channel, message) = channel_message.into_split();
+        let (remote_id, message) = channel_message.into_split();
         match message {
-            Message::Open(msg) => self.on_open(channel, msg).await,
-            Message::Close(msg) => self.on_close(channel, msg).await,
+            Message::Open(msg) => self.open_remote(remote_id, msg).await,
+            Message::Close(msg) => self.close_remote(remote_id, msg).await,
             Message::Extension(_msg) => unimplemented!(),
             _ => {
-                self.channels.forward(channel as usize, message).await?;
+                self.channels.forward(remote_id as usize, message).await?;
                 Ok(None)
             }
         }
@@ -356,15 +356,15 @@ where
     /// `Event::Channel` on the protocol event stream.
     pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
         // Create a new channel.
-        let channel_info = self.channels.attach_local(key.clone());
+        let inner_channel = self.channels.attach_local(key.clone());
         // Safe because attach_local always puts Some(local_id)
-        let local_id = channel_info.local_id.unwrap();
-        let discovery_key = channel_info.discovery_key.clone();
+        let local_id = inner_channel.local_id.unwrap();
+        let discovery_key = inner_channel.discovery_key.clone();
 
         // If the channel was already opened from the remote end, verify, and if
         // verification is ok, push a channel open event.
-        if let Some(_remote_id) = channel_info.remote_id {
-            let remote_capability = channel_info.remote_capability.clone();
+        if let Some(_remote_id) = inner_channel.remote_id {
+            let remote_capability = inner_channel.remote_capability.clone();
             self.verify_remote_capability(remote_capability, &key)?;
             let channel = self.create_channel(local_id).await?;
             self.events.push_back(Event::Channel(channel));
@@ -384,7 +384,7 @@ where
         Ok(())
     }
 
-    async fn on_open(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
+    async fn open_remote(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
         let inner_channel = self.channels.attach_remote(
             msg.discovery_key.clone(),
             ch as usize,
@@ -409,10 +409,6 @@ where
         Ok(channel)
     }
 
-    async fn on_close(&mut self, ch: u64, msg: Close) -> Result<Option<Event>> {
-        self.close_remote(ch, msg).await
-    }
-
     async fn close_local(&mut self, local_id: u64) -> Result<Option<Event>> {
         if let Some(channel) = self.channels.get_local_mut(local_id as usize) {
             let discovery_key = channel.discovery_key.clone();
@@ -435,7 +431,7 @@ where
         }
     }
 
-    pub(crate) async fn send(&mut self, channel_message: ChannelMessage) -> Result<()> {
+    async fn send(&mut self, channel_message: ChannelMessage) -> Result<()> {
         log::trace!("send {:?}", channel_message);
         let buf = channel_message.encode()?;
         self.writer.send_prefixed(&buf).await
