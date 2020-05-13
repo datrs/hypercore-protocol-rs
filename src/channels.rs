@@ -1,25 +1,70 @@
 use crate::discovery_key;
 use crate::schema::Open;
 use crate::schema::*;
+use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
-use futures::channel::mpsc::Sender;
+use futures::channel::mpsc::{Receiver, Sender};
 use futures::sink::SinkExt;
+use futures::stream::{SelectAll, Stream, StreamExt};
 use hex;
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{Error, ErrorKind, Result};
+use std::pin::Pin;
 
-#[derive(Clone, Debug)]
-pub struct ChannelInfo {
-    // pub(crate) handlers: ChannelHandlerType,
+/// A protocol channel.
+///
+/// This is the outer channel handler that can be sent to other threads.
+pub struct Channel {
+    pub(crate) recv_rx: Receiver<Message>,
+    pub(crate) send_tx: Sender<Message>,
     pub(crate) discovery_key: Vec<u8>,
-    pub(crate) key: Option<Vec<u8>>,
-    pub(crate) local_id: Option<usize>,
-    pub(crate) remote_id: Option<usize>,
-    pub(crate) recv_tx: Option<Sender<Message>>,
-    pub(crate) remote_capability: Option<Vec<u8>>,
 }
 
-impl ChannelInfo {
+impl fmt::Debug for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Channel")
+            .field("discovery_key", &pretty_hash(&self.discovery_key))
+            .finish()
+    }
+}
+
+impl Channel {
+    pub fn sender(&self) -> Sender<Message> {
+        self.send_tx.clone()
+    }
+    pub fn discovery_key(&self) -> &[u8] {
+        &self.discovery_key
+    }
+    pub async fn send(&mut self, message: Message) -> Result<()> {
+        self.send_tx.send(message).await.map_err(map_channel_err)
+    }
+}
+
+impl Stream for Channel {
+    type Item = Message;
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        Pin::new(&mut self.recv_rx).poll_next(cx)
+    }
+}
+
+/// The part of a channel.
+///
+/// This lives with the main protocol.
+#[derive(Clone, Debug)]
+pub(crate) struct InnerChannel {
+    pub discovery_key: Vec<u8>,
+    pub key: Option<Vec<u8>>,
+    pub local_id: Option<usize>,
+    pub remote_id: Option<usize>,
+    pub recv_tx: Option<Sender<Message>>,
+    pub remote_capability: Option<Vec<u8>>,
+}
+
+impl InnerChannel {
     pub(crate) async fn recv(&mut self, message: Message) -> Result<()> {
         if let Some(recv_tx) = self.recv_tx.as_mut() {
             match recv_tx.send(message).await {
@@ -68,8 +113,8 @@ impl ChannelInfo {
 
 /// The Channelizer maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
 #[derive(Debug)]
-pub struct Channelizer {
-    channels: HashMap<String, ChannelInfo>,
+pub(crate) struct Channelizer {
+    channels: HashMap<String, InnerChannel>,
     local_id: Vec<Option<String>>,
     remote_id: Vec<Option<String>>,
 }
@@ -102,7 +147,7 @@ impl Channelizer {
         }
     }
 
-    pub fn get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut ChannelInfo> {
+    pub fn get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut InnerChannel> {
         let hdkey = hex::encode(discovery_key);
         self.channels.get_mut(&hdkey)
     }
@@ -127,7 +172,7 @@ impl Channelizer {
     //     }
     // }
 
-    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
+    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut InnerChannel> {
         if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
             self.channels.get_mut(hdkey)
         } else {
@@ -135,7 +180,7 @@ impl Channelizer {
         }
     }
 
-    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut ChannelInfo> {
+    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut InnerChannel> {
         if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
             self.channels.get_mut(hdkey)
         } else {
@@ -169,7 +214,7 @@ impl Channelizer {
         }
     }
 
-    pub fn attach_local(&mut self, key: Vec<u8>) -> &ChannelInfo {
+    pub fn attach_local(&mut self, key: Vec<u8>) -> &InnerChannel {
         let discovery_key = discovery_key(&key);
         let hdkey = hex::encode(&discovery_key);
         let local_id = self.alloc_local();
@@ -180,7 +225,7 @@ impl Channelizer {
                 channel.local_id = Some(local_id);
                 channel.key = Some(key.clone());
             })
-            .or_insert_with(|| ChannelInfo {
+            .or_insert_with(|| InnerChannel {
                 key: Some(key),
                 discovery_key: discovery_key.clone(),
                 local_id: Some(local_id),
@@ -198,7 +243,7 @@ impl Channelizer {
         discovery_key: Vec<u8>,
         remote_id: usize,
         remote_capability: Option<Vec<u8>>,
-    ) -> &ChannelInfo {
+    ) -> &InnerChannel {
         let hdkey = hex::encode(&discovery_key);
         self.alloc_remote(remote_id);
 
@@ -208,7 +253,7 @@ impl Channelizer {
                 channel.remote_id = Some(remote_id);
                 channel.remote_capability = remote_capability.clone();
             })
-            .or_insert_with(|| ChannelInfo {
+            .or_insert_with(|| InnerChannel {
                 discovery_key: discovery_key.clone(),
                 remote_id: Some(remote_id),
                 remote_capability,

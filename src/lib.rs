@@ -54,6 +54,7 @@ pub mod schema {
     pub use crate::message::ExtensionMessage;
 }
 
+pub use channels::Channel;
 pub use message::Message;
-pub use protocol::{Channel, Event, Protocol, ProtocolBuilder, ProtocolOptions, ProtocolStream};
+pub use protocol::{Event, Protocol, ProtocolBuilder, ProtocolOptions, ProtocolStream};
 pub use util::discovery_key;

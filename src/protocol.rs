@@ -12,7 +12,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::channels::Channelizer;
+use crate::channels::{Channel, Channelizer};
 use crate::constants::DEFAULT_KEEPALIVE;
 use crate::message::{ChannelMessage, Message};
 use crate::noise::{Handshake, HandshakeResult};
@@ -44,43 +44,6 @@ impl fmt::Debug for Event {
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
             Event::Channel(channel) => write!(f, "{:?}", channel),
         }
-    }
-}
-
-/// A protocol channel.
-pub struct Channel {
-    recv_rx: Receiver<Message>,
-    send_tx: Sender<Message>,
-    discovery_key: Vec<u8>,
-}
-
-impl fmt::Debug for Channel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Channel")
-            .field("discovery_key", &pretty_hash(&self.discovery_key))
-            .finish()
-    }
-}
-
-impl Channel {
-    pub fn sender(&self) -> Sender<Message> {
-        self.send_tx.clone()
-    }
-    pub fn discovery_key(&self) -> &[u8] {
-        &self.discovery_key
-    }
-    pub async fn send(&mut self, message: Message) -> Result<()> {
-        self.send_tx.send(message).await.map_err(map_channel_err)
-    }
-}
-
-impl Stream for Channel {
-    type Item = Message;
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        Pin::new(&mut self.recv_rx).poll_next(cx)
     }
 }
 
