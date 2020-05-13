@@ -2,14 +2,12 @@ use futures::channel::mpsc::{Receiver, Sender};
 use futures::future::{Fuse, FutureExt};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::io::{BufReader, BufWriter};
-use futures::sink::SinkExt;
 use futures::stream::{SelectAll, Stream, StreamExt};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
-use std::pin::Pin;
 use std::time::Duration;
 
 use crate::channels::{Channel, Channelizer};
@@ -18,7 +16,7 @@ use crate::message::{ChannelMessage, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
 use crate::schema::*;
-use crate::util::{map_channel_err, pretty_hash};
+use crate::util::pretty_hash;
 use crate::writer::ProtocolWriter;
 
 const CHANNEL_CAP: usize = 1000;
@@ -368,7 +366,7 @@ where
         if let Some(_remote_id) = channel_info.remote_id {
             let remote_capability = channel_info.remote_capability.clone();
             self.verify_remote_capability(remote_capability, &key)?;
-            let channel = self.create_channel(local_id, &discovery_key).await;
+            let channel = self.create_channel(local_id).await?;
             self.events.push_back(Event::Channel(channel));
         }
 
@@ -387,35 +385,28 @@ where
     }
 
     async fn on_open(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
-        let channel_info = self.channels.attach_remote(
+        let inner_channel = self.channels.attach_remote(
             msg.discovery_key.clone(),
             ch as usize,
             msg.capability.clone(),
         );
 
         // This means there is not yet a locally-opened channel for this discovery_key.
-        if let Some(local_id) = channel_info.local_id {
-            let key = channel_info.key.as_ref().unwrap().clone();
+        if let Some(local_id) = inner_channel.local_id {
+            let key = inner_channel.key.as_ref().unwrap().clone();
             self.verify_remote_capability(msg.capability, &key)?;
-            let channel = self.create_channel(local_id, &msg.discovery_key).await;
-            return Ok(Some(Event::Channel(channel)));
+            let channel = self.create_channel(local_id).await?;
+            Ok(Some(Event::Channel(channel)))
+        } else {
+            Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())))
         }
-        Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())))
     }
 
-    async fn create_channel(&mut self, local_id: usize, discovery_key: &[u8]) -> Channel {
-        let (send_tx, send_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
-        let (recv_tx, recv_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
-        let channel = Channel {
-            recv_rx,
-            send_tx,
-            discovery_key: discovery_key.to_vec(),
-        };
-        let send_rx_mapped =
-            send_rx.map(move |message| message.into_channel_message(local_id as u64));
-        self.outbound_rx.push(Box::new(send_rx_mapped));
-        self.channels.open(&discovery_key, recv_tx).await.unwrap();
-        channel
+    async fn create_channel(&mut self, local_id: usize) -> Result<Channel> {
+        let inner_channel = self.channels.get_local_mut(local_id).unwrap();
+        let (channel, send_rx) = inner_channel.open().await?;
+        self.outbound_rx.push(Box::new(send_rx));
+        Ok(channel)
     }
 
     async fn on_close(&mut self, ch: u64, msg: Close) -> Result<Option<Event>> {
