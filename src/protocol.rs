@@ -20,6 +20,7 @@ use crate::message::{ChannelMessage, Message};
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 
+const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
 /// A protocol event.
@@ -190,7 +191,7 @@ where
     pub fn new(reader: R, writer: W, options: ProtocolOptions) -> Self {
         let reader = EncryptedReader::new(BufReader::new(reader));
         let writer = EncryptedWriter::new(BufWriter::new(writer));
-        let (control_tx, control_rx) = futures::channel::mpsc::channel(100);
+        let (control_tx, control_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
         Protocol {
             writer,
             reader,
@@ -239,11 +240,20 @@ where
         self.keepalive = Some(Delay::new(keepalive_duration).fuse());
     }
 
+    pub fn is_initiator(&self) -> bool {
+        self.options.is_initiator
+    }
+
     /// Wait for the next protocol event.
     ///
     /// This function should be called in a loop until this returns an error.
     pub async fn loop_next(&mut self) -> Result<Event> {
-        // trace!("NEXT IN, msg len {}", self.messages.len());
+        // trace!(
+        //     "[{}] loop_next start, state {:?} events.len {}",
+        //     self.is_initiator(),
+        //     self.state,
+        //     self.events.len()
+        // );
         if let State::NotInitialized = self.state {
             self.init().await?;
         }
@@ -257,9 +267,7 @@ where
         // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
         // If data was received, reset the keepalive timer.
         loop {
-            // while let Some((ch, message)) = self.messages.pop_front() {
-            //     self.send(ch, message).await?;
-            // }
+            // trace!("[{}] loop_next loop in", self.is_initiator());
 
             if let Some(event) = self.events.pop_front() {
                 return Ok(event);
@@ -267,6 +275,7 @@ where
 
             let event = futures::select! {
                 _ = keepalive => {
+                    // trace!("[{}] loop_next ! keepalive", self.is_initiator());
                     self.ping().await?;
                     // TODO: It would be better to `reset` the keepalive and not recreate it.
                     // I couldn't get this to work with `fuse()` though which is needed for
@@ -275,9 +284,11 @@ where
                     None
                 },
                 buf = self.reader.select_next_some() => {
+                    // trace!("[{}] loop_next ! incoming message", self.is_initiator());
                     self.on_message(buf?).await?
                 },
                 channel_message = self.outbound_rx.select_next_some() => {
+                    // trace!("[{}] loop_next ! outbound_rx", self.is_initiator());
                     let event = match channel_message {
                         ChannelMessage { channel, message: Message::Close(_) } => {
                             self.close_channel(channel).await?
@@ -285,9 +296,11 @@ where
                         _ => None
                     };
                     self.send(channel_message).await?;
+                    // trace!("[{}] loop_next ! outbound_rx SENT", self.is_initiator());
                     event
                 },
                 ev = self.control_rx.select_next_some() => {
+                    // trace!("[{}] loop_next ! control_rx", self.is_initiator());
                     match ev {
                         stream::ControlEvent::Open(key) => {
                             self.open(key).await?;
@@ -296,6 +309,11 @@ where
                     }
                 },
             };
+            // trace!(
+            //     "[{}] loop_next loop out, event {:?}",
+            //     self.is_initiator(),
+            //     event
+            // );
             if let Some(event) = event {
                 self.keepalive = Some(keepalive);
                 return Ok(event);
@@ -422,8 +440,8 @@ where
     }
 
     async fn create_channel(&mut self, local_id: usize, discovery_key: &[u8]) -> Channel {
-        let (send_tx, send_rx) = futures::channel::mpsc::channel(100);
-        let (recv_tx, recv_rx) = futures::channel::mpsc::channel(100);
+        let (send_tx, send_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
+        let (recv_tx, recv_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
         let channel = Channel {
             receiver: recv_rx,
             sender: send_tx,

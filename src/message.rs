@@ -105,10 +105,15 @@ impl fmt::Display for Message {
 }
 
 /// A message on a channel.
-#[derive(Debug)]
 pub struct ChannelMessage {
     pub channel: u64,
     pub message: Message,
+}
+
+impl fmt::Debug for ChannelMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ChannelMessage({}, {})", self.channel, self.message)
+    }
 }
 
 impl ChannelMessage {
