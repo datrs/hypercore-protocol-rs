@@ -159,7 +159,7 @@ impl fmt::Debug for State {
 }
 
 /// The output of the set of channel senders.
-type CombinedOutputStream = SelectAll<Box<dyn Stream<Item = (usize, Message)> + Send + Unpin>>;
+type CombinedOutputStream = SelectAll<Box<dyn Stream<Item = ChannelMessage> + Send + Unpin>>;
 
 /// A Protocol stream.
 pub struct Protocol<R, W>
@@ -275,17 +275,17 @@ where
                     None
                 },
                 buf = self.reader.select_next_some() => {
-                    let buf = buf?;
-                    self.on_message(buf).await?
+                    self.on_message(buf?).await?
                 },
-                (ch, message) = self.outbound_rx.select_next_some() => {
-                    let ret = if let Message::Close(_) = &message {
-                        self.close(ch as u64).await?
-                    } else {
-                        None
+                channel_message = self.outbound_rx.select_next_some() => {
+                    let event = match channel_message {
+                        ChannelMessage { channel, message: Message::Close(_) } => {
+                            self.close_channel(channel).await?
+                        },
+                        _ => None
                     };
-                    self.send(ch as u64, message).await?;
-                    ret
+                    self.send(channel_message).await?;
+                    event
                 },
                 ev = self.control_rx.select_next_some() => {
                     match ev {
@@ -361,10 +361,7 @@ where
         let (channel, message) = channel_message.into_split();
         match message {
             Message::Open(msg) => self.on_open(channel, msg).await,
-            Message::Close(msg) => {
-                self.on_close(channel, msg).await?;
-                Ok(None)
-            }
+            Message::Close(msg) => self.on_close(channel, msg).await,
             Message::Extension(_msg) => unimplemented!(),
             _ => {
                 self.channels.forward(channel as usize, message).await?;
@@ -399,8 +396,9 @@ where
             discovery_key,
             capability,
         });
+        let channel_message = ChannelMessage::new(local_id as u64, message);
         self.outbound_rx.push(Box::new(
-            futures::future::ready((local_id, message)).into_stream(),
+            futures::future::ready(channel_message).into_stream(),
         ));
 
         Ok(())
@@ -431,24 +429,18 @@ where
             sender: send_tx,
             discovery_key: discovery_key.to_vec(),
         };
-        let send_rx_mapped = send_rx.map(move |message| (local_id, message));
+        let send_rx_mapped =
+            send_rx.map(move |message| message.into_channel_message(local_id as u64));
         self.outbound_rx.push(Box::new(send_rx_mapped));
         self.channels.open(&discovery_key, recv_tx).await.unwrap();
         channel
     }
 
-    async fn on_close(&mut self, ch: u64, _msg: Close) -> Result<()> {
-        self.close(ch).await?;
-        // if let Some(discovery_key) = msg.discovery_key {
-        //     self.channels.remove(&discovery_key);
-        // } else if let Some(channel) = self.channels.get_remote(ch) {
-        //     let discovery_key = channel.discovery_key.clone();
-        //     self.channels.remove(&discovery_key);
-        // }
-        Ok(())
+    async fn on_close(&mut self, ch: u64, _msg: Close) -> Result<Option<Event>> {
+        self.close_channel(ch).await
     }
 
-    async fn close(&mut self, remote_id: u64) -> Result<Option<Event>> {
+    async fn close_channel(&mut self, remote_id: u64) -> Result<Option<Event>> {
         if let Some(channel) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = channel.discovery_key.clone();
             self.channels.remove(&discovery_key);
@@ -458,8 +450,7 @@ where
         }
     }
 
-    pub(crate) async fn send(&mut self, ch: u64, message: Message) -> Result<()> {
-        let channel_message = ChannelMessage::new(ch, message);
+    pub(crate) async fn send(&mut self, channel_message: ChannelMessage) -> Result<()> {
         log::trace!("send {:?}", channel_message);
         let buf = channel_message.encode()?;
         self.writer.send_prefixed(&buf).await
@@ -469,6 +460,7 @@ where
         self.writer.ping().await
     }
 
+    /// Stop the protocol and return the inner reader and writer.
     pub fn release(self) -> (R, W) {
         (
             self.reader.into_inner().into_inner(),

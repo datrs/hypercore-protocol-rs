@@ -95,6 +95,7 @@ where
                     feed.onpeer(channel);
                 }
             }
+            Event::Close(_dkey) => {}
         }
     }
     Ok(())

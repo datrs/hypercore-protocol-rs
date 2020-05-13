@@ -90,6 +90,7 @@ async fn onconnection(
                     });
                 }
             }
+            _ => {}
         }
     }
     Ok(())

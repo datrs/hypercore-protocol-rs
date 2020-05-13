@@ -61,6 +61,10 @@ impl Message {
             Self::Extension(msg) => Ok((15, msg.to_vec())),
         }
     }
+
+    pub fn into_channel_message(self, channel: u64) -> ChannelMessage {
+        ChannelMessage::new(channel, self)
+    }
 }
 
 fn encode_msg(msg: &impl ProstMessage) -> Result<Vec<u8>> {
