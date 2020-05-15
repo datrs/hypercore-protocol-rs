@@ -1,8 +1,9 @@
-use async_std::net::{TcpListener, TcpStream};
+use async_std::net::{Shutdown, TcpListener, TcpStream};
 use async_std::task;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use futures::future::{Either, FutureExt, TryFutureExt};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::StreamExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{Channel, Event, Message, ProtocolBuilder};
 use log::*;
@@ -10,8 +11,8 @@ use std::time::Instant;
 
 const PORT: usize = 11011;
 const SIZE: u64 = 1000;
-const COUNT: u64 = 1000;
-// const CLIENTS: usize = 5;
+const COUNT: u64 = 200;
+const CLIENTS: usize = 1;
 
 fn bench_throughput(c: &mut Criterion) {
     env_logger::from_env(env_logger::Env::default().default_filter_or("error")).init();
@@ -20,19 +21,36 @@ fn bench_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("throughput");
     let data = vec![1u8; SIZE as usize];
 
-    let _server = task::block_on(start_server(&address));
+    // let _server = task::block_on(start_server(&address));
 
     group.sample_size(10);
-    group.throughput(Throughput::Bytes(data.len() as u64 * COUNT));
+    group.throughput(Throughput::Bytes(
+        data.len() as u64 * COUNT * CLIENTS as u64,
+    ));
     group.bench_function("echo", |b| {
         b.iter_with_setup(
             || {
-                let stream = task::block_on(TcpStream::connect(&address)).unwrap();
-                stream
+                let (server, streams) = task::block_on(async {
+                    let server = start_server(&address).await;
+                    let mut streams = vec![];
+                    for _i in 0..CLIENTS {
+                        streams.push(TcpStream::connect(&address).await.unwrap())
+                    }
+                    (server, streams)
+                });
+                (server, streams)
             },
-            |stream| {
+            |(server, streams)| {
                 task::block_on(async move {
-                    onconnection(stream.clone(), stream, true).await;
+                    let mut futures: FuturesUnordered<_> = streams
+                        .into_iter()
+                        .map(|s| async move {
+                            onconnection(s.clone(), s.clone(), true).await;
+                            s.shutdown(Shutdown::Both)
+                        })
+                        .collect();
+                    while let Some(_res) = futures.next().await {}
+                    server.send(())
                 })
             },
         );
@@ -44,19 +62,30 @@ fn bench_throughput(c: &mut Criterion) {
 criterion_group!(server_benches, bench_throughput);
 criterion_main!(server_benches);
 
-async fn start_server(address: &str) {
+async fn start_server(address: &str) -> futures::channel::oneshot::Sender<()> {
     let listener = TcpListener::bind(&address).await.unwrap();
     log::info!("listening on {}", listener.local_addr().unwrap());
+    let (kill_tx, mut kill_rx) = futures::channel::oneshot::channel();
     task::spawn(async move {
         let mut incoming = listener.incoming();
-        while let Some(Ok(stream)) = incoming.next().await {
-            let peer_addr = stream.peer_addr().unwrap();
-            debug!("new connection from {}", peer_addr);
-            task::spawn(async move {
-                onconnection(stream.clone(), stream, false).await;
-            });
+        // let kill_rx = &mut kill_rx;
+        loop {
+            match futures::future::select(incoming.next(), &mut kill_rx).await {
+                Either::Left((next, _)) => match next {
+                    Some(Ok(stream)) => {
+                        let peer_addr = stream.peer_addr().unwrap();
+                        debug!("new connection from {}", peer_addr);
+                        task::spawn(async move {
+                            onconnection(stream.clone(), stream, false).await;
+                        });
+                    }
+                    _ => {}
+                },
+                Either::Right((_, _)) => return,
+            }
         }
     });
+    kill_tx
 }
 
 async fn onconnection<R, W>(reader: R, writer: W, is_initiator: bool) -> (R, W)

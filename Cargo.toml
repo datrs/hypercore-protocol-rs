@@ -70,3 +70,7 @@ debug = true
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "pipe"
+harness = false
