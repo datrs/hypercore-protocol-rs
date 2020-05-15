@@ -2,7 +2,7 @@
 
 **A Rust implementation of the wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol)**
 
-*Unstable and not yet maintained in any way. I started this in my spare time while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
+*Unstable and not finished! My spare time projects for some time, slowly getting there while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
 
 This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 9 (Dat 2) only.
 
