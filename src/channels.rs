@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
+use std::task::Poll;
 
 const CHANNEL_CAP: usize = 1000;
 
@@ -19,7 +20,7 @@ const CHANNEL_CAP: usize = 1000;
 ///
 /// This is the outer channel handler that can be sent to other threads.
 pub struct Channel {
-    pub(crate) recv_rx: Receiver<Message>,
+    pub(crate) recv_rx: Option<Receiver<Message>>,
     pub(crate) send_tx: Sender<Message>,
     pub(crate) discovery_key: Vec<u8>,
 }
@@ -42,6 +43,60 @@ impl Channel {
     pub async fn send(&mut self, message: Message) -> Result<()> {
         self.send_tx.send(message).await.map_err(map_channel_err)
     }
+
+    pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
+        self.recv_rx.take()
+    }
+
+    /// Send a status message.
+    pub async fn status(&mut self, msg: Status) -> Result<()> {
+        self.send(Message::Status(msg)).await
+    }
+
+    /// Send a options message.
+    pub async fn options(&mut self, msg: Options) -> Result<()> {
+        self.send(Message::Options(msg)).await
+    }
+
+    /// Send a have message.
+    pub async fn have(&mut self, msg: Have) -> Result<()> {
+        self.send(Message::Have(msg)).await
+    }
+
+    /// Send a unhave message.
+    pub async fn unhave(&mut self, msg: Unhave) -> Result<()> {
+        self.send(Message::Unhave(msg)).await
+    }
+
+    /// Send a want message.
+    pub async fn want(&mut self, msg: Want) -> Result<()> {
+        self.send(Message::Want(msg)).await
+    }
+
+    /// Send a unwant message.
+    pub async fn unwant(&mut self, msg: Unwant) -> Result<()> {
+        self.send(Message::Unwant(msg)).await
+    }
+
+    /// Send a request message.
+    pub async fn request(&mut self, msg: Request) -> Result<()> {
+        self.send(Message::Request(msg)).await
+    }
+
+    /// Send a cancel message.
+    pub async fn cancel(&mut self, msg: Cancel) -> Result<()> {
+        self.send(Message::Cancel(msg)).await
+    }
+
+    /// Send a data message.
+    pub async fn data(&mut self, msg: Data) -> Result<()> {
+        self.send(Message::Data(msg)).await
+    }
+
+    /// Send a close message and close this channel.
+    pub async fn close(&mut self, msg: Close) -> Result<()> {
+        self.send(Message::Close(msg)).await
+    }
 }
 
 impl Stream for Channel {
@@ -50,7 +105,11 @@ impl Stream for Channel {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        Pin::new(&mut self.recv_rx).poll_next(cx)
+        if self.recv_rx.is_none() {
+            Poll::Ready(None)
+        } else {
+            Pin::new(&mut self.recv_rx.as_mut().unwrap()).poll_next(cx)
+        }
     }
 }
 
@@ -136,7 +195,7 @@ impl InnerChannel {
         let (recv_tx, recv_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
 
         let outer_channel = Channel {
-            recv_rx,
+            recv_rx: Some(recv_rx),
             send_tx,
             discovery_key: self.discovery_key.clone(),
         };
