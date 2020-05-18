@@ -30,6 +30,12 @@ pub enum Event {
     Close(Vec<u8>),
 }
 
+// enum Outgoing {
+//     Ping,
+//     Raw(Vec<u8>),
+//     ChannelMessage(ChannelMessage),
+// }
+
 impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -141,6 +147,7 @@ where
     control_rx: Receiver<stream::ControlEvent>,
     control_tx: Sender<stream::ControlEvent>,
     events: VecDeque<Event>,
+    // outgoing: VecDeque<Event>,
     keepalive: Option<Fuse<Delay>>,
 }
 
@@ -166,6 +173,7 @@ where
             control_rx,
             control_tx,
             events: VecDeque::new(),
+            // outgoing: VecDeque::new(),
             keepalive: None,
         }
     }
@@ -236,6 +244,7 @@ where
             }
 
             let event = futures::select! {
+                // Keepalive timer for pings
                 _ = keepalive => {
                     // trace!("[{}] loop_next ! keepalive", self.is_initiator());
                     self.ping().await?;
@@ -245,10 +254,12 @@ where
                     keepalive = Delay::new(KEEPALIVE_DURATION).fuse();
                     None
                 },
+                // New wire message incoming
                 buf = self.reader.select_next_some() => {
                     // trace!("[{}] loop_next ! incoming message", self.is_initiator());
                     self.on_message(buf?).await?
                 },
+                // New outbound message
                 channel_message = self.outbound_rx.select_next_some() => {
                     // trace!("[{}] loop_next ! outbound_rx", self.is_initiator());
                     let event = match channel_message {
@@ -261,6 +272,7 @@ where
                     // trace!("[{}] loop_next ! outbound_rx SENT", self.is_initiator());
                     event
                 },
+                // New control message
                 ev = self.control_rx.select_next_some() => {
                     // trace!("[{}] loop_next ! control_rx", self.is_initiator());
                     match ev {

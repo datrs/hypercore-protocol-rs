@@ -69,9 +69,9 @@ struct State {
     cap: usize,
     /// The logical state of the reading (either header or body).
     step: Step,
-    // closed: bool,
-    // last_recv: Option<instant::Instant>,
+    /// The timeout after which the connection is closed.
     timeout: Delay,
+    /// Whether the read buffer is already decrypted.
     decrypted: bool,
 }
 
@@ -82,7 +82,7 @@ impl Default for State {
             cap: 0,
             step: Step::default(),
             timeout: Delay::new(Duration::from_secs(DEFAULT_TIMEOUT as u64)),
-            decrypted: false, // last_recv: None, // closed: false,
+            decrypted: false,
         }
     }
 }
