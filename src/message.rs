@@ -8,7 +8,7 @@ use std::io::{Error, ErrorKind, Result};
 use crate::constants::MAX_MESSAGE_SIZE;
 
 /// A protocol message.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Open(Open),
     Options(Options),
@@ -166,7 +166,7 @@ impl ChannelMessage {
 }
 
 /// A extension message (not yet supported properly).
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionMessage {
     pub id: u64,
     pub message: Vec<u8>,
@@ -201,5 +201,72 @@ impl ExtensionMessage {
         let mut buf = vec![0u8; self.encoded_len()];
         self.encode(&mut buf);
         buf.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! message_enc_dec {
+        ($( $msg:expr ),*) => {
+            $(
+                let (typ, body) = $msg.encode().expect("Failed to encode proto");
+                let decoded = Message::decode(typ, body).expect("Failed to decode message");
+                assert_eq!($msg, decoded);
+            )*
+        }
+    }
+
+    #[test]
+    fn encode_decode() {
+        message_enc_dec! {
+            Message::Open(Open{
+                discovery_key: vec![2u8; 20],
+                capability: None
+            }),
+            Message::Options(Options {
+                extensions: vec!["test ext".to_string()],
+                ack: None
+            }),
+            Message::Status(Status {
+                uploading: Some(true),
+                downloading: Some(false)
+            }),
+            Message::Have(Have {
+                start: 0,
+                length: Some(100),
+                bitfield: None,
+                ack: Some(true)
+            }),
+            Message::Unhave(Unhave {
+                start: 0,
+                length: Some(100),
+            }),
+            Message::Want(Want {
+                start: 0,
+                length: Some(100),
+            }),
+            Message::Request(Request {
+                index: 0,
+                bytes: None,
+                hash: Some(true),
+                nodes: None
+            }),
+            Message::Cancel(Cancel{
+                index: 10,
+                bytes: Some(10),
+                hash: Some(true)
+            }),
+            Message::Data(Data {
+                index: 1,
+                value: None,
+                nodes: vec![],
+                signature: None
+            }),
+            Message::Close(Close {
+                discovery_key: Some(vec![1u8; 10])
+            })
+        };
     }
 }
