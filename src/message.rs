@@ -68,16 +68,8 @@ impl Message {
 }
 
 fn encode_msg(msg: &impl ProstMessage) -> Result<Vec<u8>> {
-    let mut buf = vec![0u8; msg.encoded_len()];
+    let mut buf = Vec::with_capacity(msg.encoded_len());
     msg.encode(&mut buf)?;
-
-    // TODO: Prost seems to pad some messages with leading zeros. I noticed this for the
-    // Open message. This removes the leading zeros. But why are they there in the first place?
-    let first_nonzero_char = (&buf).iter().position(|x| x != &0);
-    if let Some(nonzero) = first_nonzero_char {
-        buf = buf[nonzero..].to_vec();
-    }
-
     Ok(buf)
 }
 
