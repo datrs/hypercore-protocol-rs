@@ -49,6 +49,7 @@ anyhow = "1.0.28"
 criterion = "0.3.2"
 pretty-bytes = "0.2.2"
 piper = "0.1.1"
+duplexify = "1.1.0"
 
 [build-dependencies]
 prost-build = "0.6.1"

@@ -15,9 +15,9 @@ fn main() {
     task::block_on(async_main()).unwrap();
 }
 
-const COUNT: u64 = 40_000;
+const COUNT: u64 = 2;
 const SIZE: u64 = 1000;
-const CONNS: u64 = 10;
+const CONNS: u64 = 1;
 
 async fn async_main() -> Result<()> {
     let start = std::time::Instant::now();
@@ -36,8 +36,8 @@ async fn run_echo(i: u64) -> Result<()> {
     let (ar, bw) = pipe(cap);
     let (br, aw) = pipe(cap);
 
-    let a = ProtocolBuilder::new(true).build_from_io(ar, aw);
-    let b = ProtocolBuilder::new(false).build_from_io(br, bw);
+    let a = ProtocolBuilder::new(true).from_io(ar, aw);
+    let b = ProtocolBuilder::new(false).from_io(br, bw);
     let ta = task::spawn(async move { onconnection(i, a).await });
     let tb = task::spawn(async move { onconnection(i, b).await });
     let _lena = ta.await?;

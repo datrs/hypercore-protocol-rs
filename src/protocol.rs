@@ -2,6 +2,7 @@ use futures::channel::mpsc::{Receiver, Sender};
 use futures::future::{Fuse, FutureExt};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::io::{BufReader, BufWriter};
+use futures::sink::SinkExt;
 use futures::stream::{SelectAll, Stream, StreamExt};
 use futures_timer::Delay;
 use log::*;
@@ -16,6 +17,7 @@ use crate::message::{ChannelMessage, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
 use crate::schema::*;
+use crate::util::map_channel_err;
 use crate::util::pretty_hash;
 use crate::writer::ProtocolWriter;
 
@@ -63,6 +65,7 @@ pub struct ProtocolOptions {
 pub struct ProtocolBuilder(ProtocolOptions);
 
 impl ProtocolBuilder {
+    // Create a protocol builder.
     pub fn new(is_initiator: bool) -> Self {
         Self(ProtocolOptions {
             is_initiator,
@@ -81,29 +84,50 @@ impl ProtocolBuilder {
         Self::new(false)
     }
 
+    /// Set encrypted option.
     pub fn set_encrypted(mut self, encrypted: bool) -> Self {
         self.0.encrypted = encrypted;
         self
     }
 
+    /// Set handshake option.
     pub fn set_noise(mut self, noise: bool) -> Self {
         self.0.noise = noise;
         self
     }
 
-    pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
+    /// Create the protocol from a stream that implements AsyncRead + AsyncWrite + Clone.
+    pub fn from_stream<S>(self, stream: S) -> Protocol<S, S>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
     {
         Protocol::new(stream.clone(), stream, self.0)
     }
 
-    pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    /// Create the protocol from an AsyncRead reader and AsyncWrite writer.
+    pub fn from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
         Protocol::new(reader, writer, self.0)
+    }
+
+    #[deprecated(since = "0.0.1", note = "Use from_io")]
+    pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        self.from_io(reader, writer)
+    }
+
+    #[deprecated(since = "0.0.1", note = "Use from_stream")]
+    pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
+    {
+        self.from_stream(stream)
     }
 }
 
@@ -144,8 +168,8 @@ where
     channels: Channelizer,
     error: Option<Error>,
     outbound_rx: CombinedOutputStream,
-    control_rx: Receiver<stream::ControlEvent>,
-    control_tx: Sender<stream::ControlEvent>,
+    control_rx: Receiver<ControlEvent>,
+    control_tx: ControlTx,
     events: VecDeque<Event>,
     // outgoing: VecDeque<Event>,
     keepalive: Option<Fuse<Delay>>,
@@ -171,14 +195,19 @@ where
             error: None,
             outbound_rx: SelectAll::new(),
             control_rx,
-            control_tx,
+            control_tx: ControlTx(control_tx),
             events: VecDeque::new(),
             // outgoing: VecDeque::new(),
             keepalive: None,
         }
     }
 
-    pub async fn init(&mut self) -> Result<()> {
+    /// Create a protocol builder.
+    pub fn builder(is_initiator: bool) -> ProtocolBuilder {
+        ProtocolBuilder::new(is_initiator)
+    }
+
+    async fn init(&mut self) -> Result<()> {
         trace!(
             "protocol init, state {:?}, options {:?}",
             self.state,
@@ -276,7 +305,7 @@ where
                 ev = self.control_rx.select_next_some() => {
                     // trace!("[{}] loop_next ! control_rx", self.is_initiator());
                     match ev {
-                        stream::ControlEvent::Open(key) => {
+                        ControlEvent::Open(key) => {
                             self.open(key).await?;
                             None
                         }
@@ -478,30 +507,51 @@ where
         }
     }
 
+    /// Convert the protocol into a [Stream](futures::io::Stream) of [Event](Event)s.
     pub fn into_stream(self) -> stream::ProtocolStream<R, W> {
-        let tx = self.control_tx.clone();
-        stream::ProtocolStream::new(self, tx)
+        let control = self.control();
+        stream::ProtocolStream::new(self, control)
+    }
+
+    /// Get a sender to send control events.
+    pub fn control(&self) -> ControlTx {
+        self.control_tx.clone()
+    }
+}
+
+/// A control event for the protocol stream.
+#[derive(Debug)]
+pub enum ControlEvent {
+    Open(Vec<u8>),
+}
+
+/// Send [ControlEvent](ControlEvent)s to the [Protocol](Protocol).
+#[derive(Clone)]
+pub struct ControlTx(Sender<ControlEvent>);
+
+impl ControlTx {
+    /// Open a protocol channel.
+    ///
+    /// The channel will be emitted on the main protocol.
+    pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
+        self.0
+            .send(ControlEvent::Open(key))
+            .await
+            .map_err(map_channel_err)
     }
 }
 
 pub use stream::ProtocolStream;
 mod stream {
-    use crate::util::map_channel_err;
+    use super::ControlTx;
     use crate::{Event, Protocol};
-    use futures::channel::mpsc::Sender;
     use futures::future::FutureExt;
     use futures::io::{AsyncRead, AsyncWrite};
-    use futures::sink::SinkExt;
     use futures::stream::Stream;
     use std::future::Future;
     use std::io::Result;
     use std::pin::Pin;
     use std::task::Poll;
-
-    #[derive(Debug)]
-    pub enum ControlEvent {
-        Open(Vec<u8>),
-    }
 
     type LoopFuture<R, W> = Pin<Box<dyn Future<Output = (Result<Event>, Protocol<R, W>)> + Send>>;
 
@@ -521,7 +571,7 @@ mod stream {
         W: AsyncWrite + Send + Unpin + 'static,
     {
         fut: LoopFuture<R, W>,
-        tx: Sender<ControlEvent>,
+        tx: ControlTx,
     }
 
     impl<R, W> ProtocolStream<R, W>
@@ -529,16 +579,13 @@ mod stream {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        pub fn new(protocol: Protocol<R, W>, tx: Sender<ControlEvent>) -> Self {
+        pub fn new(protocol: Protocol<R, W>, tx: ControlTx) -> Self {
             let fut = loop_next(protocol).boxed();
             Self { fut, tx }
         }
 
         pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-            self.tx
-                .send(ControlEvent::Open(key))
-                .await
-                .map_err(map_channel_err)
+            self.tx.open(key).await
         }
     }
 

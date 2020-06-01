@@ -4,6 +4,10 @@ use async_std::prelude::*;
 use async_std::task;
 use env_logger::Env;
 
+// We use this example as a module for the other examples.
+#[allow(dead_code)]
+fn main() {}
+
 /// Init EnvLogger, logging info, warn and error messages to stdout.
 pub fn init_logger() {
     env_logger::from_env(Env::default().default_filter_or("info")).init();

@@ -96,7 +96,7 @@ where
     let key = vec![0u8; 32];
     let mut protocol = ProtocolBuilder::new(is_initiator)
         .set_encrypted(false)
-        .build_from_io(reader, writer);
+        .from_io(reader, writer);
     while let Ok(event) = protocol.loop_next().await {
         match event {
             Event::Handshake(_) => {

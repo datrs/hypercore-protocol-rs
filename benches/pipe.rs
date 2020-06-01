@@ -45,10 +45,10 @@ async fn run_echo(i: u64) -> Result<()> {
     let encrypted = false;
     let a = ProtocolBuilder::new(true)
         .set_encrypted(encrypted)
-        .build_from_io(ar, aw);
+        .from_io(ar, aw);
     let b = ProtocolBuilder::new(false)
         .set_encrypted(encrypted)
-        .build_from_io(br, bw);
+        .from_io(br, bw);
     let ta = task::spawn(async move { onconnection(i, a).await });
     let tb = task::spawn(async move { onconnection(i, b).await });
     let _lena = ta.await?;
