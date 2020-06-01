@@ -71,7 +71,7 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .from_stream(stream)
+        .connect(stream)
         .into_stream();
 
     while let Some(event) = protocol.next().await {

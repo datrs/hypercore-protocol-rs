@@ -30,7 +30,7 @@
 //! /// Start Hypercore protocol on a TcpStream.
 //! async fn onconnection (stream: async_std::net::TcpStream, is_initiator: bool) {
 //!     let key = vec![0u8; 32];
-//!     let mut protocol = ProtocolBuilder::new(is_initiator).from_stream(stream);
+//!     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 //!
 //!     while let Ok(event) = protocol.loop_next().await {
 //!         eprintln!("[{}] received event {:?}", is_initiator, event);

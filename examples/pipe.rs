@@ -36,8 +36,8 @@ async fn run_echo(i: u64) -> Result<()> {
     let (ar, bw) = pipe(cap);
     let (br, aw) = pipe(cap);
 
-    let a = ProtocolBuilder::new(true).from_io(ar, aw);
-    let b = ProtocolBuilder::new(false).from_io(br, bw);
+    let a = ProtocolBuilder::new(true).connect_rw(ar, aw);
+    let b = ProtocolBuilder::new(false).connect_rw(br, bw);
     let ta = task::spawn(async move { onconnection(i, a).await });
     let tb = task::spawn(async move { onconnection(i, b).await });
     let _lena = ta.await?;

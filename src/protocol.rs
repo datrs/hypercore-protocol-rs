@@ -97,7 +97,7 @@ impl ProtocolBuilder {
     }
 
     /// Create the protocol from a stream that implements AsyncRead + AsyncWrite + Clone.
-    pub fn from_stream<S>(self, stream: S) -> Protocol<S, S>
+    pub fn connect<S>(self, stream: S) -> Protocol<S, S>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
     {
@@ -105,7 +105,7 @@ impl ProtocolBuilder {
     }
 
     /// Create the protocol from an AsyncRead reader and AsyncWrite writer.
-    pub fn from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    pub fn connect_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -113,21 +113,21 @@ impl ProtocolBuilder {
         Protocol::new(reader, writer, self.0)
     }
 
-    #[deprecated(since = "0.0.1", note = "Use from_io")]
+    #[deprecated(since = "0.0.1", note = "Use connect_rw")]
     pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        self.from_io(reader, writer)
+        self.connect_rw(reader, writer)
     }
 
-    #[deprecated(since = "0.0.1", note = "Use from_stream")]
+    #[deprecated(since = "0.0.1", note = "Use connect")]
     pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
     {
-        self.from_stream(stream)
+        self.connect(stream)
     }
 }
 

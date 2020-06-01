@@ -61,7 +61,7 @@ async fn onconnection(
     feedstore: Arc<FeedStore>,
 ) -> Result<()> {
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .from_stream(stream)
+        .connect(stream)
         .into_stream();
     while let Some(event) = protocol.next().await {
         let event = event?;
