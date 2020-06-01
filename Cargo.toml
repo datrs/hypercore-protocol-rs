@@ -8,7 +8,7 @@ documentation = "https://docs.rs/hypercore-protocol"
 repository = "https://github.com/Frando/hypercore-protocol-rs"
 readme = "README.md"
 edition = "2018"
-keywords = ["dat", "p2p", "stream", "feed", "hypercore", "protocol"]
+keywords = ["dat", "p2p", "replication", "hypercore", "protocol"]
 categories = [
   "asynchronous",
   "concurrency",
