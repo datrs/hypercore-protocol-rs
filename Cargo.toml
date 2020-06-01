@@ -23,7 +23,7 @@ bench = false
 
 [dependencies]
 futures = "0.3"
-snow = { git = "https://github.com/mcginty/snow.git", branch = "master", features = ["risky-raw-split"] }
+snow = { version = "0.7.0-alpha5", features = ["risky-raw-split"] }
 prost = "0.6"
 bytes = "0.5"
 varinteger = "1.0"
