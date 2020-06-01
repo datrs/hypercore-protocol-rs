@@ -1,32 +1,52 @@
 //! Speak hypercore-protocol.
 //!
 //! Most basic example:
-//! ```rust
+//! ```should_panic
 //! # async_std::task::block_on(async {
+//! # async_std::task::spawn(async move {
+//! #    futures_timer::Delay::new(std::time::Duration::from_secs(1)).await;
+//! #    panic!("exit")
+//! # });
 //! #
-//! use hypercore_protocol::{ProtocolBuilder, Event};
-//! let stream = async_std::net::connect("localhost:8000").await?;
+//! use hypercore_protocol::{ProtocolBuilder, Event, Message};
+//! use hypercore_protocol::schema::*;
+//! use async_std::prelude::*;
 //!
-//! let key = vec![0u8; 32];
-//! let protocol = ProtocolBuilder::new(true)
-//!     .build_from_stream(stream);
-//!     .into_stream();
+//! // Start a tcp server.
+//! let listener = async_std::net::TcpListener::bind("localhost:8000").await.unwrap();
+//! async_std::task::spawn(async move {
+//!     let mut incoming = listener.incoming();
+//!     while let Some(Ok(stream)) = incoming.next().await {
+//!         async_std::task::spawn(async move {
+//!             onconnection(stream, false).await
+//!         });
+//!     }
+//! });
 //!
-//! while let Some(event) = protocol.next().await {
-//!     let event = event?;
-//!     eprintln!("received event {:?}", event);
-//!     match event {
-//!         Event::Handshake(_remote_key) => {
-//!             protocol.open(key)
-//!         },
-//!         Event::DiscoveryKey(_discovery_key) => {
-//!         },
-//!         Event::Channel(channel) => {
-//!             async_std::task::spawn(async move {
-//!                 while let Some(message) = channel.next().await {
-//!                     eprintln!("received message: {:?}", message)
-//!                 }
-//!             })
+//! // Connect a client.
+//! let stream = async_std::net::TcpStream::connect("localhost:8000").await.unwrap();
+//! onconnection(stream, true).await;
+//!
+//! /// Start Hypercore protocol on a TcpStream.
+//! async fn onconnection (stream: async_std::net::TcpStream, is_initiator: bool) {
+//!     let key = vec![0u8; 32];
+//!     let mut protocol = ProtocolBuilder::new(is_initiator).from_stream(stream);
+//!
+//!     while let Ok(event) = protocol.loop_next().await {
+//!         eprintln!("[{}] received event {:?}", is_initiator, event);
+//!         match event {
+//!             Event::Handshake(_remote_key) => {
+//!                 protocol.open(key.clone()).await;
+//!             },
+//!             Event::Channel(mut channel) => {
+//!                 async_std::task::spawn(async move {
+//!                     channel.want(Want { start: 0, length: None }).await;
+//!                     while let Some(message) = channel.next().await {
+//!                         eprintln!("[{}] received message: {:?}", is_initiator, message);
+//!                     }
+//!                 });
+//!             },
+//!             _ => {}
 //!         }
 //!     }
 //! }
