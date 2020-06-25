@@ -5,6 +5,7 @@ use futures::stream::StreamExt;
 use log::*;
 use piper::pipe;
 use pretty_bytes::converter::convert as pretty_bytes;
+use std::env;
 use std::time::Instant;
 
 use hypercore_protocol::schema::*;
@@ -12,34 +13,61 @@ use hypercore_protocol::{Channel, Event, Message, Protocol, ProtocolBuilder};
 
 fn main() {
     env_logger::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    task::block_on(async_main()).unwrap();
+    let config = Config::from_env();
+    task::block_on(run_echo_pipes(config)).unwrap();
 }
 
-const COUNT: u64 = 2;
-const SIZE: u64 = 1000;
-const CONNS: u64 = 1;
+#[derive(Clone)]
+struct Config {
+    pub connections: u64,
+    pub blocksize: u64,
+    pub length: u64,
+    pub no_encrypt: bool,
+}
 
-async fn async_main() -> Result<()> {
+impl Config {
+    pub fn total_bytes(&self) -> u64 {
+        self.connections * self.blocksize * self.length * 2
+    }
+
+    pub fn from_env() -> Self {
+        Config {
+            connections: parse_env_u64("CONNECTIONS", 10),
+            blocksize: parse_env_u64("BLOCKSIZE", 1000),
+            length: parse_env_u64("LENGTH", 10000),
+            no_encrypt: env::var("NO_ENCRYPT").is_ok(),
+        }
+    }
+}
+
+async fn run_echo_pipes(config: Config) -> Result<()> {
     let start = std::time::Instant::now();
     let mut futs = vec![];
-    for i in 0..CONNS {
-        futs.push(run_echo(i));
+    for i in 0..config.connections {
+        futs.push(run_echo(config.clone(), i));
     }
     futures::future::join_all(futs).await;
-    let bytes = (COUNT * SIZE * CONNS * 2) as f64;
-    print_stats("final", start, bytes);
+    print_stats("total", start, config.total_bytes() as f64);
     Ok(())
 }
 
-async fn run_echo(i: u64) -> Result<()> {
-    let cap: usize = SIZE as usize * 10;
+async fn run_echo(config: Config, i: u64) -> Result<()> {
+    let cap: usize = config.blocksize as usize * 10;
     let (ar, bw) = pipe(cap);
     let (br, aw) = pipe(cap);
 
-    let a = ProtocolBuilder::new(true).connect_rw(ar, aw);
-    let b = ProtocolBuilder::new(false).connect_rw(br, bw);
-    let ta = task::spawn(async move { onconnection(i, a).await });
-    let tb = task::spawn(async move { onconnection(i, b).await });
+    let mut a = ProtocolBuilder::new(true);
+    let mut b = ProtocolBuilder::new(false);
+    if config.no_encrypt {
+        a = a.set_encrypted(false);
+        b = b.set_encrypted(false);
+    }
+    let a = a.connect_rw(ar, aw);
+    let b = b.connect_rw(br, bw);
+    let c = config.clone();
+    let ta = task::spawn(async move { onconnection(c, i, a).await });
+    let c = config.clone();
+    let tb = task::spawn(async move { onconnection(c, i, b).await });
     let _lena = ta.await?;
     let _lenb = tb.await?;
     Ok(())
@@ -47,7 +75,7 @@ async fn run_echo(i: u64) -> Result<()> {
 
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
-async fn onconnection<R, W>(i: u64, mut protocol: Protocol<R, W>) -> Result<u64>
+async fn onconnection<R, W>(config: Config, i: u64, mut protocol: Protocol<R, W>) -> Result<u64>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
@@ -65,11 +93,12 @@ where
                     }
                     Event::DiscoveryKey(_dkey) => {}
                     Event::Channel(channel) => {
+                        let config = config.clone();
                         task::spawn(async move {
                             if is_initiator {
-                                on_channel_init(i, channel).await
+                                on_channel_init(config, i, channel).await
                             } else {
-                                on_channel_resp(i, channel).await
+                                on_channel_resp(config, i, channel).await
                             }
                         });
                     }
@@ -86,7 +115,7 @@ where
     }
 }
 
-async fn on_channel_resp(_i: u64, mut channel: Channel) -> Result<u64> {
+async fn on_channel_resp(_config: Config, _i: u64, mut channel: Channel) -> Result<u64> {
     let mut len: u64 = 0;
     while let Some(message) = channel.next().await {
         match message {
@@ -105,8 +134,8 @@ async fn on_channel_resp(_i: u64, mut channel: Channel) -> Result<u64> {
     Ok(len)
 }
 
-async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
-    let data = vec![1u8; SIZE as usize];
+async fn on_channel_init(config: Config, i: u64, mut channel: Channel) -> Result<u64> {
+    let data = vec![1u8; config.blocksize as usize];
     let mut len: u64 = 0;
     let message = msg_data(0, data);
     channel.send(message).await?;
@@ -118,7 +147,7 @@ async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
             Message::Data(mut data) => {
                 len += data.value.as_ref().map_or(0, |v| v.len() as u64);
                 debug!("[a] recv {}", data.index);
-                if data.index >= COUNT {
+                if data.index >= config.length {
                     debug!("close at {}", data.index);
                     channel
                         .send(Message::Close(Close {
@@ -134,7 +163,6 @@ async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
             _ => {}
         }
     }
-    // let bytes = (COUNT * SIZE) as f64;
     print_stats(i, start, len as f64);
     Ok(len)
 }
@@ -160,4 +188,10 @@ fn print_stats(msg: impl ToString, instant: Instant, bytes: f64) {
         pretty_bytes(bytes),
         pretty_bytes(bs)
     );
+}
+
+fn parse_env_u64(name: &str, default: u64) -> u64 {
+    env::var(name)
+        .map(|v| v.parse().unwrap())
+        .unwrap_or(default)
 }
