@@ -243,16 +243,15 @@ where
         self.options.is_initiator
     }
 
-    /// Wait for the next protocol event.
+    /// Processing a single interaction loop, either for inbound or outbound events.
+    /// Also executed by the `loop_next` method.
+    ///
+    /// Returns a Ok(Some(event)) if the next processed message is an inbound [Event].
+    ///
+    /// Returns a Ok(None) if the next processed messag is an inbound channel message or an outboud channel message.
     ///
     /// This function should be called in a loop until this returns an error.
-    pub async fn loop_next(&mut self) -> Result<Event> {
-        // trace!(
-        //     "[{}] loop_next start, state {:?} events.len {}",
-        //     self.is_initiator(),
-        //     self.state,
-        //     self.events.len()
-        // );
+    pub async fn handle_next(&mut self) -> Result<Option<Event>> {
         if let State::NotInitialized = self.state {
             self.init().await?;
         }
@@ -263,62 +262,81 @@ where
             Delay::new(KEEPALIVE_DURATION).fuse()
         };
 
+        if let Some(event) = self.events.pop_front() {
+            return Ok(Some(event));
+        }
+
+        let event = futures::select! {
+            // Keepalive timer for pings
+            _ = keepalive => {
+                // trace!("[{}] handle_next ! keepalive", self.is_initiator());
+                self.ping().await?;
+                // TODO: It would be better to `reset` the keepalive and not recreate it.
+                // I couldn't get this to work with `fuse()` though which is needed for
+                // the `select!` macro.
+                keepalive = Delay::new(KEEPALIVE_DURATION).fuse();
+                None
+            },
+            // New wire message incoming
+            buf = self.reader.select_next_some() => {
+                // trace!("[{}] handle_next ! incoming message", self.is_initiator());
+                self.on_message(buf?).await?
+            },
+            // New outbound message
+            channel_message = self.outbound_rx.select_next_some() => {
+                // trace!("[{}] handle_next ! outbound_rx", self.is_initiator());
+                let event = match channel_message {
+                    ChannelMessage { channel, message: Message::Close(_) } => {
+                        self.close_local(channel).await?
+                    },
+                    _ => None
+                };
+                self.send(channel_message).await?;
+                // trace!("[{}] handle_next ! outbound_rx SENT", self.is_initiator());
+                event
+            },
+            // New control message
+            ev = self.control_rx.select_next_some() => {
+                // trace!("[{}] handle_next ! control_rx", self.is_initiator());
+                match ev {
+                    ControlEvent::Open(key) => {
+                        self.open(key).await?;
+                        None
+                    }
+                }
+            },
+        };
+
+        if let Some(event) = event {
+            self.keepalive = Some(keepalive);
+            return Ok(Some(event));
+        }
+
+        return Ok(None);
+    }
+
+    /// Wait for the next protocol event.
+    ///
+    /// This function should be called in a loop until this returns an error.
+    pub async fn loop_next(&mut self) -> Result<Event> {
+        // trace!(
+        //     "[{}] loop_next start, state {:?} events.len {}",
+        //     self.is_initiator(),
+        //     self.state,
+        //     self.events.len()
+        // );
+
         // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
         // If data was received, reset the keepalive timer.
         loop {
             // trace!("[{}] loop_next loop in", self.is_initiator());
-
-            if let Some(event) = self.events.pop_front() {
-                return Ok(event);
-            }
-
-            let event = futures::select! {
-                // Keepalive timer for pings
-                _ = keepalive => {
-                    // trace!("[{}] loop_next ! keepalive", self.is_initiator());
-                    self.ping().await?;
-                    // TODO: It would be better to `reset` the keepalive and not recreate it.
-                    // I couldn't get this to work with `fuse()` though which is needed for
-                    // the `select!` macro.
-                    keepalive = Delay::new(KEEPALIVE_DURATION).fuse();
-                    None
-                },
-                // New wire message incoming
-                buf = self.reader.select_next_some() => {
-                    // trace!("[{}] loop_next ! incoming message", self.is_initiator());
-                    self.on_message(buf?).await?
-                },
-                // New outbound message
-                channel_message = self.outbound_rx.select_next_some() => {
-                    // trace!("[{}] loop_next ! outbound_rx", self.is_initiator());
-                    let event = match channel_message {
-                        ChannelMessage { channel, message: Message::Close(_) } => {
-                            self.close_local(channel).await?
-                        },
-                        _ => None
-                    };
-                    self.send(channel_message).await?;
-                    // trace!("[{}] loop_next ! outbound_rx SENT", self.is_initiator());
-                    event
-                },
-                // New control message
-                ev = self.control_rx.select_next_some() => {
-                    // trace!("[{}] loop_next ! control_rx", self.is_initiator());
-                    match ev {
-                        ControlEvent::Open(key) => {
-                            self.open(key).await?;
-                            None
-                        }
-                    }
-                },
-            };
+            let possible_event = self.handle_next().await?;
             // trace!(
             //     "[{}] loop_next loop out, event {:?}",
             //     self.is_initiator(),
             //     event
             // );
-            if let Some(event) = event {
-                self.keepalive = Some(keepalive);
+            if let Some(event) = possible_event {
                 return Ok(event);
             }
         }
