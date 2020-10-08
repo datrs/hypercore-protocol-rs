@@ -39,7 +39,7 @@ instant = "0.1"
 getrandom = "0.1"
 
 [dev-dependencies]
-async-std = "1.5"
+async-std = { version = "1.5.0", features = ["attributes"] }
 env_logger = "0.7.1"
 hypercore = { git = "https://github.com/datrs/hypercore", branch = "master" }
 random-access-disk = "2.0.0"

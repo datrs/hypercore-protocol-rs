@@ -23,6 +23,7 @@ pub struct Channel {
     pub(crate) recv_rx: Option<Receiver<Message>>,
     pub(crate) send_tx: Sender<Message>,
     pub(crate) discovery_key: Vec<u8>,
+    pub(crate) local_id: usize,
 }
 
 impl fmt::Debug for Channel {
@@ -37,6 +38,10 @@ impl Channel {
     /// Get the discovery key of this channel.
     pub fn discovery_key(&self) -> &[u8] {
         &self.discovery_key
+    }
+
+    pub fn id(&self) -> usize {
+        self.local_id
     }
 
     /// Send a message over the channel.
@@ -163,30 +168,34 @@ impl InnerChannel {
         self.remote_capability = remote_capability;
     }
 
-    pub(crate) async fn recv(&mut self, message: Message) -> Result<()> {
-        if let Some(recv_tx) = self.recv_tx.as_mut() {
-            match recv_tx.send(message).await {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    if err.is_disconnected() {
-                        Ok(())
-                    } else {
-                        Err(Error::new(
-                            ErrorKind::BrokenPipe,
-                            "Cannot forward on channel: Channel is full",
-                        ))
-                    }
-                }
-            }
-        } else {
-            Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "Cannot forward: Channel missing",
-            ))
-        }
+    // pub(crate) async fn recv(&mut self, message: Message) -> Result<()> {
+    //     if let Some(recv_tx) = self.recv_tx.as_mut() {
+    //         match recv_tx.send(message).await {
+    //             Ok(_) => Ok(()),
+    //             Err(err) => {
+    //                 if err.is_disconnected() {
+    //                     Ok(())
+    //                 } else {
+    //                     Err(Error::new(
+    //                         ErrorKind::BrokenPipe,
+    //                         "Cannot forward on channel: Channel is full",
+    //                     ))
+    //                 }
+    //             }
+    //         }
+    //     } else {
+    //         Err(Error::new(
+    //             ErrorKind::BrokenPipe,
+    //             "Cannot forward: Channel missing",
+    //         ))
+    //     }
+    // }
+
+    pub(crate) fn id(&self) -> Option<usize> {
+        self.local_id
     }
 
-    pub(crate) async fn open(&mut self) -> Result<(Channel, impl Stream<Item = ChannelMessage>)> {
+    pub(crate) fn open(&mut self) -> (Channel, impl Stream<Item = ChannelMessage>) {
         let local_id = self
             .local_id
             .expect("May not open channel that is not locally attached");
@@ -198,25 +207,14 @@ impl InnerChannel {
             recv_rx: Some(recv_rx),
             send_tx,
             discovery_key: self.discovery_key.clone(),
+            local_id,
         };
 
         let send_rx_mapped =
             send_rx.map(move |message| message.into_channel_message(local_id as u64));
 
-        let message = Open {
-            discovery_key: self.discovery_key.clone(),
-            capability: None,
-        };
         self.recv_tx = Some(recv_tx);
-        self.recv(Message::Open(message)).await?;
-        Ok((outer_channel, send_rx_mapped))
-    }
-
-    pub(crate) async fn recv_close(&mut self, message: Option<Close>) -> Result<()> {
-        let message = message.unwrap_or_else(|| Close {
-            discovery_key: None,
-        });
-        self.recv(Message::Close(message)).await
+        (outer_channel, send_rx_mapped)
     }
 }
 
@@ -256,30 +254,30 @@ impl Channelizer {
         }
     }
 
-    pub fn _get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut InnerChannel> {
-        let hdkey = hex::encode(discovery_key);
-        self.channels.get_mut(&hdkey)
-    }
+    // pub fn _get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut InnerChannel> {
+    //     let hdkey = hex::encode(discovery_key);
+    //     self.channels.get_mut(&hdkey)
+    // }
 
-    pub async fn forward(&mut self, remote_id: usize, message: Message) -> Result<()> {
-        self.get_remote_mut(remote_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::BrokenPipe,
-                    format!("Cannot forward: Channel {} is not open", remote_id),
-                )
-            })?
-            .recv(message)
-            .await
-    }
+    // pub async fn forward(&mut self, remote_id: usize, message: Message) -> Result<()> {
+    //     self.get_remote_mut(remote_id)
+    //         .ok_or_else(|| {
+    //             Error::new(
+    //                 ErrorKind::BrokenPipe,
+    //                 format!("Cannot forward: Channel {} is not open", remote_id),
+    //             )
+    //         })?
+    //         .recv(message)
+    //         .await
+    // }
 
-    pub fn _get_remote(&self, id: usize) -> Option<&InnerChannel> {
-        if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
-            self.channels.get(hdkey)
-        } else {
-            None
-        }
-    }
+    // pub fn _get_remote(&self, id: usize) -> Option<&InnerChannel> {
+    //     if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+    //         self.channels.get(hdkey)
+    //     } else {
+    //         None
+    //     }
+    // }
 
     pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut InnerChannel> {
         if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {

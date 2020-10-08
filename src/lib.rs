@@ -59,6 +59,7 @@
 // Otherwise some macro calls in the next_loop are prohibited.
 #![recursion_limit = "256"]
 
+mod builder;
 mod channels;
 mod constants;
 mod message;
@@ -74,7 +75,8 @@ pub mod schema {
     pub use crate::message::ExtensionMessage;
 }
 
+pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 pub use message::Message;
-pub use protocol::{Event, Protocol, ProtocolBuilder, ProtocolOptions, ProtocolStream};
+pub use protocol::{Event, Protocol, ProtocolStream};
 pub use util::discovery_key;

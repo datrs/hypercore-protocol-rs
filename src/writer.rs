@@ -1,5 +1,6 @@
 use crate::noise::{Cipher, HandshakeResult};
-use futures::io::{AsyncWrite, AsyncWriteExt};
+use futures::io::AsyncWrite;
+use futures::ready;
 use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -10,6 +11,7 @@ where
 {
     cipher: Option<Cipher>,
     writer: W,
+    pos: usize,
 }
 
 impl<W> ProtocolWriter<W>
@@ -20,7 +22,30 @@ where
         Self {
             cipher: None,
             writer,
+            pos: 0,
         }
+    }
+
+    pub fn poll_write_message(
+        mut self: Pin<&mut Self>,
+        message: &[u8],
+        mut cx: &mut Context,
+    ) -> Poll<Result<()>> {
+        while self.pos < message.len() - 1 {
+            let pos = self.pos;
+            let n = ready!(ProtocolWriter::poll_write(
+                Pin::new(&mut self),
+                cx,
+                &message[pos..]
+            ));
+            let n = n?;
+            self.pos += n;
+        }
+        self.poll_flush(&mut cx)
+    }
+
+    pub fn reset(self: &mut Self) {
+        self.pos = 0;
     }
 
     pub fn into_inner(self) -> W {
@@ -31,27 +56,6 @@ where
         let cipher = Cipher::from_handshake_tx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
-    }
-
-    pub async fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
-        self.write_all(&buf).await?;
-        self.flush().await
-    }
-
-    pub async fn send_prefixed(&mut self, buf: &[u8]) -> Result<()> {
-        let len = buf.len();
-        let prefix_len = varinteger::length(len as u64);
-        let mut prefix_buf = vec![0u8; prefix_len];
-        varinteger::encode(len as u64, &mut prefix_buf[..prefix_len]);
-        // trace!("send len {} {:?}", buf.len(), buf);
-        self.write_all(&prefix_buf).await?;
-        self.write_all(&buf).await?;
-        self.flush().await
-    }
-
-    pub async fn ping(&mut self) -> Result<()> {
-        let buf = vec![0u8];
-        self.send_raw(&buf).await
     }
 }
 
