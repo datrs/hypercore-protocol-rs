@@ -101,6 +101,7 @@ where
 }
 
 /// A container for hypercores.
+#[derive(Debug)]
 struct FeedStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
@@ -161,6 +162,11 @@ where
         let mut state = PeerState::default();
         let mut feed = self.feed.clone();
         task::spawn(async move {
+            let msg = Want {
+                start: 0,
+                length: None,
+            };
+            channel.send(Message::Want(msg)).await.unwrap();
             while let Some(message) = channel.next().await {
                 let result = onmessage(&mut feed, &mut state, &mut channel, message).await;
                 if let Err(e) = result {
@@ -222,11 +228,11 @@ where
             let value: Option<&[u8]> = match msg.value.as_ref() {
                 None => None,
                 Some(value) => {
-                    eprintln!(
-                        "recv idx {}: {:?}",
-                        msg.index,
-                        String::from_utf8(value.clone()).unwrap()
-                    );
+                    // eprintln!(
+                    //     "recv idx {}: {:?}",
+                    //     msg.index,
+                    //     String::from_utf8(value.clone()).unwrap()
+                    // );
                     Some(value)
                 }
             };
