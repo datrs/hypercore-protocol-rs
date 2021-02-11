@@ -1,9 +1,10 @@
 use crate::noise::{Cipher, HandshakeResult};
+use crate::util::length_prefix;
 use futures::io::AsyncWrite;
 use futures::ready;
-use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{collections::VecDeque, io::Result};
 
 pub struct ProtocolWriter<W>
 where
@@ -12,6 +13,7 @@ where
     cipher: Option<Cipher>,
     writer: W,
     pos: usize,
+    queue: VecDeque<Vec<u8>>,
 }
 
 impl<W> ProtocolWriter<W>
@@ -23,28 +25,53 @@ where
             cipher: None,
             writer,
             pos: 0,
+            queue: VecDeque::new(),
         }
     }
 
-    pub fn poll_write_message(
-        mut self: Pin<&mut Self>,
+    pub fn queue_message(&mut self, message: Vec<u8>) {
+        let prefix = length_prefix(&message);
+        self.queue_raw(prefix);
+        self.queue_raw(message)
+    }
+
+    pub fn queue_raw(&mut self, mut message: Vec<u8>) {
+        self.encrypt(&mut message);
+        self.queue.push_back(message);
+    }
+
+    pub fn poll_write_all(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
+        let this = self.get_mut();
+        while let Some(message) = this.queue.pop_front() {
+            match this.poll_write_message(&message, cx) {
+                Poll::Ready(Ok(_)) => {}
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => {
+                    this.queue.push_front(message);
+                    return Poll::Pending;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_write_message(
+        mut self: &mut Self,
         message: &[u8],
-        mut cx: &mut Context,
+        cx: &mut Context,
     ) -> Poll<Result<()>> {
-        while self.pos < message.len() - 1 {
+        while self.pos < message.len() {
             let pos = self.pos;
-            let n = ready!(ProtocolWriter::poll_write(
-                Pin::new(&mut self),
-                cx,
-                &message[pos..]
-            ));
+            let n = ready!(Pin::new(&mut self.writer).poll_write(cx, &message[pos..]));
             let n = n?;
             self.pos += n;
         }
-        self.poll_flush(&mut cx)
+        let res = ready!(Pin::new(&mut self.writer).poll_flush(cx));
+        self.reset();
+        Poll::Ready(res)
     }
 
-    pub fn reset(self: &mut Self) {
+    fn reset(self: &mut Self) {
         self.pos = 0;
     }
 
@@ -57,28 +84,10 @@ where
         self.cipher = Some(cipher);
         Ok(())
     }
-}
 
-impl<W> AsyncWrite for ProtocolWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        let mut buffer = buf.to_vec();
-
+    fn encrypt(&mut self, mut buf: &mut [u8]) {
         if let Some(ref mut cipher) = &mut self.cipher {
-            cipher.apply(&mut buffer);
+            cipher.apply(&mut buf);
         }
-
-        let sent = futures::ready!(Pin::new(&mut self.writer).poll_write(cx, &buffer))?;
-        Poll::Ready(Ok(sent))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        Pin::new(&mut self.writer).poll_flush(cx)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        Pin::new(&mut self.writer).poll_close(cx)
     }
 }

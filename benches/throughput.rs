@@ -1,7 +1,7 @@
 use async_std::net::{Shutdown, TcpListener, TcpStream};
 use async_std::task;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use futures::future::{Either, FutureExt, TryFutureExt};
+use futures::future::Either;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::{FuturesUnordered, StreamExt};
 use hypercore_protocol::schema::*;
@@ -97,7 +97,8 @@ where
     let mut protocol = ProtocolBuilder::new(is_initiator)
         .set_encrypted(false)
         .connect_rw(reader, writer);
-    while let Ok(event) = protocol.loop_next().await {
+    while let Some(Ok(event)) = protocol.next().await {
+        // eprintln!("RECV EVENT [{}] {:?}", protocol.is_initiator(), event);
         match event {
             Event::Handshake(_) => {
                 protocol.open(key.clone()).await.unwrap();
@@ -107,10 +108,9 @@ where
                 task::spawn(onchannel(channel, is_initiator));
             }
             Event::Close(_dkey) => {
-                if is_initiator {
-                    return protocol.release();
-                }
+                return protocol.release();
             }
+            _ => {}
         }
     }
     protocol.release()
@@ -122,12 +122,11 @@ async fn onchannel(mut channel: Channel, is_initiator: bool) {
     } else {
         channel_server(&mut channel).await
     }
-    channel
+    let _res = channel
         .send(Message::Close(Close {
             discovery_key: None,
         }))
-        .await
-        .unwrap();
+        .await;
 }
 
 async fn channel_server(channel: &mut Channel) {

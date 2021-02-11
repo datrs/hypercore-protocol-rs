@@ -1,28 +1,28 @@
-use crate::discovery_key;
 use crate::message::ChannelMessage;
-use crate::schema::Open;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
-use futures::channel::mpsc::{Receiver, Sender};
-use futures::sink::SinkExt;
-use futures::stream::{Stream, StreamExt};
-use hex;
+use crate::{discovery_key, DiscoveryKey, Key};
+use futures::task::Context;
+// use futures::channel::mpsc::{Receiver, Sender};
+use async_channel::{Receiver, Sender};
+use futures::stream::{SelectAll, Stream, StreamExt};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::Poll;
 
-const CHANNEL_CAP: usize = 1000;
+/// The output of the set of channel senders.
+type OutboundRx = SelectAll<Box<dyn Stream<Item = ChannelMessage> + Send + Unpin>>;
 
 /// A protocol channel.
 ///
-/// This is the outer channel handler that can be sent to other threads.
+/// This is the handle that can be sent to other threads.
 pub struct Channel {
-    pub(crate) recv_rx: Option<Receiver<Message>>,
-    pub(crate) send_tx: Sender<Message>,
-    pub(crate) discovery_key: Vec<u8>,
+    pub(crate) inbound_rx: Option<Receiver<Message>>,
+    pub(crate) outbound_tx: Sender<Message>,
+    pub(crate) discovery_key: DiscoveryKey,
     pub(crate) local_id: usize,
 }
 
@@ -46,11 +46,14 @@ impl Channel {
 
     /// Send a message over the channel.
     pub async fn send(&mut self, message: Message) -> Result<()> {
-        self.send_tx.send(message).await.map_err(map_channel_err)
+        self.outbound_tx
+            .send(message)
+            .await
+            .map_err(map_channel_err)
     }
 
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
-        self.recv_rx.take()
+        self.inbound_rx.take()
     }
 
     /// Send a status message.
@@ -110,40 +113,40 @@ impl Stream for Channel {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        if self.recv_rx.is_none() {
+        if self.inbound_rx.is_none() {
             Poll::Ready(None)
         } else {
-            Pin::new(&mut self.recv_rx.as_mut().unwrap()).poll_next(cx)
+            Pin::new(&mut self.inbound_rx.as_mut().unwrap()).poll_next(cx)
         }
     }
 }
 
-/// The inner part of a channel.
+/// The handle for a channel that lives with the main Protocol.
 ///
 /// This lives with the main protocol.
 #[derive(Clone, Debug)]
-pub(crate) struct InnerChannel {
-    pub discovery_key: Vec<u8>,
-    pub key: Option<Vec<u8>>,
+pub(crate) struct ChannelHandle {
+    pub discovery_key: DiscoveryKey,
+    pub key: Option<Key>,
     pub local_id: Option<usize>,
     pub remote_id: Option<usize>,
-    pub recv_tx: Option<Sender<Message>>,
+    pub inbound_tx: Option<Sender<Message>>,
     pub remote_capability: Option<Vec<u8>>,
 }
 
-impl InnerChannel {
-    pub(crate) fn new_by_local(local_id: usize, discovery_key: Vec<u8>, key: Vec<u8>) -> Self {
+impl ChannelHandle {
+    fn new_local(local_id: usize, discovery_key: Vec<u8>, key: Vec<u8>) -> Self {
         Self {
             key: Some(key),
             discovery_key,
             local_id: Some(local_id),
             remote_id: None,
-            recv_tx: None,
+            inbound_tx: None,
             remote_capability: None,
         }
     }
 
-    pub(crate) fn new_by_remote(
+    fn new_remote(
         remote_id: usize,
         discovery_key: Vec<u8>,
         remote_capability: Option<Vec<u8>>,
@@ -154,7 +157,7 @@ impl InnerChannel {
             remote_capability,
             local_id: None,
             key: None,
-            recv_tx: None,
+            inbound_tx: None,
         }
     }
 
@@ -168,31 +171,8 @@ impl InnerChannel {
         self.remote_capability = remote_capability;
     }
 
-    // pub(crate) async fn recv(&mut self, message: Message) -> Result<()> {
-    //     if let Some(recv_tx) = self.recv_tx.as_mut() {
-    //         match recv_tx.send(message).await {
-    //             Ok(_) => Ok(()),
-    //             Err(err) => {
-    //                 if err.is_disconnected() {
-    //                     Ok(())
-    //                 } else {
-    //                     Err(Error::new(
-    //                         ErrorKind::BrokenPipe,
-    //                         "Cannot forward on channel: Channel is full",
-    //                     ))
-    //                 }
-    //             }
-    //         }
-    //     } else {
-    //         Err(Error::new(
-    //             ErrorKind::BrokenPipe,
-    //             "Cannot forward: Channel missing",
-    //         ))
-    //     }
-    // }
-
-    pub(crate) fn id(&self) -> Option<usize> {
-        self.local_id
+    pub fn is_connected(&self) -> bool {
+        self.local_id.is_some() && self.remote_id.is_some()
     }
 
     pub(crate) fn open(&mut self) -> (Channel, impl Stream<Item = ChannelMessage>) {
@@ -200,86 +180,92 @@ impl InnerChannel {
             .local_id
             .expect("May not open channel that is not locally attached");
 
-        let (send_tx, send_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
-        let (recv_tx, recv_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
+        let (outbound_tx, outbound_rx) = async_channel::unbounded();
+        let (inbound_tx, inbound_rx) = async_channel::unbounded();
 
-        let outer_channel = Channel {
-            recv_rx: Some(recv_rx),
-            send_tx,
+        let channel = Channel {
+            inbound_rx: Some(inbound_rx),
+            outbound_tx,
             discovery_key: self.discovery_key.clone(),
             local_id,
         };
 
-        let send_rx_mapped =
-            send_rx.map(move |message| message.into_channel_message(local_id as u64));
+        let outbound_rx_mapped =
+            outbound_rx.map(move |message| message.into_channel_message(local_id as u64));
 
-        self.recv_tx = Some(recv_tx);
-        (outer_channel, send_rx_mapped)
+        self.inbound_tx = Some(inbound_tx);
+        (channel, outbound_rx_mapped)
+    }
+
+    pub(crate) fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
+        if let Some(inbound_tx) = self.inbound_tx.as_mut() {
+            inbound_tx
+                .try_send(message)
+                .map_err(|_e| std::io::Error::new(ErrorKind::Other, "Channel is full"))
+        // inbound_tx.send(message)
+        } else {
+            Err(std::io::Error::new(
+                ErrorKind::Other,
+                "Channel is not opened",
+            ))
+        }
     }
 }
 
-/// The Channelizer maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
-#[derive(Debug)]
-pub(crate) struct Channelizer {
-    channels: HashMap<String, InnerChannel>,
+/// The ChannelMap maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
+// #[derive(Debug)]
+pub(crate) struct ChannelMap {
+    channels: HashMap<String, ChannelHandle>,
     local_id: Vec<Option<String>>,
     remote_id: Vec<Option<String>>,
+    outbound_rx: OutboundRx,
 }
 
-impl Channelizer {
+impl ChannelMap {
     pub fn new() -> Self {
         Self {
             channels: HashMap::new(),
             local_id: Vec::new(),
             remote_id: Vec::new(),
+            outbound_rx: SelectAll::new(),
         }
     }
 
-    fn alloc_local(&mut self) -> usize {
-        let empty_id = self.local_id.iter().position(|x| x.is_none());
-        match empty_id {
-            Some(empty_id) => empty_id,
-            None => {
-                self.local_id.push(None);
-                self.local_id.len() - 1
-            }
-        }
+    pub fn attach_local(&mut self, key: Key) -> &ChannelHandle {
+        let discovery_key = discovery_key(&key);
+        let hdkey = hex::encode(&discovery_key);
+        let local_id = self.alloc_local();
+
+        self.channels
+            .entry(hdkey.clone())
+            .and_modify(|channel| channel.attach_local(local_id, key.clone()))
+            .or_insert_with(|| {
+                ChannelHandle::new_local(local_id, discovery_key.clone(), key.clone())
+            });
+
+        self.local_id[local_id] = Some(hdkey.clone());
+        self.channels.get(&hdkey).unwrap()
     }
 
-    fn alloc_remote(&mut self, id: usize) {
-        if self.remote_id.len() > id {
-            self.remote_id[id] = None;
-        } else {
-            self.remote_id.resize(id + 1, None)
-        }
+    pub fn attach_remote(
+        &mut self,
+        discovery_key: DiscoveryKey,
+        remote_id: usize,
+        remote_capability: Option<Vec<u8>>,
+    ) -> &ChannelHandle {
+        let hdkey = hex::encode(&discovery_key);
+        self.alloc_remote(remote_id);
+        self.channels
+            .entry(hdkey.clone())
+            .and_modify(|channel| channel.attach_remote(remote_id, remote_capability.clone()))
+            .or_insert_with(|| {
+                ChannelHandle::new_remote(remote_id, discovery_key, remote_capability)
+            });
+        self.remote_id[remote_id] = Some(hdkey.clone());
+        self.channels.get(&hdkey).unwrap()
     }
 
-    // pub fn _get_mut(&mut self, discovery_key: &[u8]) -> Option<&mut InnerChannel> {
-    //     let hdkey = hex::encode(discovery_key);
-    //     self.channels.get_mut(&hdkey)
-    // }
-
-    // pub async fn forward(&mut self, remote_id: usize, message: Message) -> Result<()> {
-    //     self.get_remote_mut(remote_id)
-    //         .ok_or_else(|| {
-    //             Error::new(
-    //                 ErrorKind::BrokenPipe,
-    //                 format!("Cannot forward: Channel {} is not open", remote_id),
-    //             )
-    //         })?
-    //         .recv(message)
-    //         .await
-    // }
-
-    // pub fn _get_remote(&self, id: usize) -> Option<&InnerChannel> {
-    //     if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
-    //         self.channels.get(hdkey)
-    //     } else {
-    //         None
-    //     }
-    // }
-
-    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut InnerChannel> {
+    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
             self.channels.get_mut(hdkey)
         } else {
@@ -287,9 +273,25 @@ impl Channelizer {
         }
     }
 
-    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut InnerChannel> {
+    pub fn get_remote(&self, id: usize) -> Option<&ChannelHandle> {
+        if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+            self.channels.get(hdkey)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
             self.channels.get_mut(hdkey)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_local(&self, id: usize) -> Option<&ChannelHandle> {
+        if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
+            self.channels.get(hdkey)
         } else {
             None
         }
@@ -309,37 +311,63 @@ impl Channelizer {
         self.channels.remove(&hdkey);
     }
 
-    pub fn attach_local(&mut self, key: Vec<u8>) -> &InnerChannel {
-        let discovery_key = discovery_key(&key);
-        let hdkey = hex::encode(&discovery_key);
-        let local_id = self.alloc_local();
-
-        self.channels
-            .entry(hdkey.clone())
-            .and_modify(|channel| channel.attach_local(local_id, key.clone()))
-            .or_insert_with(|| {
-                InnerChannel::new_by_local(local_id, discovery_key.clone(), key.clone())
-            });
-
-        self.local_id[local_id] = Some(hdkey.clone());
-        self.channels.get(&hdkey).unwrap()
+    pub fn prepare_to_verify(&self, local_id: usize) -> Result<(&Vec<u8>, Option<&Vec<u8>>)> {
+        let channel_handle = self
+            .get_local(local_id)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Channel not found"))?;
+        let remote_capability = channel_handle.remote_capability.as_ref();
+        let key = channel_handle
+            .key
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Missing key"))?;
+        Ok((key, remote_capability))
     }
 
-    pub fn attach_remote(
-        &mut self,
-        discovery_key: Vec<u8>,
-        remote_id: usize,
-        remote_capability: Option<Vec<u8>>,
-    ) -> &InnerChannel {
-        let hdkey = hex::encode(&discovery_key);
-        self.alloc_remote(remote_id);
-        self.channels
-            .entry(hdkey.clone())
-            .and_modify(|channel| channel.attach_remote(remote_id, remote_capability.clone()))
-            .or_insert_with(|| {
-                InnerChannel::new_by_remote(remote_id, discovery_key, remote_capability)
-            });
-        self.remote_id[remote_id] = Some(hdkey.clone());
-        self.channels.get(&hdkey).unwrap()
+    pub fn accept(&mut self, local_id: usize) -> Result<Channel> {
+        let channel_handle = self
+            .get_local_mut(local_id)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Channel not found"))?;
+        if !channel_handle.is_connected() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Channel is not opened from remote",
+            ));
+        }
+        let (channel, send_rx) = channel_handle.open();
+        self.outbound_rx.push(Box::new(send_rx));
+        Ok(channel)
+    }
+
+    pub fn forward_inbound_message(&mut self, remote_id: usize, message: Message) -> Result<()> {
+        if let Some(channel_handle) = self.get_remote_mut(remote_id) {
+            channel_handle.try_send_inbound(message)?;
+        }
+        Ok(())
+    }
+
+    pub fn poll_next_outbound(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+    ) -> Poll<Option<ChannelMessage>> {
+        Pin::new(&mut self.outbound_rx).poll_next(cx)
+    }
+
+    fn alloc_local(&mut self) -> usize {
+        let empty_id = self.local_id.iter().position(|x| x.is_none());
+        match empty_id {
+            Some(empty_id) => empty_id,
+            None => {
+                self.local_id.push(None);
+                self.local_id.len() - 1
+            }
+        }
+    }
+
+    fn alloc_remote(&mut self, id: usize) {
+        if self.remote_id.len() > id {
+            self.remote_id[id] = None;
+        } else {
+            self.remote_id.resize(id + 1, None)
+        }
     }
 }

@@ -70,9 +70,7 @@ async fn onconnection<T: 'static>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    let mut protocol = ProtocolBuilder::new(is_initiator)
-        .connect(stream)
-        .into_stream();
+    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 
     while let Some(event) = protocol.next().await {
         let event = event?;
@@ -96,6 +94,7 @@ where
                 }
             }
             Event::Close(_dkey) => {}
+            _ => {}
         }
     }
     Ok(())
