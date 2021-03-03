@@ -3,27 +3,23 @@ use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
 use crate::{discovery_key, DiscoveryKey, Key};
-use futures::task::Context;
-// use futures::channel::mpsc::{Receiver, Sender};
 use async_channel::{Receiver, Sender};
-use futures::stream::{SelectAll, Stream, StreamExt};
+use futures::stream::Stream;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::Poll;
 
-/// The output of the set of channel senders.
-type OutboundRx = SelectAll<Box<dyn Stream<Item = ChannelMessage> + Send + Unpin>>;
-
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
 pub struct Channel {
-    pub(crate) inbound_rx: Option<Receiver<Message>>,
-    pub(crate) outbound_tx: Sender<Message>,
-    pub(crate) discovery_key: DiscoveryKey,
-    pub(crate) local_id: usize,
+    inbound_rx: Option<Receiver<Message>>,
+    outbound_tx: Sender<ChannelMessage>,
+    key: Key,
+    discovery_key: DiscoveryKey,
+    local_id: usize,
 }
 
 impl fmt::Debug for Channel {
@@ -36,8 +32,13 @@ impl fmt::Debug for Channel {
 
 impl Channel {
     /// Get the discovery key of this channel.
-    pub fn discovery_key(&self) -> &[u8] {
+    pub fn discovery_key(&self) -> &[u8; 32] {
         &self.discovery_key
+    }
+
+    /// Get the key of this channel.
+    pub fn key(&self) -> &[u8; 32] {
+        &self.key
     }
 
     pub fn id(&self) -> usize {
@@ -46,6 +47,7 @@ impl Channel {
 
     /// Send a message over the channel.
     pub async fn send(&mut self, message: Message) -> Result<()> {
+        let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(message)
             .await
@@ -113,10 +115,9 @@ impl Stream for Channel {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        if self.inbound_rx.is_none() {
-            Poll::Ready(None)
-        } else {
-            Pin::new(&mut self.inbound_rx.as_mut().unwrap()).poll_next(cx)
+        match self.inbound_rx.as_mut() {
+            None => Poll::Ready(None),
+            Some(inbound_rx) => Pin::new(inbound_rx).poll_next(cx),
         }
     }
 }
@@ -126,24 +127,37 @@ impl Stream for Channel {
 /// This lives with the main protocol.
 #[derive(Clone, Debug)]
 pub(crate) struct ChannelHandle {
-    pub discovery_key: DiscoveryKey,
-    pub key: Option<Key>,
-    pub local_id: Option<usize>,
-    pub remote_id: Option<usize>,
-    pub inbound_tx: Option<Sender<Message>>,
-    pub remote_capability: Option<Vec<u8>>,
+    discovery_key: DiscoveryKey,
+    local_state: Option<LocalState>,
+    remote_state: Option<RemoteState>,
+    inbound_tx: Option<Sender<Message>>,
+}
+
+#[derive(Clone, Debug)]
+struct LocalState {
+    key: Key,
+    local_id: usize,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteState {
+    remote_id: usize,
+    remote_capability: Option<Vec<u8>>,
 }
 
 impl ChannelHandle {
-    fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
+    fn new(discovery_key: DiscoveryKey) -> Self {
         Self {
-            key: Some(key),
             discovery_key,
-            local_id: Some(local_id),
-            remote_id: None,
+            local_state: None,
+            remote_state: None,
             inbound_tx: None,
-            remote_capability: None,
         }
+    }
+    fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
+        let mut this = Self::new(discovery_key);
+        this.attach_local(local_id, key);
+        this
     }
 
     fn new_remote(
@@ -151,74 +165,85 @@ impl ChannelHandle {
         discovery_key: DiscoveryKey,
         remote_capability: Option<Vec<u8>>,
     ) -> Self {
-        Self {
-            discovery_key,
-            remote_id: Some(remote_id),
+        let mut this = Self::new(discovery_key);
+        this.attach_remote(remote_id, remote_capability);
+        this
+    }
+
+    pub fn discovery_key(&self) -> &[u8; 32] {
+        &self.discovery_key
+    }
+
+    pub fn local_id(&self) -> Option<usize> {
+        self.local_state.as_ref().map(|s| s.local_id)
+    }
+
+    pub fn remote_id(&self) -> Option<usize> {
+        self.remote_state.as_ref().map(|s| s.remote_id)
+    }
+
+    pub fn attach_local(&mut self, local_id: usize, key: Key) {
+        let local_state = LocalState { local_id, key };
+        self.local_state = Some(local_state);
+    }
+
+    pub fn attach_remote(&mut self, remote_id: usize, remote_capability: Option<Vec<u8>>) {
+        let remote_state = RemoteState {
+            remote_id,
             remote_capability,
-            local_id: None,
-            key: None,
-            inbound_tx: None,
-        }
-    }
-
-    pub(crate) fn attach_local(&mut self, local_id: usize, key: Key) {
-        self.local_id = Some(local_id);
-        self.key = Some(key);
-    }
-
-    pub(crate) fn attach_remote(&mut self, remote_id: usize, remote_capability: Option<Vec<u8>>) {
-        self.remote_id = Some(remote_id);
-        self.remote_capability = remote_capability;
+        };
+        self.remote_state = Some(remote_state);
     }
 
     pub fn is_connected(&self) -> bool {
-        self.local_id.is_some() && self.remote_id.is_some()
+        self.local_state.is_some() && self.remote_state.is_some()
     }
 
-    pub(crate) fn open(&mut self) -> (Channel, impl Stream<Item = ChannelMessage>) {
-        let local_id = self
-            .local_id
+    pub fn prepare_to_verify(&self) -> Result<(&Key, Option<&Vec<u8>>)> {
+        if !self.is_connected() {
+            return Err(error("Channel is not opened from both local and remote"));
+        }
+        // Safe because of the is_connected() check above.
+        let local_state = self.local_state.as_ref().unwrap();
+        let remote_state = self.remote_state.as_ref().unwrap();
+        Ok((&local_state.key, remote_state.remote_capability.as_ref()))
+    }
+
+    pub fn open(&mut self, outbound_tx: Sender<ChannelMessage>) -> Channel {
+        let local_state = self
+            .local_state
+            .as_ref()
             .expect("May not open channel that is not locally attached");
 
-        let (outbound_tx, outbound_rx) = async_channel::unbounded();
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
             outbound_tx,
             discovery_key: self.discovery_key.clone(),
-            local_id,
+            key: local_state.key.clone(),
+            local_id: local_state.local_id,
         };
-
-        let outbound_rx_mapped =
-            outbound_rx.map(move |message| message.into_channel_message(local_id as u64));
-
         self.inbound_tx = Some(inbound_tx);
-        (channel, outbound_rx_mapped)
+        channel
     }
 
-    pub(crate) fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
+    pub fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
         if let Some(inbound_tx) = self.inbound_tx.as_mut() {
             inbound_tx
                 .try_send(message)
-                .map_err(|_e| std::io::Error::new(ErrorKind::Other, "Channel is full"))
-        // inbound_tx.send(message)
+                .map_err(|_e| error("Channel is full"))
         } else {
-            Err(std::io::Error::new(
-                ErrorKind::Other,
-                "Channel is not opened",
-            ))
+            Err(error("Channel is not open"))
         }
     }
 }
 
 /// The ChannelMap maintains a list of open channels and their local (tx) and remote (rx) channel IDs.
-// #[derive(Debug)]
+#[derive(Debug)]
 pub(crate) struct ChannelMap {
     channels: HashMap<String, ChannelHandle>,
     local_id: Vec<Option<String>>,
     remote_id: Vec<Option<String>>,
-    outbound_rx: OutboundRx,
 }
 
 impl ChannelMap {
@@ -227,7 +252,6 @@ impl ChannelMap {
             channels: HashMap::new(),
             local_id: Vec::new(),
             remote_id: Vec::new(),
-            outbound_rx: SelectAll::new(),
         }
     }
 
@@ -265,32 +289,32 @@ impl ChannelMap {
         self.channels.get(&hdkey).unwrap()
     }
 
-    pub fn get_remote_mut(&mut self, id: usize) -> Option<&mut ChannelHandle> {
-        if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+    pub fn get_remote_mut(&mut self, remote_id: usize) -> Option<&mut ChannelHandle> {
+        if let Some(Some(hdkey)) = self.remote_id.get(remote_id).as_ref() {
             self.channels.get_mut(hdkey)
         } else {
             None
         }
     }
 
-    pub fn get_remote(&self, id: usize) -> Option<&ChannelHandle> {
-        if let Some(Some(hdkey)) = self.remote_id.get(id).as_ref() {
+    pub fn get_remote(&self, remote_id: usize) -> Option<&ChannelHandle> {
+        if let Some(Some(hdkey)) = self.remote_id.get(remote_id).as_ref() {
             self.channels.get(hdkey)
         } else {
             None
         }
     }
 
-    pub fn get_local_mut(&mut self, id: usize) -> Option<&mut ChannelHandle> {
-        if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
+    pub fn get_local_mut(&mut self, local_id: usize) -> Option<&mut ChannelHandle> {
+        if let Some(Some(hdkey)) = self.local_id.get(local_id).as_ref() {
             self.channels.get_mut(hdkey)
         } else {
             None
         }
     }
 
-    pub fn get_local(&self, id: usize) -> Option<&ChannelHandle> {
-        if let Some(Some(hdkey)) = self.local_id.get(id).as_ref() {
+    pub fn get_local(&self, local_id: usize) -> Option<&ChannelHandle> {
+        if let Some(Some(hdkey)) = self.local_id.get(local_id).as_ref() {
             self.channels.get(hdkey)
         } else {
             None
@@ -301,10 +325,10 @@ impl ChannelMap {
         let hdkey = hex::encode(discovery_key);
         let channel = self.channels.get(&hdkey);
         if let Some(channel) = channel {
-            if let Some(local_id) = channel.local_id {
+            if let Some(local_id) = channel.local_id() {
                 self.local_id[local_id] = None;
             }
-            if let Some(remote_id) = channel.remote_id {
+            if let Some(remote_id) = channel.remote_id() {
                 self.remote_id[remote_id] = None;
             }
         }
@@ -314,27 +338,22 @@ impl ChannelMap {
     pub fn prepare_to_verify(&self, local_id: usize) -> Result<(&Key, Option<&Vec<u8>>)> {
         let channel_handle = self
             .get_local(local_id)
-            .ok_or_else(|| Error::new(ErrorKind::Other, "Channel not found"))?;
-        let remote_capability = channel_handle.remote_capability.as_ref();
-        let key = channel_handle
-            .key
-            .as_ref()
-            .ok_or_else(|| Error::new(ErrorKind::Other, "Missing key"))?;
-        Ok((key, remote_capability))
+            .ok_or_else(|| error("Channel not found"))?;
+        channel_handle.prepare_to_verify()
     }
 
-    pub fn accept(&mut self, local_id: usize) -> Result<Channel> {
+    pub fn accept(
+        &mut self,
+        local_id: usize,
+        outbound_tx: Sender<ChannelMessage>,
+    ) -> Result<Channel> {
         let channel_handle = self
             .get_local_mut(local_id)
-            .ok_or_else(|| Error::new(ErrorKind::Other, "Channel not found"))?;
+            .ok_or_else(|| error("Channel not found"))?;
         if !channel_handle.is_connected() {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "Channel is not opened from remote",
-            ));
+            return Err(error("Channel is not opened from remote"));
         }
-        let (channel, send_rx) = channel_handle.open();
-        self.outbound_rx.push(Box::new(send_rx));
+        let channel = channel_handle.open(outbound_tx);
         Ok(channel)
     }
 
@@ -343,13 +362,6 @@ impl ChannelMap {
             channel_handle.try_send_inbound(message)?;
         }
         Ok(())
-    }
-
-    pub fn poll_next_outbound(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-    ) -> Poll<Option<ChannelMessage>> {
-        Pin::new(&mut self.outbound_rx).poll_next(cx)
     }
 
     fn alloc_local(&mut self) -> usize {
@@ -370,4 +382,8 @@ impl ChannelMap {
             self.remote_id.resize(id + 1, None)
         }
     }
+}
+
+fn error(message: &str) -> Error {
+    Error::new(ErrorKind::Other, message)
 }

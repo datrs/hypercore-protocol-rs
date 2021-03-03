@@ -64,7 +64,7 @@ impl fmt::Debug for Event {
                 write!(f, "DiscoveryKey({})", &pretty_hash(discovery_key))
             }
             Event::Channel(channel) => {
-                write!(f, "Channel({})", &pretty_hash(&channel.discovery_key))
+                write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
             Event::Error(error) => write!(f, "{:?}", error),
@@ -107,6 +107,8 @@ where
     error: Option<Error>,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
+    outbound_rx: Receiver<ChannelMessage>,
+    outbound_tx: Sender<ChannelMessage>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
 }
@@ -121,6 +123,7 @@ where
         let reader = ProtocolReader::new(BufReader::new(reader));
         let writer = ProtocolWriter::new(BufWriter::new(writer));
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
+        let (outbound_tx, outbound_rx) = async_channel::unbounded();
         Protocol {
             writer,
             reader,
@@ -131,6 +134,8 @@ where
             error: None,
             command_rx,
             command_tx: CommandTx(command_tx),
+            outbound_tx,
+            outbound_rx,
             keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
         }
@@ -274,8 +279,7 @@ where
 
     /// Poll the channels for outbound messages.
     fn poll_outbound_forward(self: &mut Self, cx: &mut Context) -> Result<()> {
-        while let Poll::Ready(Some(channel_message)) =
-            Pin::new(&mut self.channels).poll_next_outbound(cx)
+        while let Poll::Ready(Some(channel_message)) = Pin::new(&mut self.outbound_rx).poll_next(cx)
         {
             // If message is close, close the local channel.
             if let ChannelMessage {
@@ -381,8 +385,8 @@ where
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key.clone());
         // Safe because attach_local always puts Some(local_id)
-        let local_id = channel_handle.local_id.unwrap();
-        let discovery_key = channel_handle.discovery_key.clone();
+        let local_id = channel_handle.local_id().unwrap();
+        let discovery_key = channel_handle.discovery_key().clone();
 
         // If the channel was already opened from the remote end, verify, and if
         // verification is ok, push a channel open event.
@@ -407,7 +411,7 @@ where
                 .attach_remote(discovery_key.clone(), ch as usize, msg.capability.clone());
 
         if channel_handle.is_connected() {
-            let local_id = channel_handle.local_id.unwrap();
+            let local_id = channel_handle.local_id().unwrap();
             self.accept_channel(local_id)?;
         } else {
             self.queue_event(Event::DiscoveryKey(discovery_key));
@@ -437,27 +441,25 @@ where
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {
         let (key, remote_capability) = self.channels.prepare_to_verify(local_id)?;
         self.verify_remote_capability(remote_capability.cloned(), key)?;
-        let channel = self.channels.accept(local_id)?;
+        let channel = self.channels.accept(local_id, self.outbound_tx.clone())?;
         self.queue_event(Event::Channel(channel));
         Ok(())
     }
 
     fn close_local(&mut self, local_id: u64) {
         if let Some(channel) = self.channels.get_local(local_id as usize) {
-            let discovery_key = channel.discovery_key.clone();
+            let discovery_key = channel.discovery_key().clone();
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
         }
     }
 
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
-        // eprintln!("ON_CLOSE [{}] {}", self.is_initiator(), remote_id);
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
-            let discovery_key = channel_handle.discovery_key.clone();
+            let discovery_key = channel_handle.discovery_key().clone();
             self.channels
                 .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
-            // eprintln!("ON_CLOSE OK EMIT [{}] {}", self.is_initiator(), remote_id);
             self.queue_event(Event::Close(discovery_key));
         }
         Ok(())
