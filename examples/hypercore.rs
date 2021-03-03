@@ -79,13 +79,13 @@ where
             Event::Handshake(_) => {
                 if is_initiator {
                     for feed in feedstore.feeds.values() {
-                        protocol.open(feed.key().to_vec()).await?;
+                        protocol.open(feed.key().clone()).await?;
                     }
                 }
             }
             Event::DiscoveryKey(dkey) => {
                 if let Some(feed) = feedstore.get(&dkey) {
-                    protocol.open(feed.key().to_vec()).await?;
+                    protocol.open(feed.key().clone()).await?;
                 }
             }
             Event::Channel(channel) => {
@@ -134,8 +134,8 @@ struct FeedWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    discovery_key: Vec<u8>,
-    key: Vec<u8>,
+    discovery_key: [u8; 32],
+    key: [u8; 32],
     feed: Arc<Mutex<Feed<T>>>,
 }
 
@@ -143,7 +143,7 @@ impl FeedWrapper<RandomAccessMemory> {
     pub fn from_memory_feed(feed: Feed<RandomAccessMemory>) -> Self {
         let key = feed.public_key().to_bytes();
         FeedWrapper {
-            key: key.to_vec(),
+            key,
             discovery_key: discovery_key(&key),
             feed: Arc::new(Mutex::new(feed)),
         }
@@ -154,7 +154,7 @@ impl<T> FeedWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub fn key(&self) -> &[u8] {
+    pub fn key(&self) -> &[u8; 32] {
         &self.key
     }
 

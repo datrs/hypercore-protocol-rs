@@ -6,9 +6,10 @@ use futures::task::{Context, Poll};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;
+use std::convert::TryInto;
 use std::fmt;
 use std::future::Future;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{self, Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -34,9 +35,9 @@ macro_rules! return_error {
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
-pub type RemotePublicKey = Vec<u8>;
-pub type DiscoveryKey = Vec<u8>;
-pub type Key = Vec<u8>;
+pub type RemotePublicKey = [u8; 32];
+pub type DiscoveryKey = [u8; 32];
+pub type Key = [u8; 32];
 
 /// A protocol event.
 pub enum Event {
@@ -183,7 +184,7 @@ where
     ///
     /// Once the other side proofed that it also knows the `key`, the channel is emitted as
     /// `Event::Channel` on the protocol event stream.
-    pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
+    pub async fn open(&mut self, key: Key) -> Result<()> {
         self.command_tx.open(key).await
     }
 
@@ -343,14 +344,14 @@ where
                 self.reader.upgrade_with_handshake(&result)?;
                 self.writer.upgrade_with_handshake(&result)?;
             }
-            let remote_key = result.remote_pubkey.to_vec();
+            let remote_public_key = parse_key(&result.remote_pubkey)?;
             log::debug!(
                 "handshake complete, remote_key {}",
-                pretty_hash(&remote_key)
+                pretty_hash(&remote_public_key)
             );
             self.handshake = Some(result);
             self.state = State::Established;
-            self.queue_event(Event::Handshake(remote_key));
+            self.queue_event(Event::Handshake(remote_public_key));
         }
         Ok(())
     }
@@ -376,7 +377,7 @@ where
         }
     }
 
-    fn command_open(&mut self, key: Vec<u8>) -> Result<()> {
+    fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key.clone());
         // Safe because attach_local always puts Some(local_id)
@@ -392,7 +393,7 @@ where
         // Tell the remote end about the new channel.
         let capability = self.capability(&key);
         let message = Message::Open(Open {
-            discovery_key,
+            discovery_key: discovery_key.to_vec(),
             capability,
         });
         let channel_message = ChannelMessage::new(local_id as u64, message);
@@ -400,17 +401,16 @@ where
     }
 
     fn on_open(&mut self, ch: u64, msg: Open) -> Result<()> {
-        let channel_handle = self.channels.attach_remote(
-            msg.discovery_key.clone(),
-            ch as usize,
-            msg.capability.clone(),
-        );
+        let discovery_key: DiscoveryKey = parse_key(&msg.discovery_key)?;
+        let channel_handle =
+            self.channels
+                .attach_remote(discovery_key.clone(), ch as usize, msg.capability.clone());
 
         if channel_handle.is_connected() {
             let local_id = channel_handle.local_id.unwrap();
             self.accept_channel(local_id)?;
         } else {
-            self.queue_event(Event::DiscoveryKey(msg.discovery_key));
+            self.queue_event(Event::DiscoveryKey(discovery_key));
         }
 
         Ok(())
@@ -514,4 +514,9 @@ impl CommandTx {
     pub async fn close(&mut self, discovery_key: DiscoveryKey) -> Result<()> {
         self.send(Command::Close(discovery_key)).await
     }
+}
+
+fn parse_key(key: &[u8]) -> io::Result<[u8; 32]> {
+    key.try_into()
+        .map_err(|_e| io::Error::new(io::ErrorKind::InvalidInput, "Key must be 32 bytes long"))
 }

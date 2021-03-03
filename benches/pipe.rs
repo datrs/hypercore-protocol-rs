@@ -63,7 +63,7 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let key = vec![0u8; 24];
+    let key = [0u8; 24];
     let is_initiator = protocol.is_initiator();
     // let mut len: u64 = 0;
     loop {

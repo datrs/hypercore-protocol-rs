@@ -2,7 +2,7 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
 use futures::io::{AsyncRead, AsyncWrite};
-use hypercore_protocol::{Channel, Event, Protocol, ProtocolBuilder};
+use hypercore_protocol::{Channel, DiscoveryKey, Event, Protocol, ProtocolBuilder};
 
 pub type MemoryProtocol = Protocol<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>;
 pub async fn create_pair_memory() -> std::io::Result<(MemoryProtocol, MemoryProtocol)> {
@@ -39,7 +39,7 @@ where
     task
 }
 
-pub fn event_discovery_key(event: Event) -> Vec<u8> {
+pub fn event_discovery_key(event: Event) -> DiscoveryKey {
     if let Event::DiscoveryKey(dkey) = event {
         dkey
     } else {

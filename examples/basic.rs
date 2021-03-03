@@ -5,10 +5,13 @@ use async_std::task;
 use futures::stream::StreamExt;
 use log::*;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::env;
 
 use hypercore_protocol::schema::*;
-use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
+use hypercore_protocol::{
+    discovery_key, Channel, DiscoveryKey, Event, Key, Message, ProtocolBuilder,
+};
 
 mod util;
 use util::{tcp_client, tcp_server};
@@ -30,12 +33,13 @@ fn main() {
 
     let key = env::args().nth(3);
     let key = key.map_or(None, |key| hex::decode(key).ok());
+    let key = key.map(|key| key.try_into().expect("Key must be a 32 byte hex string"));
 
     let mut feedstore = FeedStore::new();
     if let Some(key) = key {
         feedstore.add(Feed::new(key));
     } else {
-        let key = vec![9u8; 32];
+        let key = [9u8; 32];
         feedstore.add(Feed::new(key.clone()));
         println!("KEY={}", hex::encode(&key));
     }
@@ -116,11 +120,11 @@ impl FeedStore {
 /// This toy feed can only read sequentially and does not save or buffer anything.
 #[derive(Debug)]
 struct Feed {
-    key: Vec<u8>,
-    discovery_key: Vec<u8>,
+    key: Key,
+    discovery_key: DiscoveryKey,
 }
 impl Feed {
-    pub fn new(key: Vec<u8>) -> Self {
+    pub fn new(key: Key) -> Self {
         Feed {
             discovery_key: discovery_key(&key),
             key,

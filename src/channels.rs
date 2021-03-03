@@ -135,7 +135,7 @@ pub(crate) struct ChannelHandle {
 }
 
 impl ChannelHandle {
-    fn new_local(local_id: usize, discovery_key: Vec<u8>, key: Vec<u8>) -> Self {
+    fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
         Self {
             key: Some(key),
             discovery_key,
@@ -148,7 +148,7 @@ impl ChannelHandle {
 
     fn new_remote(
         remote_id: usize,
-        discovery_key: Vec<u8>,
+        discovery_key: DiscoveryKey,
         remote_capability: Option<Vec<u8>>,
     ) -> Self {
         Self {
@@ -161,7 +161,7 @@ impl ChannelHandle {
         }
     }
 
-    pub(crate) fn attach_local(&mut self, local_id: usize, key: Vec<u8>) {
+    pub(crate) fn attach_local(&mut self, local_id: usize, key: Key) {
         self.local_id = Some(local_id);
         self.key = Some(key);
     }
@@ -311,7 +311,7 @@ impl ChannelMap {
         self.channels.remove(&hdkey);
     }
 
-    pub fn prepare_to_verify(&self, local_id: usize) -> Result<(&Vec<u8>, Option<&Vec<u8>>)> {
+    pub fn prepare_to_verify(&self, local_id: usize) -> Result<(&Key, Option<&Vec<u8>>)> {
         let channel_handle = self
             .get_local(local_id)
             .ok_or_else(|| Error::new(ErrorKind::Other, "Channel not found"))?;

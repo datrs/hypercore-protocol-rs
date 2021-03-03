@@ -26,7 +26,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
     assert_eq!(proto_a.public_key(), proto_b.remote_public_key());
     assert_eq!(proto_b.public_key(), proto_a.remote_public_key());
 
-    let key = vec![3u8; 32];
+    let key = [3u8; 32];
 
     proto_a.open(key.clone()).await?;
 
