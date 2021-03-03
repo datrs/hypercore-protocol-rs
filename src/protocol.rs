@@ -1,17 +1,19 @@
-use futures::channel::mpsc::{Receiver, Sender};
-use futures::future::{Fuse, FutureExt};
+use async_channel::{Receiver, Sender};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::io::{BufReader, BufWriter};
-use futures::sink::SinkExt;
-use futures::stream::{SelectAll, Stream, StreamExt};
+use futures::stream::Stream;
+use futures::task::{Context, Poll};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;
 use std::fmt;
+use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
+use std::pin::Pin;
 use std::time::Duration;
 
-use crate::channels::{Channel, Channelizer};
+use crate::builder::{Builder, Options};
+use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
 use crate::message::{ChannelMessage, Message};
 use crate::noise::{Handshake, HandshakeResult};
@@ -21,22 +23,35 @@ use crate::util::map_channel_err;
 use crate::util::pretty_hash;
 use crate::writer::ProtocolWriter;
 
+macro_rules! return_error {
+    ($msg:expr) => {
+        if let Err(e) = $msg {
+            return Poll::Ready(Err(e));
+        }
+    };
+}
+
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
+pub type RemotePublicKey = Vec<u8>;
+pub type DiscoveryKey = Vec<u8>;
+pub type Key = Vec<u8>;
+
 /// A protocol event.
 pub enum Event {
-    Handshake(Vec<u8>),
-    DiscoveryKey(Vec<u8>),
+    Handshake(RemotePublicKey),
+    DiscoveryKey(DiscoveryKey),
     Channel(Channel),
-    Close(Vec<u8>),
+    Close(DiscoveryKey),
+    Error(std::io::Error),
 }
 
-// enum Outgoing {
-//     Ping,
-//     Raw(Vec<u8>),
-//     ChannelMessage(ChannelMessage),
-// }
+/// A protocol command.
+pub enum Command {
+    Open(Key),
+    Close(DiscoveryKey),
+}
 
 impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -47,87 +62,12 @@ impl fmt::Debug for Event {
             Event::DiscoveryKey(discovery_key) => {
                 write!(f, "DiscoveryKey({})", &pretty_hash(discovery_key))
             }
+            Event::Channel(channel) => {
+                write!(f, "Channel({})", &pretty_hash(&channel.discovery_key))
+            }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
-            Event::Channel(channel) => write!(f, "{:?}", channel),
+            Event::Error(error) => write!(f, "{:?}", error),
         }
-    }
-}
-
-/// Options for a Protocol instance.
-#[derive(Debug)]
-pub struct ProtocolOptions {
-    pub is_initiator: bool,
-    pub noise: bool,
-    pub encrypted: bool,
-}
-
-/// Build a Protocol instance with options.
-pub struct ProtocolBuilder(ProtocolOptions);
-
-impl ProtocolBuilder {
-    // Create a protocol builder.
-    pub fn new(is_initiator: bool) -> Self {
-        Self(ProtocolOptions {
-            is_initiator,
-            noise: true,
-            encrypted: true,
-        })
-    }
-
-    /// Default options for an initiating endpoint.
-    pub fn initiator() -> Self {
-        Self::new(true)
-    }
-
-    /// Default options for a responding endpoint.
-    pub fn responder() -> Self {
-        Self::new(false)
-    }
-
-    /// Set encrypted option.
-    pub fn set_encrypted(mut self, encrypted: bool) -> Self {
-        self.0.encrypted = encrypted;
-        self
-    }
-
-    /// Set handshake option.
-    pub fn set_noise(mut self, noise: bool) -> Self {
-        self.0.noise = noise;
-        self
-    }
-
-    /// Create the protocol from a stream that implements AsyncRead + AsyncWrite + Clone.
-    pub fn connect<S>(self, stream: S) -> Protocol<S, S>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    {
-        Protocol::new(stream.clone(), stream, self.0)
-    }
-
-    /// Create the protocol from an AsyncRead reader and AsyncWrite writer.
-    pub fn connect_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        Protocol::new(reader, writer, self.0)
-    }
-
-    #[deprecated(since = "0.0.1", note = "Use connect_rw")]
-    pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        self.connect_rw(reader, writer)
-    }
-
-    #[deprecated(since = "0.0.1", note = "Use connect")]
-    pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    {
-        self.connect(stream)
     }
 }
 
@@ -151,9 +91,6 @@ impl fmt::Debug for State {
     }
 }
 
-/// The output of the set of channel senders.
-type CombinedOutputStream = SelectAll<Box<dyn Stream<Item = ChannelMessage> + Send + Unpin>>;
-
 /// A Protocol stream.
 pub struct Protocol<R, W>
 where
@@ -163,16 +100,14 @@ where
     writer: ProtocolWriter<BufWriter<W>>,
     reader: ProtocolReader<BufReader<R>>,
     state: State,
-    options: ProtocolOptions,
+    options: Options,
     handshake: Option<HandshakeResult>,
-    channels: Channelizer,
+    channels: ChannelMap,
     error: Option<Error>,
-    outbound_rx: CombinedOutputStream,
-    control_rx: Receiver<ControlEvent>,
-    control_tx: ControlTx,
-    events: VecDeque<Event>,
-    // outgoing: VecDeque<Event>,
-    keepalive: Option<Fuse<Delay>>,
+    command_rx: Receiver<Command>,
+    command_tx: CommandTx,
+    keepalive: Delay,
+    queued_events: VecDeque<Event>,
 }
 
 impl<R, W> Protocol<R, W>
@@ -181,153 +116,48 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     /// Create a new Protocol instance.
-    pub fn new(reader: R, writer: W, options: ProtocolOptions) -> Self {
+    pub fn new(reader: R, writer: W, options: Options) -> Self {
         let reader = ProtocolReader::new(BufReader::new(reader));
         let writer = ProtocolWriter::new(BufWriter::new(writer));
-        let (control_tx, control_rx) = futures::channel::mpsc::channel(CHANNEL_CAP);
+        let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         Protocol {
             writer,
             reader,
             options,
             state: State::NotInitialized,
-            channels: Channelizer::new(),
+            channels: ChannelMap::new(),
             handshake: None,
             error: None,
-            outbound_rx: SelectAll::new(),
-            control_rx,
-            control_tx: ControlTx(control_tx),
-            events: VecDeque::new(),
-            // outgoing: VecDeque::new(),
-            keepalive: None,
+            command_rx,
+            command_tx: CommandTx(command_tx),
+            keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
+            queued_events: VecDeque::new(),
         }
     }
 
     /// Create a protocol builder.
-    pub fn builder(is_initiator: bool) -> ProtocolBuilder {
-        ProtocolBuilder::new(is_initiator)
-    }
-
-    async fn init(&mut self) -> Result<()> {
-        trace!(
-            "protocol init, state {:?}, options {:?}",
-            self.state,
-            self.options
-        );
-        match self.state {
-            State::NotInitialized => {}
-            _ => return Ok(()),
-        };
-
-        self.state = if self.options.noise {
-            let mut handshake = Handshake::new(self.options.is_initiator)?;
-            // If the handshake start returns a buffer, send it now.
-            if let Some(buf) = handshake.start()? {
-                self.writer.send_prefixed(buf).await?;
-            }
-            State::Handshake(Some(handshake))
-        } else {
-            State::Established
-        };
-
-        self.reset_keepalive();
-
-        Ok(())
-    }
-
-    fn reset_keepalive(&mut self) {
-        let keepalive_duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-        self.keepalive = Some(Delay::new(keepalive_duration).fuse());
+    pub fn builder(is_initiator: bool) -> Builder {
+        Builder::new(is_initiator)
     }
 
     pub fn is_initiator(&self) -> bool {
         self.options.is_initiator
     }
 
-    /// Wait for the next protocol event.
+    /// Get your own Noise public key.
     ///
-    /// This function should be called in a loop until this returns an error.
-    pub async fn loop_next(&mut self) -> Result<Event> {
-        // trace!(
-        //     "[{}] loop_next start, state {:?} events.len {}",
-        //     self.is_initiator(),
-        //     self.state,
-        //     self.events.len()
-        // );
-        if let State::NotInitialized = self.state {
-            self.init().await?;
-        }
-
-        let mut keepalive = if let Some(keepalive) = self.keepalive.take() {
-            keepalive
-        } else {
-            Delay::new(KEEPALIVE_DURATION).fuse()
-        };
-
-        // Wait for new bytes to arrive, or for the keepalive to occur to send a ping.
-        // If data was received, reset the keepalive timer.
-        loop {
-            // trace!("[{}] loop_next loop in", self.is_initiator());
-
-            if let Some(event) = self.events.pop_front() {
-                return Ok(event);
-            }
-
-            let event = futures::select! {
-                // Keepalive timer for pings
-                _ = keepalive => {
-                    // trace!("[{}] loop_next ! keepalive", self.is_initiator());
-                    self.ping().await?;
-                    // TODO: It would be better to `reset` the keepalive and not recreate it.
-                    // I couldn't get this to work with `fuse()` though which is needed for
-                    // the `select!` macro.
-                    keepalive = Delay::new(KEEPALIVE_DURATION).fuse();
-                    None
-                },
-                // New wire message incoming
-                buf = self.reader.select_next_some() => {
-                    // trace!("[{}] loop_next ! incoming message", self.is_initiator());
-                    self.on_message(buf?).await?
-                },
-                // New outbound message
-                channel_message = self.outbound_rx.select_next_some() => {
-                    // trace!("[{}] loop_next ! outbound_rx", self.is_initiator());
-                    let event = match channel_message {
-                        ChannelMessage { channel, message: Message::Close(_) } => {
-                            self.close_local(channel).await?
-                        },
-                        _ => None
-                    };
-                    self.send(channel_message).await?;
-                    // trace!("[{}] loop_next ! outbound_rx SENT", self.is_initiator());
-                    event
-                },
-                // New control message
-                ev = self.control_rx.select_next_some() => {
-                    // trace!("[{}] loop_next ! control_rx", self.is_initiator());
-                    match ev {
-                        ControlEvent::Open(key) => {
-                            self.open(key).await?;
-                            None
-                        }
-                    }
-                },
-            };
-            // trace!(
-            //     "[{}] loop_next loop out, event {:?}",
-            //     self.is_initiator(),
-            //     event
-            // );
-            if let Some(event) = event {
-                self.keepalive = Some(keepalive);
-                return Ok(event);
-            }
+    /// Empty before the handshake completed.
+    pub fn public_key(&self) -> Option<&[u8]> {
+        match &self.handshake {
+            None => None,
+            Some(handshake) => Some(handshake.local_pubkey.as_slice()),
         }
     }
 
-    /// Get the peer's Noise public key.
+    /// Get the remote's Noise public key.
     ///
     /// Empty before the handshake completed.
-    pub fn remote_key(&self) -> Option<&[u8]> {
+    pub fn remote_public_key(&self) -> Option<&[u8]> {
         match &self.handshake {
             None => None,
             Some(handshake) => Some(handshake.remote_pubkey.as_slice()),
@@ -339,56 +169,14 @@ where
         self.error = Some(error)
     }
 
-    async fn on_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
-        // trace!("onmessage, state {:?} msg len {}", self.state, buf.len());
-        match self.state {
-            State::Handshake(_) => self.on_handshake_message(buf).await,
-            State::Established => self.on_proto_message(buf).await,
-            State::NotInitialized => panic!("cannot receive messages before starting the protocol"),
-        }
+    /// Get a sender to send commands.
+    pub fn commands(&self) -> CommandTx {
+        self.command_tx.clone()
     }
 
-    async fn on_handshake_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
-        let mut handshake = match &mut self.state {
-            State::Handshake(handshake) => handshake.take().unwrap(),
-            _ => panic!("cannot call on_handshake_message when not in Handshake state"),
-        };
-        if let Some(response_buf) = handshake.read(&buf)? {
-            self.writer.send_prefixed(response_buf).await?;
-        }
-        if !handshake.complete() {
-            self.state = State::Handshake(Some(handshake));
-            Ok(None)
-        } else {
-            let result = handshake.into_result()?;
-            if self.options.encrypted {
-                self.reader.upgrade_with_handshake(&result)?;
-                self.writer.upgrade_with_handshake(&result)?;
-            }
-            let remote_key = result.remote_pubkey.to_vec();
-            log::trace!(
-                "handshake complete, remote_key {}",
-                pretty_hash(&remote_key)
-            );
-            self.handshake = Some(result);
-            self.state = State::Established;
-            Ok(Some(Event::Handshake(remote_key)))
-        }
-    }
-
-    async fn on_proto_message(&mut self, buf: Vec<u8>) -> Result<Option<Event>> {
-        let channel_message = ChannelMessage::decode(buf)?;
-        log::trace!("recv {:?}", channel_message);
-        let (remote_id, message) = channel_message.into_split();
-        match message {
-            Message::Open(msg) => self.open_remote(remote_id, msg).await,
-            Message::Close(msg) => self.close_remote(remote_id, msg).await,
-            Message::Extension(_msg) => unimplemented!(),
-            _ => {
-                self.channels.forward(remote_id as usize, message).await?;
-                Ok(None)
-            }
-        }
+    /// Give a command to the protocol.
+    pub async fn command(&mut self, command: Command) -> Result<()> {
+        self.command_tx.send(command).await
     }
 
     /// Open a new protocol channel.
@@ -396,19 +184,209 @@ where
     /// Once the other side proofed that it also knows the `key`, the channel is emitted as
     /// `Event::Channel` on the protocol event stream.
     pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
+        self.command_tx.open(key).await
+    }
+
+    /// Stop the protocol and return the inner reader and writer.
+    pub fn release(self) -> (R, W) {
+        (
+            self.reader.into_inner().into_inner(),
+            self.writer.into_inner().into_inner(),
+        )
+    }
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Event>> {
+        let this = self.get_mut();
+
+        if let State::NotInitialized = this.state {
+            return_error!(this.init());
+        }
+
+        // Drain queued events first.
+        if let Some(event) = this.queued_events.pop_front() {
+            return Poll::Ready(Ok(event));
+        }
+
+        // Read and process incoming messages.
+        return_error!(this.poll_inbound_read(cx));
+
+        if let State::Established = this.state {
+            // Check for commands, but only once the connection is established.
+            return_error!(this.poll_commands(cx));
+            // Process and forward outgoing messages from the channels.
+            return_error!(this.poll_outbound_forward(cx));
+        }
+
+        // Poll the keepalive timer.
+        this.poll_keepalive(cx);
+
+        // Write queued outgoing messages to network.
+        return_error!(this.poll_outbound_write(cx));
+
+        // Check if any events are enqueued.
+        if let Some(event) = this.queued_events.pop_front() {
+            Poll::Ready(Ok(event))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn init(&mut self) -> Result<()> {
+        debug!(
+            "protocol init, state {:?}, options {:?}",
+            self.state, self.options
+        );
+        match self.state {
+            State::NotInitialized => {}
+            _ => return Ok(()),
+        };
+
+        self.state = if self.options.noise {
+            let mut handshake = Handshake::new(self.options.is_initiator)?;
+            // If the handshake start returns a buffer, send it now.
+            if let Some(buf) = handshake.start()? {
+                self.queue_outbound_message(buf.to_vec());
+            }
+            State::Handshake(Some(handshake))
+        } else {
+            State::Established
+        };
+
+        Ok(())
+    }
+
+    /// Poll commands.
+    fn poll_commands(self: &mut Self, cx: &mut Context) -> Result<()> {
+        while let Poll::Ready(Some(command)) = Pin::new(&mut self.command_rx).poll_next(cx) {
+            self.on_command(command)?;
+        }
+        Ok(())
+    }
+
+    /// Poll the keepalive timer and queue a ping message if needed.
+    fn poll_keepalive(self: &mut Self, cx: &mut Context) {
+        if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.keepalive), cx) {
+            self.queue_ping();
+            self.keepalive.reset(KEEPALIVE_DURATION);
+        }
+    }
+
+    /// Poll the channels for outbound messages.
+    fn poll_outbound_forward(self: &mut Self, cx: &mut Context) -> Result<()> {
+        while let Poll::Ready(Some(channel_message)) =
+            Pin::new(&mut self.channels).poll_next_outbound(cx)
+        {
+            // If message is close, close the local channel.
+            if let ChannelMessage {
+                channel,
+                message: Message::Close(_),
+            } = channel_message
+            {
+                self.close_local(channel);
+            }
+            self.queue_outbound_channel_message(channel_message)?;
+        }
+        Ok(())
+    }
+
+    /// Poll for inbound messages and processs them.
+    fn poll_inbound_read(self: &mut Self, cx: &mut Context) -> Result<()> {
+        loop {
+            let msg = Stream::poll_next(Pin::new(&mut self.reader), cx);
+            match msg {
+                Poll::Ready(Some(Ok(message))) => {
+                    self.on_message(message)?;
+                }
+                Poll::Ready(Some(Err(e))) => return Err(e),
+                Poll::Pending | Poll::Ready(None) => return Ok(()),
+            }
+        }
+    }
+
+    /// Write outgoing messages to the network.
+    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
+        match Pin::new(&mut self.writer).poll_write_all(cx) {
+            Poll::Pending | Poll::Ready(Ok(_)) => Ok(()),
+            Poll::Ready(Err(e)) => Err(e),
+        }
+    }
+
+    fn on_message(&mut self, buf: Vec<u8>) -> Result<()> {
+        // log::trace!(
+        //     "[{}] onmessage IN len {} state {:?}",
+        //     self.is_initiator(),
+        //     buf.len(),
+        //     self.state
+        // );
+        match self.state {
+            State::Handshake(_) => self.on_handshake_message(buf),
+            State::Established => self.on_proto_message(buf),
+            State::NotInitialized => panic!("cannot receive messages before starting the protocol"),
+        }
+    }
+
+    fn on_handshake_message(&mut self, buf: Vec<u8>) -> Result<()> {
+        let mut handshake = match &mut self.state {
+            State::Handshake(handshake) => handshake.take().unwrap(),
+            _ => panic!("may not call on_handshake_message when not in Handshake state"),
+        };
+
+        if let Some(response_buf) = handshake.read(&buf)? {
+            self.queue_outbound_message(response_buf.to_vec());
+        }
+
+        if !handshake.complete() {
+            self.state = State::Handshake(Some(handshake));
+        } else {
+            let result = handshake.into_result()?;
+            if self.options.encrypted {
+                self.reader.upgrade_with_handshake(&result)?;
+                self.writer.upgrade_with_handshake(&result)?;
+            }
+            let remote_key = result.remote_pubkey.to_vec();
+            log::debug!(
+                "handshake complete, remote_key {}",
+                pretty_hash(&remote_key)
+            );
+            self.handshake = Some(result);
+            self.state = State::Established;
+            self.queue_event(Event::Handshake(remote_key));
+        }
+        Ok(())
+    }
+
+    fn on_proto_message(&mut self, buf: Vec<u8>) -> Result<()> {
+        let channel_message = ChannelMessage::decode(buf)?;
+        log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
+        let (remote_id, message) = channel_message.into_split();
+        match message {
+            Message::Open(msg) => self.on_open(remote_id, msg),
+            Message::Close(msg) => self.on_close(remote_id, msg),
+            Message::Extension(_msg) => unimplemented!(),
+            _ => self
+                .channels
+                .forward_inbound_message(remote_id as usize, message),
+        }
+    }
+
+    fn on_command(&mut self, command: Command) -> Result<()> {
+        match command {
+            Command::Open(key) => self.command_open(key),
+            _ => Ok(()),
+        }
+    }
+
+    fn command_open(&mut self, key: Vec<u8>) -> Result<()> {
         // Create a new channel.
-        let inner_channel = self.channels.attach_local(key.clone());
+        let channel_handle = self.channels.attach_local(key.clone());
         // Safe because attach_local always puts Some(local_id)
-        let local_id = inner_channel.local_id.unwrap();
-        let discovery_key = inner_channel.discovery_key.clone();
+        let local_id = channel_handle.local_id.unwrap();
+        let discovery_key = channel_handle.discovery_key.clone();
 
         // If the channel was already opened from the remote end, verify, and if
         // verification is ok, push a channel open event.
-        if let Some(_remote_id) = inner_channel.remote_id {
-            let remote_capability = inner_channel.remote_capability.clone();
-            self.verify_remote_capability(remote_capability, &key)?;
-            let channel = self.create_channel(local_id).await?;
-            self.events.push_back(Event::Channel(channel));
+        if channel_handle.is_connected() {
+            self.accept_channel(local_id)?;
         }
 
         // Tell the remote end about the new channel.
@@ -418,76 +396,71 @@ where
             capability,
         });
         let channel_message = ChannelMessage::new(local_id as u64, message);
-        self.outbound_rx.push(Box::new(
-            futures::future::ready(channel_message).into_stream(),
-        ));
-
-        Ok(())
+        self.queue_outbound_channel_message(channel_message)
     }
 
-    async fn open_remote(&mut self, ch: u64, msg: Open) -> Result<Option<Event>> {
-        let inner_channel = self.channels.attach_remote(
+    fn on_open(&mut self, ch: u64, msg: Open) -> Result<()> {
+        let channel_handle = self.channels.attach_remote(
             msg.discovery_key.clone(),
             ch as usize,
             msg.capability.clone(),
         );
 
-        // This means there is not yet a locally-opened channel for this discovery_key.
-        if let Some(local_id) = inner_channel.local_id {
-            let key = inner_channel.key.as_ref().unwrap().clone();
-            self.verify_remote_capability(msg.capability, &key)?;
-            let channel = self.create_channel(local_id).await?;
-            Ok(Some(Event::Channel(channel)))
+        if channel_handle.is_connected() {
+            let local_id = channel_handle.local_id.unwrap();
+            self.accept_channel(local_id)?;
         } else {
-            Ok(Some(Event::DiscoveryKey(msg.discovery_key.clone())))
+            self.queue_event(Event::DiscoveryKey(msg.discovery_key));
         }
+
+        Ok(())
     }
 
-    async fn create_channel(&mut self, local_id: usize) -> Result<Channel> {
-        let inner_channel = self.channels.get_local_mut(local_id).unwrap();
-        let (channel, send_rx) = inner_channel.open().await?;
-        self.outbound_rx.push(Box::new(send_rx));
-        Ok(channel)
+    fn queue_event(&mut self, event: Event) {
+        self.queued_events.push_back(event);
     }
 
-    async fn close_local(&mut self, local_id: u64) -> Result<Option<Event>> {
-        if let Some(channel) = self.channels.get_local_mut(local_id as usize) {
-            let discovery_key = channel.discovery_key.clone();
-            channel.recv_close(None).await?;
-            self.channels.remove(&discovery_key);
-            Ok(Some(Event::Close(discovery_key)))
-        } else {
-            Ok(None)
-        }
+    fn queue_outbound_message(&mut self, message: Vec<u8>) {
+        self.writer.queue_message(message);
     }
 
-    async fn close_remote(&mut self, remote_id: u64, msg: Close) -> Result<Option<Event>> {
-        if let Some(channel) = self.channels.get_remote_mut(remote_id as usize) {
-            let discovery_key = channel.discovery_key.clone();
-            channel.recv_close(Some(msg)).await?;
-            self.channels.remove(&discovery_key);
-            Ok(Some(Event::Close(discovery_key)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn send(&mut self, channel_message: ChannelMessage) -> Result<()> {
-        log::trace!("send {:?}", channel_message);
+    fn queue_outbound_channel_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
         let buf = channel_message.encode()?;
-        self.writer.send_prefixed(&buf).await
+        self.queue_outbound_message(buf);
+        Ok(())
     }
 
-    async fn ping(&mut self) -> Result<()> {
-        self.writer.ping().await
+    fn queue_ping(&mut self) {
+        self.writer.queue_raw(vec![0]);
     }
 
-    /// Stop the protocol and return the inner reader and writer.
-    pub fn release(self) -> (R, W) {
-        (
-            self.reader.into_inner().into_inner(),
-            self.writer.into_inner().into_inner(),
-        )
+    fn accept_channel(&mut self, local_id: usize) -> Result<()> {
+        let (key, remote_capability) = self.channels.prepare_to_verify(local_id)?;
+        self.verify_remote_capability(remote_capability.cloned(), key)?;
+        let channel = self.channels.accept(local_id)?;
+        self.queue_event(Event::Channel(channel));
+        Ok(())
+    }
+
+    fn close_local(&mut self, local_id: u64) {
+        if let Some(channel) = self.channels.get_local(local_id as usize) {
+            let discovery_key = channel.discovery_key.clone();
+            self.channels.remove(&discovery_key);
+            self.queue_event(Event::Close(discovery_key));
+        }
+    }
+
+    fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
+        // eprintln!("ON_CLOSE [{}] {}", self.is_initiator(), remote_id);
+        if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
+            let discovery_key = channel_handle.discovery_key.clone();
+            self.channels
+                .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
+            self.channels.remove(&discovery_key);
+            // eprintln!("ON_CLOSE OK EMIT [{}] {}", self.is_initiator(), remote_id);
+            self.queue_event(Event::Close(discovery_key));
+        }
+        Ok(())
     }
 
     fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -506,108 +479,39 @@ where
             )),
         }
     }
+}
 
-    /// Convert the protocol into a [Stream](futures::io::Stream) of [Event](Event)s.
-    pub fn into_stream(self) -> stream::ProtocolStream<R, W> {
-        let control = self.control();
-        stream::ProtocolStream::new(self, control)
-    }
-
-    /// Get a sender to send control events.
-    pub fn control(&self) -> ControlTx {
-        self.control_tx.clone()
+impl<R, W> Stream for Protocol<R, W>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    type Item = Result<Event>;
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Protocol::poll_next(self, cx).map(Some)
     }
 }
 
-/// A control event for the protocol stream.
-#[derive(Debug)]
-pub enum ControlEvent {
-    Open(Vec<u8>),
-}
-
-/// Send [ControlEvent](ControlEvent)s to the [Protocol](Protocol).
+/// Send [Command](Command)s to the [Protocol](Protocol).
 #[derive(Clone)]
-pub struct ControlTx(Sender<ControlEvent>);
+pub struct CommandTx(Sender<Command>);
 
-impl ControlTx {
+impl CommandTx {
+    pub async fn send(&mut self, command: Command) -> Result<()> {
+        self.0.send(command).await.map_err(map_channel_err)
+    }
     /// Open a protocol channel.
     ///
     /// The channel will be emitted on the main protocol.
-    pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-        self.0
-            .send(ControlEvent::Open(key))
-            .await
-            .map_err(map_channel_err)
-    }
-}
-
-pub use stream::ProtocolStream;
-mod stream {
-    use super::ControlTx;
-    use crate::{Event, Protocol};
-    use futures::future::FutureExt;
-    use futures::io::{AsyncRead, AsyncWrite};
-    use futures::stream::Stream;
-    use std::future::Future;
-    use std::io::Result;
-    use std::pin::Pin;
-    use std::task::Poll;
-
-    type LoopFuture<R, W> = Pin<Box<dyn Future<Output = (Result<Event>, Protocol<R, W>)> + Send>>;
-
-    async fn loop_next<R, W>(mut protocol: Protocol<R, W>) -> (Result<Event>, Protocol<R, W>)
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        let event = protocol.loop_next().await;
-        (event, protocol)
+    pub async fn open(&mut self, key: Key) -> Result<()> {
+        self.send(Command::Open(key)).await
     }
 
-    /// Event stream interface for a Protocol instance.
-    pub struct ProtocolStream<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        fut: LoopFuture<R, W>,
-        tx: ControlTx,
-    }
-
-    impl<R, W> ProtocolStream<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        pub fn new(protocol: Protocol<R, W>, tx: ControlTx) -> Self {
-            let fut = loop_next(protocol).boxed();
-            Self { fut, tx }
-        }
-
-        pub async fn open(&mut self, key: Vec<u8>) -> Result<()> {
-            self.tx.open(key).await
-        }
-    }
-
-    impl<R, W> Stream for ProtocolStream<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        type Item = Result<Event>;
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            let fut = Pin::as_mut(&mut self.fut);
-            match fut.poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(result) => {
-                    let (result, protocol) = result;
-                    self.fut = loop_next(protocol).boxed();
-                    Poll::Ready(Some(result))
-                }
-            }
-        }
+    /// Close a protocol channel.
+    pub async fn close(&mut self, discovery_key: DiscoveryKey) -> Result<()> {
+        self.send(Command::Close(discovery_key)).await
     }
 }

@@ -5,18 +5,18 @@ use futures::stream::StreamExt;
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{Channel, Event, Message, Protocol, ProtocolBuilder};
 use log::*;
-use piper::pipe;
 use pretty_bytes::converter::convert as pretty_bytes;
+use sluice::pipe::pipe;
 use std::io::Result;
 use std::time::Instant;
 
 const COUNT: u64 = 1000;
-const SIZE: u64 = 1000;
+const SIZE: u64 = 100;
 const CONNS: u64 = 10;
 
 fn bench_throughput(c: &mut Criterion) {
     env_logger::from_env(env_logger::Env::default().default_filter_or("error")).init();
-    let mut group = c.benchmark_group("throughput");
+    let mut group = c.benchmark_group("pipe");
     group.sample_size(10);
     group.throughput(Throughput::Bytes(SIZE * COUNT * CONNS as u64));
     group.bench_function("pipe_echo", |b| {
@@ -38,11 +38,11 @@ criterion_group!(benches, bench_throughput);
 criterion_main!(benches);
 
 async fn run_echo(i: u64) -> Result<()> {
-    let cap: usize = SIZE as usize * 10;
-    let (ar, bw) = pipe(cap);
-    let (br, aw) = pipe(cap);
+    // let cap: usize = SIZE as usize * 10;
+    let (ar, bw) = pipe();
+    let (br, aw) = pipe();
 
-    let encrypted = false;
+    let encrypted = true;
     let a = ProtocolBuilder::new(true)
         .set_encrypted(encrypted)
         .connect_rw(ar, aw);
@@ -51,8 +51,8 @@ async fn run_echo(i: u64) -> Result<()> {
         .connect_rw(br, bw);
     let ta = task::spawn(async move { onconnection(i, a).await });
     let tb = task::spawn(async move { onconnection(i, b).await });
-    let _lena = ta.await?;
-    let _lenb = tb.await?;
+    ta.await?;
+    tb.await?;
     Ok(())
 }
 
@@ -67,9 +67,9 @@ where
     let is_initiator = protocol.is_initiator();
     // let mut len: u64 = 0;
     loop {
-        match protocol.loop_next().await {
-            Ok(event) => {
-                debug!("[init {}] EVENT {:?}", is_initiator, event);
+        match protocol.next().await {
+            Some(Ok(event)) => {
+                debug!("[{}] EVENT {:?}", is_initiator, event);
                 match event {
                     Event::Handshake(_) => {
                         protocol.open(key.clone()).await?;
@@ -87,12 +87,14 @@ where
                     Event::Close(_) => {
                         return Ok(0);
                     }
+                    _ => {}
                 }
             }
-            Err(err) => {
+            Some(Err(err)) => {
                 error!("ERROR {:?}", err);
                 return Err(err.into());
             }
+            None => return Ok(0),
         }
     }
 }

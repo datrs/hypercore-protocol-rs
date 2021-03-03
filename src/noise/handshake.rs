@@ -2,7 +2,6 @@
 use blake2_rfc::blake2b::Blake2b;
 use prost::Message;
 use rand::Rng;
-use snow;
 pub use snow::Keypair;
 use snow::{Builder, Error as SnowError, HandshakeState};
 use std::io::{Error, ErrorKind, Result};
@@ -145,7 +144,14 @@ impl Handshake {
             return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
         }
 
+        // eprintln!(
+        //     "[{}] HANDSHAKE recv len {} {:?}",
+        //     self.is_initiator(),
+        //     msg.len(),
+        //     msg
+        // );
         let rx_len = self.recv(&msg)?;
+        // eprintln!("[{}] HANDSHAKE recv post", self.is_initiator());
 
         if !self.is_initiator() && !self.did_receive {
             self.did_receive = true;

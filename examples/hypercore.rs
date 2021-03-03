@@ -70,9 +70,7 @@ async fn onconnection<T: 'static>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    let mut protocol = ProtocolBuilder::new(is_initiator)
-        .connect(stream)
-        .into_stream();
+    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 
     while let Some(event) = protocol.next().await {
         let event = event?;
@@ -96,12 +94,14 @@ where
                 }
             }
             Event::Close(_dkey) => {}
+            _ => {}
         }
     }
     Ok(())
 }
 
 /// A container for hypercores.
+#[derive(Debug)]
 struct FeedStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
@@ -162,6 +162,11 @@ where
         let mut state = PeerState::default();
         let mut feed = self.feed.clone();
         task::spawn(async move {
+            let msg = Want {
+                start: 0,
+                length: None,
+            };
+            channel.send(Message::Want(msg)).await.unwrap();
             while let Some(message) = channel.next().await {
                 let result = onmessage(&mut feed, &mut state, &mut channel, message).await;
                 if let Err(e) = result {
@@ -223,11 +228,11 @@ where
             let value: Option<&[u8]> = match msg.value.as_ref() {
                 None => None,
                 Some(value) => {
-                    eprintln!(
-                        "recv idx {}: {:?}",
-                        msg.index,
-                        String::from_utf8(value.clone()).unwrap()
-                    );
+                    // eprintln!(
+                    //     "recv idx {}: {:?}",
+                    //     msg.index,
+                    //     String::from_utf8(value.clone()).unwrap()
+                    // );
                     Some(value)
                 }
             };

@@ -110,52 +110,59 @@ where
         if self.state.is_none() {
             return Poll::Ready(None);
         }
-        let mut state = self.state.take().unwrap();
-        if !state.decrypted {
-            if let Some(cipher) = &mut self.cipher {
-                cipher.apply(&mut state.buf[..state.cap]);
-                state.decrypted = true
+
+        loop {
+            let mut state = self.state.take().unwrap();
+            // eprintln!("READER NEXT cap {} state {:?}", state.cap, state.step);
+            if !state.decrypted {
+                if let Some(cipher) = &mut self.cipher {
+                    cipher.apply(&mut state.buf[..state.cap]);
+                    state.decrypted = true
+                }
             }
-        }
 
-        // First process our existing buffer, if any.
-        let result = process_state(&mut state);
-        if result.is_some() {
+            // First process our existing buffer, if any.
+            let result = process_state(&mut state);
+            if result.is_some() {
+                self.state = Some(state);
+                return Poll::Ready(result);
+            }
+
+            // Try to read from our reader.
+            let n = match Pin::new(&mut self).poll_read(cx, &mut state.buf[state.cap..]) {
+                Poll::Ready(Ok(n)) if n > 0 => n,
+                Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e))),
+                // If the reader is pending, poll the timeout.
+                Poll::Pending | Poll::Ready(Ok(_)) => {
+                    match Pin::new(&mut state.timeout).poll(cx) {
+                        // If the timeout is pending, return Pending.
+                        Poll::Pending => {
+                            // eprintln!("READER PENDING");
+                            self.state = Some(state);
+                            return Poll::Pending;
+                        }
+                        // If the timeout is ready, return a timeout error and close by not resetting state.
+                        Poll::Ready(_) => {
+                            return Poll::Ready(Some(Err(Error::new(
+                                ErrorKind::TimedOut,
+                                "Remote timed out",
+                            ))));
+                        }
+                    }
+                }
+            };
+
+            state.cap += n;
+            state
+                .timeout
+                .reset(Duration::from_secs(DEFAULT_TIMEOUT as u64));
+
+            // Now process our buffer again.
+            let result = process_state(&mut state);
             self.state = Some(state);
-            return Poll::Ready(result);
-        }
-
-        // Try to read from our reader.
-        let n = match Pin::new(&mut self).poll_read(cx, &mut state.buf[state.cap..]) {
-            Poll::Ready(n) => n?,
-            // If the reader is pending, poll the timeout.
-            Poll::Pending => match Pin::new(&mut state.timeout).poll(cx) {
-                // If the timeout is pending, return Pending.
-                Poll::Pending => {
-                    self.state = Some(state);
-                    return Poll::Pending;
-                }
-                // If the timeout is ready, return a timeout error and close by not resetting state.
-                Poll::Ready(_) => {
-                    return Poll::Ready(Some(Err(Error::new(
-                        ErrorKind::TimedOut,
-                        "Remote timed out",
-                    ))));
-                }
-            },
-        };
-
-        state.cap += n;
-        state
-            .timeout
-            .reset(Duration::from_secs(DEFAULT_TIMEOUT as u64));
-
-        // Now process our buffer again.
-        let result = process_state(&mut state);
-        self.state = Some(state);
-        match result {
-            Some(_) => Poll::Ready(result),
-            None => Poll::Pending,
+            if result.is_some() {
+                return Poll::Ready(result);
+            }
         }
     }
 }

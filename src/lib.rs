@@ -1,12 +1,8 @@
 //! Speak hypercore-protocol.
 //!
 //! Most basic example:
-//! ```should_panic
+//! ```no_run
 //! # async_std::task::block_on(async {
-//! # async_std::task::spawn(async move {
-//! #    futures_timer::Delay::new(std::time::Duration::from_secs(1)).await;
-//! #    panic!("exit")
-//! # });
 //! #
 //! use hypercore_protocol::{ProtocolBuilder, Event, Message};
 //! use hypercore_protocol::schema::*;
@@ -32,7 +28,7 @@
 //!     let key = vec![0u8; 32];
 //!     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 //!
-//!     while let Ok(event) = protocol.loop_next().await {
+//!     while let Some(Ok(event)) = protocol.next().await {
 //!         eprintln!("[{}] received event {:?}", is_initiator, event);
 //!         match event {
 //!             Event::Handshake(_remote_key) => {
@@ -59,6 +55,7 @@
 // Otherwise some macro calls in the next_loop are prohibited.
 #![recursion_limit = "256"]
 
+mod builder;
 mod channels;
 mod constants;
 mod message;
@@ -74,7 +71,8 @@ pub mod schema {
     pub use crate::message::ExtensionMessage;
 }
 
+pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 pub use message::Message;
-pub use protocol::{Event, Protocol, ProtocolBuilder, ProtocolOptions, ProtocolStream};
+pub use protocol::{DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;

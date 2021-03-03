@@ -1,7 +1,5 @@
 use anyhow::Result;
-use async_std::io;
 use async_std::net::TcpStream;
-use async_std::prelude::*;
 use async_std::sync::Arc;
 use async_std::task;
 use futures::stream::StreamExt;
@@ -60,9 +58,7 @@ async fn onconnection(
     is_initiator: bool,
     feedstore: Arc<FeedStore>,
 ) -> Result<()> {
-    let mut protocol = ProtocolBuilder::new(is_initiator)
-        .connect(stream)
-        .into_stream();
+    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
     while let Some(event) = protocol.next().await {
         let event = event?;
         debug!("EVENT {:?}", event);
@@ -156,9 +152,22 @@ async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, m
                 .await
                 .expect("failed to send");
         }
+        Message::Want(_) => {
+            let msg = Have {
+                start: 0,
+                length: Some(3),
+                bitfield: None,
+                ack: None,
+            };
+            channel
+                .send(Message::Have(msg))
+                .await
+                .expect("failed to send");
+        }
         Message::Have(msg) => {
+            let new_remote_head = msg.start + msg.length.unwrap_or(0);
             if state.remote_head == None {
-                state.remote_head = Some(msg.start);
+                state.remote_head = Some(new_remote_head);
                 let msg = Request {
                     index: 0,
                     bytes: None,
@@ -167,10 +176,21 @@ async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, m
                 };
                 channel.send(Message::Request(msg)).await.unwrap();
             } else if let Some(remote_head) = state.remote_head {
-                if remote_head < msg.start {
-                    state.remote_head = Some(msg.start)
+                if remote_head < new_remote_head {
+                    state.remote_head = Some(new_remote_head);
                 }
             }
+        }
+        Message::Request(msg) => {
+            channel
+                .send(Message::Data(Data {
+                    index: msg.index,
+                    value: Some("Hello world".as_bytes().to_vec()),
+                    nodes: vec![],
+                    signature: None,
+                }))
+                .await
+                .unwrap();
         }
         Message::Data(msg) => {
             debug!(
@@ -181,9 +201,10 @@ async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, m
             );
 
             if let Some(value) = msg.value {
-                let mut stdout = io::stdout();
-                stdout.write_all(&value).await.unwrap();
-                stdout.flush().await.unwrap();
+                eprintln!("{} {}", msg.index, String::from_utf8(value).unwrap());
+                // let mut stdout = io::stdout();
+                // stdout.write_all(&value).await.unwrap();
+                // stdout.flush().await.unwrap();
             }
 
             let next = msg.index + 1;

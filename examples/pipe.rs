@@ -3,8 +3,8 @@ use async_std::task;
 use futures::prelude::*;
 use futures::stream::StreamExt;
 use log::*;
-use piper::pipe;
 use pretty_bytes::converter::convert as pretty_bytes;
+use sluice::pipe::pipe;
 use std::env;
 use std::time::Instant;
 
@@ -52,9 +52,9 @@ async fn run_echo_pipes(config: Config) -> Result<()> {
 }
 
 async fn run_echo(config: Config, i: u64) -> Result<()> {
-    let cap: usize = config.blocksize as usize * 10;
-    let (ar, bw) = pipe(cap);
-    let (br, aw) = pipe(cap);
+    // let cap: usize = config.blocksize as usize * 10;
+    let (ar, bw) = pipe();
+    let (br, aw) = pipe();
 
     let mut a = ProtocolBuilder::new(true);
     let mut b = ProtocolBuilder::new(false);
@@ -83,8 +83,8 @@ where
     let key = vec![0u8; 24];
     let is_initiator = protocol.is_initiator();
     // let mut len: u64 = 0;
-    loop {
-        match protocol.loop_next().await {
+    while let Some(event) = protocol.next().await {
+        match event {
             Ok(event) => {
                 debug!("[init {}] EVENT {:?}", is_initiator, event);
                 match event {
@@ -105,6 +105,7 @@ where
                     Event::Close(_) => {
                         return Ok(0);
                     }
+                    Event::Error(e) => return Err(e.into()),
                 }
             }
             Err(err) => {
@@ -113,6 +114,7 @@ where
             }
         }
     }
+    Ok(0)
 }
 
 async fn on_channel_resp(_config: Config, _i: u64, mut channel: Channel) -> Result<u64> {
