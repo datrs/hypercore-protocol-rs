@@ -1,5 +1,5 @@
 use crate::Protocol;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures_lite::io::{AsyncRead, AsyncWrite};
 
 /// Options for a Protocol instance.
 #[derive(Debug)]

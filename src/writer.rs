@@ -1,7 +1,7 @@
 use crate::noise::{Cipher, HandshakeResult};
 use crate::util::length_prefix;
-use futures::io::AsyncWrite;
-use futures::ready;
+use futures_lite::io::AsyncWrite;
+use futures_lite::ready;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, io::Result};

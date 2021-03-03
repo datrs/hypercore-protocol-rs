@@ -1,8 +1,8 @@
 use async_channel::{Receiver, Sender};
-use futures::io::{AsyncRead, AsyncWrite};
-use futures::io::{BufReader, BufWriter};
-use futures::stream::Stream;
-use futures::task::{Context, Poll};
+use futures_lite::io::{AsyncRead, AsyncWrite};
+use futures_lite::io::{BufReader, BufWriter};
+use futures_lite::stream::Stream;
+use std::task::{Context, Poll};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;

@@ -23,7 +23,6 @@ bench = false
 
 [dependencies]
 async-channel = "1.5"
-futures = "0.3.12"
 snow = { version = "0.7.0-alpha5", features = ["risky-raw-split"] }
 prost = "0.6"
 bytes = "0.5"
@@ -38,6 +37,7 @@ pretty-hash = "0.4"
 futures-timer = "3.0"
 instant = "0.1"
 getrandom = "0.1"
+futures-lite = "1.11.3"
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }

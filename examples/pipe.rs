@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_std::task;
-use futures::prelude::*;
-use futures::stream::StreamExt;
+use futures_lite::prelude::*;
+use futures_lite::stream::StreamExt;
 use log::*;
 use pretty_bytes::converter::convert as pretty_bytes;
 use sluice::pipe::pipe;
@@ -33,8 +33,8 @@ impl Config {
     pub fn from_env() -> Self {
         Config {
             connections: parse_env_u64("CONNECTIONS", 10),
-            blocksize: parse_env_u64("BLOCKSIZE", 1000),
-            length: parse_env_u64("LENGTH", 10000),
+            blocksize: parse_env_u64("BLOCKSIZE", 100),
+            length: parse_env_u64("LENGTH", 1000),
             no_encrypt: env::var("NO_ENCRYPT").is_ok(),
         }
     }
@@ -42,11 +42,14 @@ impl Config {
 
 async fn run_echo_pipes(config: Config) -> Result<()> {
     let start = std::time::Instant::now();
-    let mut futs = vec![];
+    let mut tasks = vec![];
     for i in 0..config.connections {
-        futs.push(run_echo(config.clone(), i));
+        tasks.push(task::spawn(run_echo(config.clone(), i)));
     }
-    futures::future::join_all(futs).await;
+    for task in tasks {
+        task.await?;
+    }
+    // futures::future::join_all(futs).await;
     print_stats("total", start, config.total_bytes() as f64);
     Ok(())
 }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::Arc;
 use async_std::task;
-use futures::stream::StreamExt;
+use futures_lite::stream::StreamExt;
 use log::*;
 use std::collections::HashMap;
 use std::convert::TryInto;

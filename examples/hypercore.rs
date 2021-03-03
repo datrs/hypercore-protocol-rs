@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
-use futures::stream::StreamExt;
+use futures_lite::stream::StreamExt;
 use hypercore::{Feed, Node, NodeTrait, Proof, PublicKey, Signature, Storage};
 use log::*;
 use random_access_memory::RandomAccessMemory;

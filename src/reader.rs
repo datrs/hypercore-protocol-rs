@@ -1,6 +1,6 @@
 use crate::noise::{Cipher, HandshakeResult};
-use futures::io::AsyncRead;
-use futures::stream::{FusedStream, Stream};
+use futures_lite::io::AsyncRead;
+use futures_lite::stream::Stream;
 use futures_timer::Delay;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
@@ -51,7 +51,7 @@ where
         cx: &mut Context,
         buf: &mut [u8],
     ) -> Poll<Result<usize>> {
-        let len = futures::ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
+        let len = futures_lite::ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
 
         if let Some(ref mut cipher) = &mut self.cipher {
             cipher.apply(&mut buf[..len]);
@@ -167,14 +167,14 @@ where
     }
 }
 
-impl<R> FusedStream for ProtocolReader<R>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-{
-    fn is_terminated(&self) -> bool {
-        self.state.is_none()
-    }
-}
+// impl<R> FusedStream for ProtocolReader<R>
+// where
+//     R: AsyncRead + Send + Unpin + 'static,
+// {
+//     fn is_terminated(&self) -> bool {
+//         self.state.is_none()
+//     }
+// }
 
 fn process_state(state: &mut State) -> Option<Result<Vec<u8>>> {
     // Keep processing our current buffer until we need more bytes or have a full message.

@@ -1,7 +1,7 @@
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::{Channel, DiscoveryKey, Event, Protocol, ProtocolBuilder};
 
 pub type MemoryProtocol = Protocol<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>;

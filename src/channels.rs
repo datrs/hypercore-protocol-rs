@@ -4,7 +4,7 @@ use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
 use crate::{discovery_key, DiscoveryKey, Key};
 use async_channel::{Receiver, Sender};
-use futures::stream::Stream;
+use futures_lite::stream::Stream;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};

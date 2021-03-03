@@ -3,7 +3,7 @@
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
-use futures::io::{AsyncRead, AsyncWrite};
+use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 
