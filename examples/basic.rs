@@ -80,7 +80,7 @@ async fn onconnection(
                 }
             }
             Event::Channel(mut channel) => {
-                if let Some(feed) = feedstore.get(&channel.discovery_key()) {
+                if let Some(feed) = feedstore.get(channel.discovery_key()) {
                     let feed = feed.clone();
                     let mut state = FeedState::default();
                     task::spawn(async move {
@@ -110,7 +110,7 @@ impl FeedStore {
         self.feeds.insert(hdkey, Arc::new(feed));
     }
 
-    pub fn get(&self, discovery_key: &[u8]) -> Option<&Arc<Feed>> {
+    pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<Feed>> {
         let hdkey = hex::encode(discovery_key);
         self.feeds.get(&hdkey)
     }

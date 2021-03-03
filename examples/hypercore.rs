@@ -89,7 +89,7 @@ where
                 }
             }
             Event::Channel(channel) => {
-                if let Some(feed) = feedstore.get(&channel.discovery_key()) {
+                if let Some(feed) = feedstore.get(channel.discovery_key()) {
                     feed.onpeer(channel);
                 }
             }
@@ -122,7 +122,7 @@ where
         self.feeds.insert(hdkey, Arc::new(feed));
     }
 
-    pub fn get(&self, discovery_key: &[u8]) -> Option<&Arc<FeedWrapper<T>>> {
+    pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<FeedWrapper<T>>> {
         let hdkey = hex::encode(discovery_key);
         self.feeds.get(&hdkey)
     }
