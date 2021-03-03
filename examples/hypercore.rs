@@ -3,11 +3,12 @@ use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::stream::StreamExt;
-use hypercore::{Feed, Node, Proof, PublicKey, Signature, Storage};
+use hypercore::{Feed, Node, NodeTrait, Proof, PublicKey, Signature, Storage};
 use log::*;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::env;
 use std::fmt::Debug;
 
@@ -27,20 +28,32 @@ fn main() {
     let address = format!("127.0.0.1:{}", port);
 
     let key = env::args().nth(3);
-    let key = key.map_or(None, |key| hex::decode(key).ok());
+    let key: Option<[u8; 32]> = key.map_or(None, |key| {
+        Some(
+            hex::decode(key)
+                .expect("Key has to be a hex string")
+                .try_into()
+                .expect("Key has to be a 32 byte hex string"),
+        )
+    });
 
     task::block_on(async move {
         let mut feedstore: FeedStore<RandomAccessMemory> = FeedStore::new();
-        if let Some(key) = key {
-            // Create a hypercore.
-            let storage = Storage::new_memory().await.unwrap();
+        let storage = Storage::new_memory().await.unwrap();
+        // Create a hypercore.
+        let feed = if let Some(key) = key {
             let public_key = PublicKey::from_bytes(&key).unwrap();
-            let feed = Feed::builder(public_key, storage).build().unwrap();
-
-            // Wrap it and add to the feed store.
-            let feed_wrapper = FeedWrapper::from_memory_feed(feed);
-            feedstore.add(feed_wrapper);
-        }
+            Feed::builder(public_key, storage).build().await.unwrap()
+        } else {
+            let mut feed = Feed::default();
+            feed.append(b"hello").await.unwrap();
+            feed.append(b"world").await.unwrap();
+            feed
+        };
+        info!("Opened feed: {}", hex::encode(feed.public_key().as_bytes()));
+        // Wrap it and add to the feed store.
+        let feed_wrapper = FeedWrapper::from_memory_feed(feed);
+        feedstore.add(feed_wrapper);
         let feedstore = Arc::new(feedstore);
 
         let result = match mode.as_ref() {
@@ -54,7 +67,7 @@ fn main() {
 
 /// Print usage and exit.
 fn usage() {
-    println!("usage: cargo run --example basic -- [client|server] [port] [key]");
+    println!("usage: cargo run --example hypercore -- [client|server] [port] [key]");
     std::process::exit(1);
 }
 
@@ -207,6 +220,19 @@ where
             };
             channel.send(Message::Want(msg)).await?;
         }
+        Message::Want(msg) => {
+            let mut feed = feed.lock().await;
+            if feed.has(msg.start) {
+                channel
+                    .have(Have {
+                        start: msg.start,
+                        ack: None,
+                        bitfield: None,
+                        length: None,
+                    })
+                    .await?;
+            }
+        }
         Message::Have(msg) => {
             if state.remote_head == None {
                 state.remote_head = Some(msg.start);
@@ -223,6 +249,28 @@ where
                 }
             }
         }
+        Message::Request(request) => {
+            let mut feed = feed.lock().await;
+            let index = request.index;
+            let value = feed.get(index).await?;
+            let proof = feed.proof(index, false).await?;
+            let nodes = proof
+                .nodes
+                .iter()
+                .map(|node| data::Node {
+                    index: NodeTrait::index(node),
+                    hash: NodeTrait::hash(node).to_vec(),
+                    size: NodeTrait::len(node),
+                })
+                .collect();
+            let message = Data {
+                index,
+                value: value.clone(),
+                nodes,
+                signature: proof.signature.map(|s| s.to_bytes().to_vec()),
+            };
+            channel.data(message).await?;
+        }
         Message::Data(msg) => {
             let mut feed = feed.lock().await;
             let value: Option<&[u8]> = match msg.value.as_ref() {
@@ -238,7 +286,7 @@ where
             };
 
             let signature = match msg.signature {
-                Some(bytes) => Some(Signature::from_bytes(&bytes)?),
+                Some(bytes) => Some(Signature::try_from(&bytes[..])?),
                 None => None,
             };
             let nodes = msg

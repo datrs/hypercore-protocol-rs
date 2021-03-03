@@ -42,7 +42,8 @@ getrandom = "0.1"
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
 env_logger = "0.7.1"
-hypercore = { git = "https://github.com/datrs/hypercore", branch = "master" }
+# hypercore from master branch as of 2021-03-03
+hypercore = { git = "https://github.com/datrs/hypercore", rev = "8d8cbef8a884a70e8d12d80968c1d97be2ceea0b" }
 random-access-disk = "2.0.0"
 random-access-memory = "2.0.0"
 random-access-storage = "4.0.0"
