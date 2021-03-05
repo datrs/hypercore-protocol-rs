@@ -12,7 +12,7 @@ use _util::*;
 
 #[async_std::test]
 async fn basic_protocol() -> anyhow::Result<()> {
-    env_logger::init();
+    // env_logger::init();
     let (proto_a, proto_b) = create_pair_memory().await?;
 
     let next_a = next_event(proto_a);
@@ -102,6 +102,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
+    eprintln!("TEST GOOD");
 
     return Ok(());
 }

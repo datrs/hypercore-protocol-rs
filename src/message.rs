@@ -333,7 +333,7 @@ pub struct ExtensionMessage {
     pub message: Vec<u8>,
 }
 impl ExtensionMessage {
-    fn _new(id: u64, message: Vec<u8>) -> Self {
+    pub fn new(id: u64, message: Vec<u8>) -> Self {
         Self { id, message }
     }
 

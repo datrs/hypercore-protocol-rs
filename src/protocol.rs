@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
+use crate::extension::{Extension, Extensions};
 use crate::message::{ChannelMessage, EncodeError, Frame, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
@@ -111,6 +112,7 @@ where
     outbound_tx: Sender<ChannelMessage>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
+    extensions: Extensions,
 }
 
 impl<R, W> Protocol<R, W>
@@ -132,6 +134,7 @@ where
             channels: ChannelMap::new(),
             handshake: None,
             error: None,
+            extensions: Extensions::new(outbound_tx.clone(), 0),
             command_rx,
             command_tx: CommandTx(command_tx),
             outbound_tx,
@@ -183,6 +186,11 @@ where
     /// Give a command to the protocol.
     pub async fn command(&mut self, command: Command) -> Result<()> {
         self.command_tx.send(command).await
+    }
+
+    /// Register a protocol extension on the stream.
+    pub fn register_extension(&mut self, name: impl ToString) -> Extension {
+        self.extensions.register(name.to_string())
     }
 
     /// Open a new protocol channel.
@@ -363,14 +371,24 @@ where
         let channel_message = ChannelMessage::decode(buf)?;
         log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
         let (remote_id, message) = channel_message.into_split();
-        match message {
-            Message::Open(msg) => self.on_open(remote_id, msg),
-            Message::Close(msg) => self.on_close(remote_id, msg),
-            Message::Extension(_msg) => unimplemented!(),
-            _ => self
-                .channels
-                .forward_inbound_message(remote_id as usize, message),
+        match remote_id {
+            0 => match message {
+                Message::Options(msg) => self.extensions.on_remote_update(msg.extensions),
+                Message::Extension(msg) => self.extensions.on_message(msg),
+                _ => {}
+            },
+            _ => match message {
+                Message::Open(msg) => self.on_open(remote_id, msg)?,
+                Message::Close(msg) => self.on_close(remote_id, msg)?,
+                _ => self.on_inbound_channel_message(remote_id, message)?,
+            },
         }
+        Ok(())
+    }
+
+    fn on_inbound_channel_message(&mut self, remote_id: u64, message: Message) -> Result<()> {
+        self.channels
+            .forward_inbound_message(remote_id as usize, message)
     }
 
     fn on_command(&mut self, command: Command) -> Result<()> {

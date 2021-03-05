@@ -1,9 +1,11 @@
+use crate::extension::{Extension, Extensions};
 use crate::message::ChannelMessage;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
 use crate::{discovery_key, DiscoveryKey, Key};
 use async_channel::{Receiver, Sender};
+use futures_lite::ready;
 use futures_lite::stream::Stream;
 use std::collections::HashMap;
 use std::fmt;
@@ -20,6 +22,7 @@ pub struct Channel {
     key: Key,
     discovery_key: DiscoveryKey,
     local_id: usize,
+    extensions: Extensions,
 }
 
 impl fmt::Debug for Channel {
@@ -52,6 +55,10 @@ impl Channel {
             .send(message)
             .await
             .map_err(map_channel_err)
+    }
+
+    pub fn register_extension(&mut self, name: impl ToString) -> Extension {
+        self.extensions.register(name.to_string())
     }
 
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
@@ -112,12 +119,29 @@ impl Channel {
 impl Stream for Channel {
     type Item = Message;
     fn poll_next(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        match self.inbound_rx.as_mut() {
-            None => Poll::Ready(None),
-            Some(inbound_rx) => Pin::new(inbound_rx).poll_next(cx),
+        let this = self.get_mut();
+        loop {
+            match this.inbound_rx.as_mut() {
+                None => {
+                    return Poll::Ready(None);
+                }
+                Some(ref mut inbound_rx) => {
+                    let message = ready!(Pin::new(inbound_rx).poll_next(cx));
+                    match message {
+                        Some(Message::Extension(msg)) => {
+                            this.extensions.on_message(msg);
+                        }
+                        Some(Message::Options(ref msg)) => {
+                            this.extensions.on_remote_update(msg.extensions.clone());
+                            return Poll::Ready(message);
+                        }
+                        _ => return Poll::Ready(message),
+                    }
+                }
+            }
         }
     }
 }
@@ -218,10 +242,11 @@ impl ChannelHandle {
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
-            outbound_tx,
+            outbound_tx: outbound_tx.clone(),
             discovery_key: self.discovery_key.clone(),
             key: local_state.key.clone(),
             local_id: local_state.local_id,
+            extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
         };
         self.inbound_tx = Some(inbound_tx);
         channel
@@ -250,8 +275,10 @@ impl ChannelMap {
     pub fn new() -> Self {
         Self {
             channels: HashMap::new(),
-            local_id: Vec::new(),
-            remote_id: Vec::new(),
+            // Add a first None value to local_id to start ids at 1.
+            // This makes sure that 0 may be used for stream-level extensions.
+            local_id: vec![None],
+            remote_id: vec![],
         }
     }
 
@@ -365,7 +392,7 @@ impl ChannelMap {
     }
 
     fn alloc_local(&mut self) -> usize {
-        let empty_id = self.local_id.iter().position(|x| x.is_none());
+        let empty_id = self.local_id.iter().skip(1).position(|x| x.is_none());
         match empty_id {
             Some(empty_id) => empty_id,
             None => {
