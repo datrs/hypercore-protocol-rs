@@ -1,9 +1,9 @@
 use async_std::net::{Shutdown, TcpListener, TcpStream};
 use async_std::task;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use futures_lite::future::Either;
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use futures_lite::stream::{FuturesUnordered, StreamExt};
+use futures::future::Either;
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::stream::{FuturesUnordered, StreamExt};
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{Channel, Event, Message, ProtocolBuilder};
 use log::*;
@@ -62,15 +62,15 @@ fn bench_throughput(c: &mut Criterion) {
 criterion_group!(server_benches, bench_throughput);
 criterion_main!(server_benches);
 
-async fn start_server(address: &str) -> futures_lite::channel::oneshot::Sender<()> {
+async fn start_server(address: &str) -> futures::channel::oneshot::Sender<()> {
     let listener = TcpListener::bind(&address).await.unwrap();
     log::info!("listening on {}", listener.local_addr().unwrap());
-    let (kill_tx, mut kill_rx) = futures_lite::channel::oneshot::channel();
+    let (kill_tx, mut kill_rx) = futures::channel::oneshot::channel();
     task::spawn(async move {
         let mut incoming = listener.incoming();
         // let kill_rx = &mut kill_rx;
         loop {
-            match futures_lite::future::select(incoming.next(), &mut kill_rx).await {
+            match futures::future::select(incoming.next(), &mut kill_rx).await {
                 Either::Left((next, _)) => match next {
                     Some(Ok(stream)) => {
                         let peer_addr = stream.peer_addr().unwrap();
@@ -93,7 +93,7 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let key = vec![0u8; 32];
+    let key = [0u8; 32];
     let mut protocol = ProtocolBuilder::new(is_initiator)
         .set_encrypted(false)
         .connect_rw(reader, writer);

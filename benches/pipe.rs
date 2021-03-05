@@ -1,7 +1,7 @@
 use async_std::task;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use futures_lite::stream::StreamExt;
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::stream::StreamExt;
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{Channel, Event, Message, Protocol, ProtocolBuilder};
 use log::*;
@@ -26,7 +26,7 @@ fn bench_throughput(c: &mut Criterion) {
                 for i in 0..CONNS {
                     futs.push(run_echo(i));
                 }
-                futures_lite::future::join_all(futs).await;
+                futures::future::join_all(futs).await;
             })
         });
     });
@@ -63,7 +63,7 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
-    let key = [0u8; 24];
+    let key = [0u8; 32];
     let is_initiator = protocol.is_initiator();
     // let mut len: u64 = 0;
     loop {
