@@ -24,8 +24,8 @@ bench = false
 [dependencies]
 async-channel = "1.5"
 snow = { version = "0.7.0-alpha5", features = ["risky-raw-split"] }
-prost = "0.6"
-bytes = "0.5"
+prost = "0.7"
+bytes = "1.0.1"
 varinteger = "1.0"
 rand = "0.7"
 blake2-rfc = "0.2"

@@ -2,7 +2,6 @@ use async_channel::{Receiver, Sender};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::io::{BufReader, BufWriter};
 use futures_lite::stream::Stream;
-use std::task::{Context, Poll};
 use futures_timer::Delay;
 use log::*;
 use std::collections::VecDeque;
@@ -11,12 +10,13 @@ use std::fmt;
 use std::future::Future;
 use std::io::{self, Error, ErrorKind, Result};
 use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
-use crate::message::{ChannelMessage, Message};
+use crate::message::{ChannelMessage, EncodeError, Frame, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
 use crate::schema::*;
@@ -123,7 +123,7 @@ where
         let reader = ProtocolReader::new(BufReader::new(reader));
         let writer = ProtocolWriter::new(BufWriter::new(writer));
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
-        let (outbound_tx, outbound_rx) = async_channel::unbounded();
+        let (outbound_tx, outbound_rx) = async_channel::bounded(1);
         Protocol {
             writer,
             reader,
@@ -219,15 +219,28 @@ where
         if let State::Established = this.state {
             // Check for commands, but only once the connection is established.
             return_error!(this.poll_commands(cx));
-            // Process and forward outgoing messages from the channels.
-            return_error!(this.poll_outbound_forward(cx));
         }
 
         // Poll the keepalive timer.
         this.poll_keepalive(cx);
 
-        // Write queued outgoing messages to network.
-        return_error!(this.poll_outbound_write(cx));
+        // Write everything we can write.
+        loop {
+            if let Poll::Ready(Err(e)) = Pin::new(&mut this.writer).poll_send(cx) {
+                return Poll::Ready(Err(e));
+            }
+            if !this.writer.can_park_frame() {
+                break;
+            }
+            match Pin::new(&mut this.outbound_rx).poll_next(cx) {
+                Poll::Ready(Some(message)) => {
+                    this.on_outbound_message(&message);
+                    this.writer.park_frame(message);
+                }
+                Poll::Ready(None) => unreachable!(),
+                Poll::Pending => break,
+            }
+        }
 
         // Check if any events are enqueued.
         if let Some(event) = this.queued_events.pop_front() {
@@ -251,7 +264,7 @@ where
             let mut handshake = Handshake::new(self.options.is_initiator)?;
             // If the handshake start returns a buffer, send it now.
             if let Some(buf) = handshake.start()? {
-                self.queue_outbound_message(buf.to_vec());
+                self.queue_frame_direct(buf.to_vec()).unwrap();
             }
             State::Handshake(Some(handshake))
         } else {
@@ -272,26 +285,20 @@ where
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(self: &mut Self, cx: &mut Context) {
         if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.keepalive), cx) {
-            self.queue_ping();
+            self.writer.queue_frame(Frame::Ping);
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
 
-    /// Poll the channels for outbound messages.
-    fn poll_outbound_forward(self: &mut Self, cx: &mut Context) -> Result<()> {
-        while let Poll::Ready(Some(channel_message)) = Pin::new(&mut self.outbound_rx).poll_next(cx)
+    fn on_outbound_message(&mut self, message: &ChannelMessage) {
+        // If message is close, close the local channel.
+        if let ChannelMessage {
+            channel,
+            message: Message::Close(_),
+        } = message
         {
-            // If message is close, close the local channel.
-            if let ChannelMessage {
-                channel,
-                message: Message::Close(_),
-            } = channel_message
-            {
-                self.close_local(channel);
-            }
-            self.queue_outbound_channel_message(channel_message)?;
+            self.close_local(*channel);
         }
-        Ok(())
     }
 
     /// Poll for inbound messages and processs them.
@@ -305,14 +312,6 @@ where
                 Poll::Ready(Some(Err(e))) => return Err(e),
                 Poll::Pending | Poll::Ready(None) => return Ok(()),
             }
-        }
-    }
-
-    /// Write outgoing messages to the network.
-    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
-        match Pin::new(&mut self.writer).poll_write_all(cx) {
-            Poll::Pending | Poll::Ready(Ok(_)) => Ok(()),
-            Poll::Ready(Err(e)) => Err(e),
         }
     }
 
@@ -337,7 +336,7 @@ where
         };
 
         if let Some(response_buf) = handshake.read(&buf)? {
-            self.queue_outbound_message(response_buf.to_vec());
+            self.queue_frame_direct(response_buf.to_vec()).unwrap();
         }
 
         if !handshake.complete() {
@@ -401,7 +400,8 @@ where
             capability,
         });
         let channel_message = ChannelMessage::new(local_id as u64, message);
-        self.queue_outbound_channel_message(channel_message)
+        self.writer.queue_frame(Frame::Message(channel_message));
+        Ok(())
     }
 
     fn on_open(&mut self, ch: u64, msg: Open) -> Result<()> {
@@ -424,18 +424,9 @@ where
         self.queued_events.push_back(event);
     }
 
-    fn queue_outbound_message(&mut self, message: Vec<u8>) {
-        self.writer.queue_message(message);
-    }
-
-    fn queue_outbound_channel_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
-        let buf = channel_message.encode()?;
-        self.queue_outbound_message(buf);
-        Ok(())
-    }
-
-    fn queue_ping(&mut self) {
-        self.writer.queue_raw(vec![0]);
+    fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
+        let frame = Frame::Raw(body);
+        self.writer.try_queue_direct(&frame)
     }
 
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {

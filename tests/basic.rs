@@ -12,7 +12,7 @@ use _util::*;
 
 #[async_std::test]
 async fn basic_protocol() -> anyhow::Result<()> {
-    env_logger::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::init();
     let (proto_a, proto_b) = create_pair_memory().await?;
 
     let next_a = next_event(proto_a);
