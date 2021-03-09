@@ -93,6 +93,7 @@ pub struct ExtensionHandle {
 impl ExtensionHandle {
     fn send(&mut self, message: Vec<u8>) {
         self.inbound_tx.try_send(message).unwrap()
+        // let _ = self.inbound_tx.try_send(message);
     }
 }
 
@@ -105,6 +106,20 @@ pub struct Extension {
     inbound_rx: Receiver<Vec<u8>>,
     write_state: WriteState,
     read_state: Option<Vec<u8>>,
+}
+
+impl std::clone::Clone for Extension {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            channel: self.channel,
+            local_id: self.local_id,
+            outbound_tx: self.outbound_tx.clone(),
+            inbound_rx: self.inbound_rx.clone(),
+            write_state: WriteState::Idle,
+            read_state: None,
+        }
+    }
 }
 
 type SendFuture = Pin<Box<dyn Future<Output = io::Result<()>> + Send + Sync + 'static>>;
