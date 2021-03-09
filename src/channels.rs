@@ -243,8 +243,8 @@ impl ChannelHandle {
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
             outbound_tx: outbound_tx.clone(),
-            discovery_key: self.discovery_key.clone(),
-            key: local_state.key.clone(),
+            discovery_key: self.discovery_key,
+            key: local_state.key,
             local_id: local_state.local_id,
             extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
         };
@@ -289,10 +289,8 @@ impl ChannelMap {
 
         self.channels
             .entry(hdkey.clone())
-            .and_modify(|channel| channel.attach_local(local_id, key.clone()))
-            .or_insert_with(|| {
-                ChannelHandle::new_local(local_id, discovery_key.clone(), key.clone())
-            });
+            .and_modify(|channel| channel.attach_local(local_id, key))
+            .or_insert_with(|| ChannelHandle::new_local(local_id, discovery_key, key));
 
         self.local_id[local_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()

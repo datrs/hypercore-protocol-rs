@@ -243,7 +243,7 @@ fn encode_prost_message(
     mut buf: &mut [u8],
 ) -> Result<usize, EncodeError> {
     let len = msg.encoded_len();
-    msg.encode(&mut buf).map_err(|e| EncodeError::from(e))?;
+    msg.encode(&mut buf)?;
     Ok(len)
 }
 
@@ -304,7 +304,7 @@ impl ChannelMessage {
                 "received empty message",
             ));
         }
-        let mut header = 0 as u64;
+        let mut header = 0u64;
         let headerlen = varinteger::decode(&buf, &mut header);
         // let body = buf.split_off(headerlen);
         let channel = header >> 4;
@@ -358,6 +358,12 @@ impl ExtensionMessage {
 
     /// Decode an extension message from a buffer.
     fn decode(buf: &[u8]) -> io::Result<Self> {
+        if buf.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Extension message may not be empty",
+            ));
+        }
         let mut id: u64 = 0;
         let id_len = varinteger::decode(&buf, &mut id);
         Ok(Self {

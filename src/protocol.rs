@@ -270,7 +270,7 @@ where
     }
 
     /// Poll commands.
-    fn poll_commands(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_commands(&mut self, cx: &mut Context) -> Result<()> {
         while let Poll::Ready(Some(command)) = Pin::new(&mut self.command_rx).poll_next(cx) {
             self.on_command(command)?;
         }
@@ -278,8 +278,8 @@ where
     }
 
     /// Poll the keepalive timer and queue a ping message if needed.
-    fn poll_keepalive(self: &mut Self, cx: &mut Context) {
-        if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.keepalive), cx) {
+    fn poll_keepalive(&mut self, cx: &mut Context) {
+        if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
             self.writer.queue_frame(Frame::Raw(vec![0u8; 0]));
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
@@ -297,7 +297,7 @@ where
     }
 
     /// Poll for inbound messages and processs them.
-    fn poll_inbound_read(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_inbound_read(&mut self, cx: &mut Context) -> Result<()> {
         loop {
             let msg = Stream::poll_next(Pin::new(&mut self.reader), cx);
             match msg {
@@ -311,7 +311,7 @@ where
     }
 
     /// Poll for outbound messages and write them.
-    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_outbound_write(&mut self, cx: &mut Context) -> Result<()> {
         loop {
             if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
                 return Err(e);
@@ -407,10 +407,10 @@ where
 
     fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
-        let channel_handle = self.channels.attach_local(key.clone());
+        let channel_handle = self.channels.attach_local(key);
         // Safe because attach_local always puts Some(local_id)
         let local_id = channel_handle.local_id().unwrap();
-        let discovery_key = channel_handle.discovery_key().clone();
+        let discovery_key = *channel_handle.discovery_key();
 
         // If the channel was already opened from the remote end, verify, and if
         // verification is ok, push a channel open event.
@@ -433,7 +433,7 @@ where
         let discovery_key: DiscoveryKey = parse_key(&msg.discovery_key)?;
         let channel_handle =
             self.channels
-                .attach_remote(discovery_key.clone(), ch as usize, msg.capability.clone());
+                .attach_remote(discovery_key, ch as usize, msg.capability);
 
         if channel_handle.is_connected() {
             let local_id = channel_handle.local_id().unwrap();
@@ -464,7 +464,7 @@ where
 
     fn close_local(&mut self, local_id: u64) {
         if let Some(channel) = self.channels.get_local(local_id as usize) {
-            let discovery_key = channel.discovery_key().clone();
+            let discovery_key = *channel.discovery_key();
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
         }
@@ -472,7 +472,7 @@ where
 
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
-            let discovery_key = channel_handle.discovery_key().clone();
+            let discovery_key = *channel_handle.discovery_key();
             self.channels
                 .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
