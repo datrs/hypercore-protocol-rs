@@ -11,6 +11,7 @@ use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
+const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 
 pub struct ProtocolReader<R>
 where
@@ -73,7 +74,7 @@ struct State {
 impl State {
     pub fn new() -> State {
         State {
-            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
+            buf: vec![0u8; READ_BUF_INITIAL_SIZE as usize],
             start: 0,
             end: 0,
             step: Step::Header,
@@ -169,6 +170,9 @@ impl State {
                     body_len,
                 } => {
                     let message_len = header_len + body_len;
+                    if message_len > self.buf.len() {
+                        self.buf.resize(message_len, 0u8);
+                    }
                     if (self.end - self.start) < message_len {
                         self.cycle_buf_if_needed();
                         return None;
