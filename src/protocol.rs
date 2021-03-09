@@ -189,8 +189,8 @@ where
     }
 
     /// Register a protocol extension on the stream.
-    pub fn register_extension(&mut self, name: impl ToString) -> Extension {
-        self.extensions.register(name.to_string())
+    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
+        self.extensions.register(name.to_string()).await
     }
 
     /// Open a new protocol channel.
@@ -233,22 +233,7 @@ where
         this.poll_keepalive(cx);
 
         // Write everything we can write.
-        loop {
-            if let Poll::Ready(Err(e)) = Pin::new(&mut this.writer).poll_send(cx) {
-                return Poll::Ready(Err(e));
-            }
-            if !this.writer.can_park_frame() {
-                break;
-            }
-            match Pin::new(&mut this.outbound_rx).poll_next(cx) {
-                Poll::Ready(Some(message)) => {
-                    this.on_outbound_message(&message);
-                    this.writer.park_frame(message);
-                }
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => break,
-            }
-        }
+        return_error!(this.poll_outbound_write(cx));
 
         // Check if any events are enqueued.
         if let Some(event) = this.queued_events.pop_front() {
@@ -319,6 +304,30 @@ where
                 }
                 Poll::Ready(Some(Err(e))) => return Err(e),
                 Poll::Pending | Poll::Ready(None) => return Ok(()),
+            }
+        }
+    }
+
+    /// Poll for outbound messages and write them.
+    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
+        loop {
+            if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
+                return Err(e);
+            }
+            if !self.writer.can_park_frame() {
+                return Ok(());
+            }
+            if let State::Established = self.state {
+                match Pin::new(&mut self.outbound_rx).poll_next(cx) {
+                    Poll::Ready(Some(message)) => {
+                        self.on_outbound_message(&message);
+                        self.writer.park_frame(message);
+                    }
+                    Poll::Ready(None) => unreachable!(),
+                    Poll::Pending => return Ok(()),
+                }
+            } else {
+                return Ok(());
             }
         }
     }

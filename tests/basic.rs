@@ -102,7 +102,5 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
-    eprintln!("TEST GOOD");
-
     return Ok(());
 }

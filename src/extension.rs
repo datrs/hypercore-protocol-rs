@@ -38,7 +38,7 @@ impl Extensions {
         local_id as u64
     }
 
-    pub fn register(&mut self, name: String) -> Extension {
+    pub async fn register(&mut self, name: String) -> Extension {
         let local_id = self.add_local_name(name.clone());
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
         let handle = ExtensionHandle {
@@ -63,7 +63,7 @@ impl Extensions {
             ack: None,
         };
         let message = ChannelMessage::new(self.channel, Message::Options(message));
-        self.outbound_tx.try_send(message).unwrap();
+        self.outbound_tx.send(message).await.unwrap();
 
         extension
     }
@@ -76,7 +76,7 @@ impl Extensions {
         let ExtensionMessage { id, message } = message;
         if let Some(name) = self.remote_ids.get(id as usize) {
             if let Some(handle) = self.extensions.get_mut(name) {
-                handle.send(message);
+                handle.inbound_send(message);
             }
         }
     }
@@ -91,9 +91,10 @@ pub struct ExtensionHandle {
 }
 
 impl ExtensionHandle {
-    fn send(&mut self, message: Vec<u8>) {
-        self.inbound_tx.try_send(message).unwrap()
-        // let _ = self.inbound_tx.try_send(message);
+    fn inbound_send(&mut self, message: Vec<u8>) {
+        // This should be safe because inbound_tx is an unbounded channel,
+        // and is only dropped when the whole channel is dropped.
+        let _ = self.inbound_tx.try_send(message);
     }
 }
 

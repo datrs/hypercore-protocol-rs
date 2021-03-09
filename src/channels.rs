@@ -57,8 +57,8 @@ impl Channel {
             .map_err(map_channel_err)
     }
 
-    pub fn register_extension(&mut self, name: impl ToString) -> Extension {
-        self.extensions.register(name.to_string())
+    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
+        self.extensions.register(name.to_string()).await
     }
 
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {

@@ -61,8 +61,8 @@ async fn stream_extension() -> anyhow::Result<()> {
     // env_logger::init();
     let (mut proto_a, mut proto_b) = create_pair_memory().await?;
 
-    let mut ext_a = proto_a.register_extension("ext");
-    let mut ext_b = proto_b.register_extension("ext");
+    let mut ext_a = proto_a.register_extension("ext").await;
+    let mut ext_b = proto_b.register_extension("ext").await;
 
     drive(proto_a);
     drive(proto_b);
@@ -96,8 +96,8 @@ async fn channel_extension() -> anyhow::Result<()> {
     let (proto_a, mut channel_a) = next_a.await?;
     let (proto_b, mut channel_b) = next_b.await?;
 
-    let mut ext_a = channel_a.register_extension("ext");
-    let mut ext_b = channel_b.register_extension("ext");
+    let mut ext_a = channel_a.register_extension("ext").await;
+    let mut ext_b = channel_b.register_extension("ext").await;
 
     drive(proto_a);
     drive(proto_b);
@@ -133,8 +133,8 @@ async fn channel_extension_async_read_write() -> anyhow::Result<()> {
     let (proto_a, mut channel_a) = next_a.await?;
     let (proto_b, mut channel_b) = next_b.await?;
 
-    let mut ext_a = channel_a.register_extension("ext");
-    let mut ext_b = channel_b.register_extension("ext");
+    let mut ext_a = channel_a.register_extension("ext").await;
+    let mut ext_b = channel_b.register_extension("ext").await;
 
     drive(proto_a);
     drive(proto_b);
