@@ -36,20 +36,28 @@ macro_rules! return_error {
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
+/// Remote public key (32 bytes).
 pub type RemotePublicKey = [u8; 32];
+/// Discovery key (32 bytes).
 pub type DiscoveryKey = [u8; 32];
+/// Key (32 bytes).
 pub type Key = [u8; 32];
 
 /// A protocol event.
 pub enum Event {
+    /// Emitted after the handshake with the remove peer is complete.
+    /// This is the first event (if the handshake is not disabled).
     Handshake(RemotePublicKey),
+    /// Emitted when the remote peer opens a channel that we did not yet open.
     DiscoveryKey(DiscoveryKey),
+    /// Emitted when a channel is established.
     Channel(Channel),
+    /// Emitted when a channel is closed.
     Close(DiscoveryKey),
-    Error(std::io::Error),
 }
 
 /// A protocol command.
+#[derive(Debug)]
 pub enum Command {
     Open(Key),
     Close(DiscoveryKey),
@@ -68,7 +76,6 @@ impl fmt::Debug for Event {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
-            Event::Error(error) => write!(f, "{:?}", error),
         }
     }
 }
@@ -84,7 +91,7 @@ pub enum State {
 }
 
 impl fmt::Debug for State {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
@@ -94,6 +101,7 @@ impl fmt::Debug for State {
 }
 
 /// A Protocol stream.
+#[derive(Debug)]
 pub struct Protocol<R, W>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -149,6 +157,7 @@ where
         Builder::new(is_initiator)
     }
 
+    /// Whether this protocol stream initiated the underlying IO connection.
     pub fn is_initiator(&self) -> bool {
         self.options.is_initiator
     }
@@ -209,7 +218,7 @@ where
         )
     }
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Event>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<Event>> {
         let this = self.get_mut();
 
         if let State::NotInitialized = this.state {
@@ -270,7 +279,7 @@ where
     }
 
     /// Poll commands.
-    fn poll_commands(&mut self, cx: &mut Context) -> Result<()> {
+    fn poll_commands(&mut self, cx: &mut Context<'_>) -> Result<()> {
         while let Poll::Ready(Some(command)) = Pin::new(&mut self.command_rx).poll_next(cx) {
             self.on_command(command)?;
         }
@@ -278,7 +287,7 @@ where
     }
 
     /// Poll the keepalive timer and queue a ping message if needed.
-    fn poll_keepalive(&mut self, cx: &mut Context) {
+    fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
             self.writer.queue_frame(Frame::Raw(vec![0u8; 0]));
             self.keepalive.reset(KEEPALIVE_DURATION);
@@ -297,7 +306,7 @@ where
     }
 
     /// Poll for inbound messages and processs them.
-    fn poll_inbound_read(&mut self, cx: &mut Context) -> Result<()> {
+    fn poll_inbound_read(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
             let msg = Stream::poll_next(Pin::new(&mut self.reader), cx);
             match msg {
@@ -311,7 +320,7 @@ where
     }
 
     /// Poll for outbound messages and write them.
-    fn poll_outbound_write(&mut self, cx: &mut Context) -> Result<()> {
+    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
             if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
                 return Err(e);
@@ -505,16 +514,13 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     type Item = Result<Event>;
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Protocol::poll_next(self, cx).map(Some)
     }
 }
 
 /// Send [Command](Command)s to the [Protocol](Protocol).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommandTx(Sender<Command>);
 
 impl CommandTx {

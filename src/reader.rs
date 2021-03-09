@@ -14,6 +14,7 @@ use std::time::Duration;
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
 const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 
+#[derive(Debug)]
 pub struct ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -110,7 +111,11 @@ impl State {
         self.frame_type = frame_type;
     }
 
-    pub fn poll_reader<R>(&mut self, mut reader: &mut R, cx: &mut Context) -> Poll<Result<Frame>>
+    pub fn poll_reader<R>(
+        &mut self,
+        mut reader: &mut R,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Frame>>
     where
         R: AsyncRead + Unpin,
     {

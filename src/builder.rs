@@ -4,16 +4,22 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 /// Options for a Protocol instance.
 #[derive(Debug)]
 pub struct Options {
+    /// Whether this peer initiated the IO connection for this protoccol
     pub is_initiator: bool,
+    /// Enable or disable the handshake.
+    /// Disabling the handshake will also disable capabilitity verification.
+    /// Don't disable this if you're not 100% sure you want this.
     pub noise: bool,
+    /// Enable or disable transport encryption.
     pub encrypted: bool,
 }
 
 /// Build a Protocol instance with options.
+#[derive(Debug)]
 pub struct Builder(Options);
 
 impl Builder {
-    // Create a protocol builder.
+    /// Create a protocol builder.
     pub fn new(is_initiator: bool) -> Self {
         Self(Options {
             is_initiator,
@@ -59,22 +65,5 @@ impl Builder {
         W: AsyncWrite + Send + Unpin + 'static,
     {
         Protocol::new(reader, writer, self.0)
-    }
-
-    #[deprecated(since = "0.0.1", note = "Use connect_rw")]
-    pub fn build_from_io<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
-    where
-        R: AsyncRead + Send + Unpin + 'static,
-        W: AsyncWrite + Send + Unpin + 'static,
-    {
-        self.connect_rw(reader, writer)
-    }
-
-    #[deprecated(since = "0.0.1", note = "Use connect")]
-    pub fn build_from_stream<S>(self, stream: S) -> Protocol<S, S>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
-    {
-        self.connect(stream)
     }
 }

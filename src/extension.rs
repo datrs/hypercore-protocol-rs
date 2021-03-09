@@ -98,6 +98,23 @@ impl ExtensionHandle {
     }
 }
 
+/// A protocol extension.
+///
+/// An extension can be registered on either the [`Protocol` stream] or on
+/// any [`Channel`]. An extension is identified by a string. When both peers
+/// open an extension with the same name, the extensions are connected. Then, they function as a
+/// binary duplex stream. The stream is fully encrypted, but there's no authentication
+/// performed on individual messages.
+///
+/// The Extension struct implements both [`AsyncRead`] and [`AsyncWrite`]
+/// and is also a [`Stream`]. You should use the extension either as a stream or as
+/// an async reader; if being used as both, the messages would appear in either poll randomly.
+///
+/// [`Channel`]: crate::Channel
+/// [`Stream`]: futures_lite::Stream
+/// [`AsyncRead`]: futures_lite::AsyncRead
+/// [`AsyncWrite`]: futures_lite::AsyncWrite
+/// [`Protocol` stream]: crate::Protocol
 #[derive(Debug)]
 pub struct Extension {
     name: String,
@@ -142,13 +159,14 @@ impl std::fmt::Debug for WriteState {
 }
 
 impl Extension {
+    /// Send a message
     pub async fn send(&self, message: Vec<u8>) {
         let message = ExtensionMessage::new(self.local_id, message);
         let message = ChannelMessage::new(self.channel, Message::Extension(message));
         self.outbound_tx.send(message).await.unwrap()
     }
 
-    pub fn send_pinned(&self, message: Vec<u8>) -> SendFuture {
+    fn send_pinned(&self, message: Vec<u8>) -> SendFuture {
         let message = ExtensionMessage::new(self.local_id, message);
         let message = ChannelMessage::new(self.channel, Message::Extension(message));
         // TODO: It would be nice to do this without cloning, but I didn't find a way so far.

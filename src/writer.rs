@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 
 const BUF_SIZE: usize = 1024 * 64;
 
+#[derive(Debug)]
 pub struct ProtocolWriter<W>
 where
     W: AsyncWrite + Send + Unpin + 'static,
@@ -55,7 +56,7 @@ where
         self.state.try_queue_direct(frame)
     }
 
-    pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
+    pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         let this = self.get_mut();
         let state = &mut this.state;
         let writer = &mut this.writer;
@@ -89,7 +90,7 @@ pub struct State {
 }
 
 impl fmt::Debug for State {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("State")
             .field("step", &self.step)
             .field("buf (len)", &self.buf.len())
@@ -165,7 +166,7 @@ impl State {
 
     fn poll_send<W>(
         &mut self,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
         mut writer: &mut W,
         queue: &mut VecDeque<Frame>,
     ) -> Poll<Result<()>>

@@ -44,6 +44,7 @@ impl Channel {
         &self.key
     }
 
+    /// Get the local wire ID of this channel.
     pub fn id(&self) -> usize {
         self.local_id
     }
@@ -57,10 +58,15 @@ impl Channel {
             .map_err(map_channel_err)
     }
 
+    /// Register a protocol extension.
     pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
         self.extensions.register(name.to_string()).await
     }
 
+    /// Take the receiving part out of the channel.
+    ///
+    /// After taking the receiver, this Channel will not emit messages when
+    /// polled as a stream. The returned receiver will.
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
         self.inbound_rx.take()
     }

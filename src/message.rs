@@ -13,7 +13,7 @@ pub struct EncodeError {
 }
 
 impl fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Cannot encode message: Write buffer is full")
     }
 }
@@ -143,6 +143,7 @@ impl Encoder for Frame {
 
 /// A protocol message.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub enum Message {
     Open(Open),
     Options(Options),
@@ -180,6 +181,8 @@ impl Message {
             )),
         }
     }
+
+    /// Wire type of this message.
     pub fn typ(&self) -> u64 {
         match self {
             Self::Open(_) => 0,
@@ -195,10 +198,6 @@ impl Message {
             Self::Close(_) => 10,
             Self::Extension(_) => 15,
         }
-    }
-
-    pub fn into_channel_message(self, channel: u64) -> ChannelMessage {
-        ChannelMessage::new(channel, self)
     }
 }
 
@@ -248,7 +247,7 @@ fn encode_prost_message(
 }
 
 impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Open(msg) => write!(
                 f,
@@ -346,7 +345,9 @@ impl Encoder for ChannelMessage {
 /// A extension message.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionMessage {
+    /// ID of this extension
     pub id: u64,
+    /// Message content
     pub message: Vec<u8>,
 }
 
