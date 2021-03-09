@@ -107,6 +107,7 @@ where
                 }
             }
             Event::Close(_dkey) => {}
+            _ => {}
         }
     }
     Ok(())

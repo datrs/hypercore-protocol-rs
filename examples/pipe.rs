@@ -108,6 +108,7 @@ where
                     Event::Close(_) => {
                         return Ok(0);
                     }
+                    _ => {}
                 }
             }
             Err(err) => {
