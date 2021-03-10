@@ -2,7 +2,7 @@
 
 All notable changes to this Rust implementation of hypercore-protocol will be documented here.
 
-### unreleased
+### 0.3.0
 
 #### API breaking changes
 
