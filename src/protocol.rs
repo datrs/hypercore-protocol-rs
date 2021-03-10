@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
+use crate::extension::{Extension, Extensions};
 use crate::message::{ChannelMessage, EncodeError, Frame, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
@@ -111,6 +112,7 @@ where
     outbound_tx: Sender<ChannelMessage>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
+    extensions: Extensions,
 }
 
 impl<R, W> Protocol<R, W>
@@ -132,6 +134,7 @@ where
             channels: ChannelMap::new(),
             handshake: None,
             error: None,
+            extensions: Extensions::new(outbound_tx.clone(), 0),
             command_rx,
             command_tx: CommandTx(command_tx),
             outbound_tx,
@@ -185,6 +188,11 @@ where
         self.command_tx.send(command).await
     }
 
+    /// Register a protocol extension on the stream.
+    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
+        self.extensions.register(name.to_string()).await
+    }
+
     /// Open a new protocol channel.
     ///
     /// Once the other side proofed that it also knows the `key`, the channel is emitted as
@@ -225,22 +233,7 @@ where
         this.poll_keepalive(cx);
 
         // Write everything we can write.
-        loop {
-            if let Poll::Ready(Err(e)) = Pin::new(&mut this.writer).poll_send(cx) {
-                return Poll::Ready(Err(e));
-            }
-            if !this.writer.can_park_frame() {
-                break;
-            }
-            match Pin::new(&mut this.outbound_rx).poll_next(cx) {
-                Poll::Ready(Some(message)) => {
-                    this.on_outbound_message(&message);
-                    this.writer.park_frame(message);
-                }
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => break,
-            }
-        }
+        return_error!(this.poll_outbound_write(cx));
 
         // Check if any events are enqueued.
         if let Some(event) = this.queued_events.pop_front() {
@@ -315,6 +308,30 @@ where
         }
     }
 
+    /// Poll for outbound messages and write them.
+    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
+        loop {
+            if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
+                return Err(e);
+            }
+            if !self.writer.can_park_frame() {
+                return Ok(());
+            }
+            if let State::Established = self.state {
+                match Pin::new(&mut self.outbound_rx).poll_next(cx) {
+                    Poll::Ready(Some(message)) => {
+                        self.on_outbound_message(&message);
+                        self.writer.park_frame(message);
+                    }
+                    Poll::Ready(None) => unreachable!(),
+                    Poll::Pending => return Ok(()),
+                }
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
     fn on_message(&mut self, buf: Vec<u8>) -> Result<()> {
         // log::trace!(
         //     "[{}] onmessage IN len {} state {:?}",
@@ -363,14 +380,24 @@ where
         let channel_message = ChannelMessage::decode(buf)?;
         log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
         let (remote_id, message) = channel_message.into_split();
-        match message {
-            Message::Open(msg) => self.on_open(remote_id, msg),
-            Message::Close(msg) => self.on_close(remote_id, msg),
-            Message::Extension(_msg) => unimplemented!(),
-            _ => self
-                .channels
-                .forward_inbound_message(remote_id as usize, message),
+        match remote_id {
+            0 => match message {
+                Message::Options(msg) => self.extensions.on_remote_update(msg.extensions),
+                Message::Extension(msg) => self.extensions.on_message(msg),
+                _ => {}
+            },
+            _ => match message {
+                Message::Open(msg) => self.on_open(remote_id, msg)?,
+                Message::Close(msg) => self.on_close(remote_id, msg)?,
+                _ => self.on_inbound_channel_message(remote_id, message)?,
+            },
         }
+        Ok(())
+    }
+
+    fn on_inbound_channel_message(&mut self, remote_id: u64, message: Message) -> Result<()> {
+        self.channels
+            .forward_inbound_message(remote_id as usize, message)
     }
 
     fn on_command(&mut self, command: Command) -> Result<()> {

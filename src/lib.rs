@@ -58,6 +58,7 @@
 mod builder;
 mod channels;
 mod constants;
+mod extension;
 mod message;
 mod noise;
 mod protocol;
@@ -73,6 +74,7 @@ pub mod schema {
 
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
+pub use extension::Extension;
 pub use message::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;
