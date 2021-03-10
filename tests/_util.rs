@@ -2,9 +2,9 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
 use futures_lite::io::{AsyncRead, AsyncWrite};
-use hypercore_protocol::{Channel, DiscoveryKey, Event, Protocol, ProtocolBuilder};
+use hypercore_protocol::{Channel, DiscoveryKey, Duplex, Event, Protocol, ProtocolBuilder};
 
-pub type MemoryProtocol = Protocol<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>;
+pub type MemoryProtocol = Protocol<Duplex<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>>;
 pub async fn create_pair_memory() -> std::io::Result<(MemoryProtocol, MemoryProtocol)> {
     let (ar, bw) = sluice::pipe::pipe();
     let (br, aw) = sluice::pipe::pipe();
@@ -16,7 +16,7 @@ pub async fn create_pair_memory() -> std::io::Result<(MemoryProtocol, MemoryProt
     Ok((a, b))
 }
 
-pub type TcpProtocol = Protocol<TcpStream, TcpStream>;
+pub type TcpProtocol = Protocol<TcpStream>;
 pub async fn create_pair_tcp() -> std::io::Result<(TcpProtocol, TcpProtocol)> {
     let (stream_a, stream_b) = tcp::pair().await?;
     let a = ProtocolBuilder::new(true).connect(stream_a);
@@ -24,12 +24,11 @@ pub async fn create_pair_tcp() -> std::io::Result<(TcpProtocol, TcpProtocol)> {
     Ok((a, b))
 }
 
-pub fn next_event<R, W>(
-    mut proto: Protocol<R, W>,
-) -> impl Future<Output = (std::io::Result<Event>, Protocol<R, W>)>
+pub fn next_event<IO>(
+    mut proto: Protocol<IO>,
+) -> impl Future<Output = (std::io::Result<Event>, Protocol<IO>)>
 where
-    R: AsyncRead + Send + Unpin,
-    W: AsyncWrite + Send + Unpin,
+    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let task = task::spawn(async move {
         let e1 = proto.next().await;
