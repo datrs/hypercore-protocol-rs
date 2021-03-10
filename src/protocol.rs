@@ -110,7 +110,6 @@ pub struct Protocol<IO> {
     options: Options,
     handshake: Option<HandshakeResult>,
     channels: ChannelMap,
-    error: Option<Error>,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
     outbound_rx: Receiver<ChannelMessage>,
@@ -136,7 +135,6 @@ where
             state: State::NotInitialized,
             channels: ChannelMap::new(),
             handshake: None,
-            error: None,
             extensions: Extensions::new(outbound_tx.clone(), 0),
             command_rx,
             command_tx: CommandTx(command_tx),
@@ -175,11 +173,6 @@ where
             None => None,
             Some(handshake) => Some(handshake.remote_pubkey.as_slice()),
         }
-    }
-
-    /// Destroy the protocol instance with an error.
-    pub fn destroy(&mut self, error: Error) {
-        self.error = Some(error)
     }
 
     /// Get a sender to send commands.
