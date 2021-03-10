@@ -10,13 +10,14 @@ use std::task::{Context, Poll};
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use std::time::Duration;
 
+const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
+
 pub struct ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    cipher: Option<Cipher>,
     reader: R,
-    state: Option<State>,
+    state: State,
 }
 
 impl<R> ProtocolReader<R>
@@ -25,79 +26,17 @@ where
 {
     pub fn new(reader: R) -> Self {
         Self {
-            cipher: None,
             reader,
-            state: Some(State::default()),
+            state: State::new(),
         }
     }
 
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        let cipher = Cipher::from_handshake_rx(handshake)?;
-        self.cipher = Some(cipher);
-        Ok(())
+        self.state.upgrade_with_handshake(handshake)
     }
 
     pub fn into_inner(self) -> R {
         self.reader
-    }
-}
-
-impl<R> AsyncRead for ProtocolReader<R>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize>> {
-        let len = futures_lite::ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
-
-        if let Some(ref mut cipher) = &mut self.cipher {
-            cipher.apply(&mut buf[..len]);
-        }
-
-        Poll::Ready(Ok(len))
-    }
-}
-
-#[derive(Debug)]
-struct State {
-    /// The read buffer.
-    buf: Vec<u8>,
-    /// The number of relevant bytes in the read buffer.
-    cap: usize,
-    /// The logical state of the reading (either header or body).
-    step: Step,
-    /// The timeout after which the connection is closed.
-    timeout: Delay,
-    /// Whether the read buffer is already decrypted.
-    decrypted: bool,
-}
-
-impl Default for State {
-    fn default() -> State {
-        State {
-            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
-            cap: 0,
-            step: Step::default(),
-            timeout: Delay::new(Duration::from_secs(DEFAULT_TIMEOUT as u64)),
-            decrypted: false,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum Step {
-    Header { factor: u64, varint: u64 },
-    Body { header_len: usize, body_len: usize },
-}
-impl Default for Step {
-    fn default() -> Step {
-        Step::Header {
-            factor: 1,
-            varint: 0,
-        }
     }
 }
 
@@ -106,148 +45,161 @@ where
     R: AsyncRead + Send + Unpin + 'static,
 {
     type Item = Result<Vec<u8>>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.state.is_none() {
-            return Poll::Ready(None);
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let state = &mut this.state;
+        let reader = &mut this.reader;
+        let result = state.poll_reader(reader, cx);
+        result.map(Some)
+    }
+}
+
+#[derive(Debug)]
+struct State {
+    /// The read buffer.
+    buf: Vec<u8>,
+    /// The start of the not-yet-processed byte range in the read buffer.
+    start: usize,
+    /// The end of the not-yet-processed byte range in the read buffer.
+    end: usize,
+    /// The logical state of the reading (either header or body).
+    step: Step,
+    /// The timeout after which the connection is closed.
+    timeout: Delay,
+    /// Optional encryption cipher.
+    cipher: Option<Cipher>,
+}
+
+impl State {
+    pub fn new() -> State {
+        State {
+            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
+            start: 0,
+            end: 0,
+            step: Step::Header,
+            timeout: Delay::new(TIMEOUT),
+            cipher: None,
         }
+    }
+}
 
+#[derive(Debug)]
+enum Step {
+    Header,
+    Body { header_len: usize, body_len: usize },
+}
+
+impl State {
+    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
+        let mut cipher = Cipher::from_handshake_rx(handshake)?;
+        cipher.apply(&mut self.buf[self.start..self.end]);
+        self.cipher = Some(cipher);
+        Ok(())
+    }
+
+    pub fn poll_reader<R>(&mut self, mut reader: &mut R, cx: &mut Context) -> Poll<Result<Vec<u8>>>
+    where
+        R: AsyncRead + Unpin,
+    {
         loop {
-            let mut state = self.state.take().unwrap();
-            // eprintln!("READER NEXT cap {} state {:?}", state.cap, state.step);
-            if !state.decrypted {
-                if let Some(cipher) = &mut self.cipher {
-                    cipher.apply(&mut state.buf[..state.cap]);
-                    state.decrypted = true
-                }
-            }
-
-            // First process our existing buffer, if any.
-            let result = process_state(&mut state);
-            if result.is_some() {
-                self.state = Some(state);
+            if let Some(result) = self.process() {
                 return Poll::Ready(result);
             }
 
-            // Try to read from our reader.
-            let n = match Pin::new(&mut self).poll_read(cx, &mut state.buf[state.cap..]) {
+            let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
                 Poll::Ready(Ok(n)) if n > 0 => n,
-                Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 // If the reader is pending, poll the timeout.
                 Poll::Pending | Poll::Ready(Ok(_)) => {
-                    match Pin::new(&mut state.timeout).poll(cx) {
-                        // If the timeout is pending, return Pending.
-                        Poll::Pending => {
-                            // eprintln!("READER PENDING");
-                            self.state = Some(state);
-                            return Poll::Pending;
-                        }
-                        // If the timeout is ready, return a timeout error and close by not resetting state.
-                        Poll::Ready(_) => {
-                            return Poll::Ready(Some(Err(Error::new(
-                                ErrorKind::TimedOut,
-                                "Remote timed out",
-                            ))));
-                        }
-                    }
+                    // Return Pending if the timeout is pending, or an error if the
+                    // timeout expired (i.e. returned Poll::Ready).
+                    return Pin::new(&mut self.timeout)
+                        .poll(cx)
+                        .map(|()| Err(Error::new(ErrorKind::TimedOut, "Remote timed out")));
                 }
             };
 
-            state.cap += n;
-            state
-                .timeout
-                .reset(Duration::from_secs(DEFAULT_TIMEOUT as u64));
+            let end = self.end + n;
+            if let Some(ref mut cipher) = self.cipher {
+                cipher.apply(&mut self.buf[self.end..end]);
+            }
+            self.end = end;
+            self.timeout.reset(TIMEOUT);
+        }
+    }
 
-            // Now process our buffer again.
-            let result = process_state(&mut state);
-            self.state = Some(state);
-            if result.is_some() {
-                return Poll::Ready(result);
+    fn cycle_buf_if_needed(&mut self) {
+        // TODO: It would be great if we wouldn't have to allocate here.
+        if self.end == self.buf.len() {
+            let temp = self.buf[self.start..self.end].to_vec();
+            let len = temp.len();
+            self.buf[..len].copy_from_slice(&temp[..]);
+            self.end = len;
+            self.start = 0;
+        }
+    }
+
+    fn process(&mut self) -> Option<Result<Vec<u8>>> {
+        if self.start == self.end {
+            return None;
+        }
+        loop {
+            match self.step {
+                Step::Header => {
+                    let varint = varint_decode(&self.buf[self.start..self.end]);
+                    if let Some((header_len, body_len)) = varint {
+                        let body_len = body_len as usize;
+                        if body_len > MAX_MESSAGE_SIZE as usize {
+                            return Some(Err(Error::new(
+                                ErrorKind::InvalidData,
+                                "Message length above max allowed size",
+                            )));
+                        }
+                        self.step = Step::Body {
+                            header_len,
+                            body_len,
+                        };
+                    } else {
+                        self.cycle_buf_if_needed();
+                        return None;
+                    }
+                }
+                Step::Body {
+                    header_len,
+                    body_len,
+                } => {
+                    let message_len = header_len + body_len;
+                    if (self.end - self.start) < message_len {
+                        self.cycle_buf_if_needed();
+                        return None;
+                    } else {
+                        let range = (self.start + header_len)..(self.start + message_len);
+                        let message = self.buf[range].to_vec();
+                        self.start += message_len;
+                        self.step = Step::Header;
+                        return Some(Ok(message));
+                    }
+                }
             }
         }
     }
 }
 
-// impl<R> FusedStream for ProtocolReader<R>
-// where
-//     R: AsyncRead + Send + Unpin + 'static,
-// {
-//     fn is_terminated(&self) -> bool {
-//         self.state.is_none()
-//     }
-// }
-
-fn process_state(state: &mut State) -> Option<Result<Vec<u8>>> {
-    // Keep processing our current buffer until we need more bytes or have a full message.
-    if state.cap == 0 {
-        return None;
-    }
-    let mut needs_more_bytes = false;
-    let mut result = None;
-    while !needs_more_bytes && result.is_none() {
-        match state.step {
-            // Read a varint.
-            Step::Header {
-                ref mut factor,
-                ref mut varint,
-            } => {
-                needs_more_bytes = true;
-                for (i, byte) in state.buf[..state.cap].iter().enumerate() {
-                    // Ignore empty keepalive bytes.
-                    if byte == &0 {
-                        continue;
-                    }
-                    *varint += (*byte as u64 & 127) * *factor;
-                    if *varint > MAX_MESSAGE_SIZE {
-                        return Some(Err(Error::new(ErrorKind::InvalidInput, "Message too long")));
-                    }
-                    if byte < &128 {
-                        state.step = Step::Body {
-                            header_len: i + 1,
-                            body_len: *varint as usize,
-                        };
-                        needs_more_bytes = false;
-                        break;
-                    }
-                    *factor *= 128;
-                }
-            }
-            // Read the actual message.
-            Step::Body {
-                header_len,
-                body_len,
-            } => {
-                let message_len = header_len + body_len;
-                if message_len > state.cap {
-                    // Not enough bytes for a full message, return to reading.
-                    needs_more_bytes = true
-                } else {
-                    // We have enough bytes for a full message!
-                    let message_buf = &state.buf[header_len..message_len];
-
-                    result = Some(Ok(message_buf.to_vec()));
-                    // self.on_message(message_buf).await?;
-
-                    // If we have even more bytes, copy them to the beginning of our read
-                    // buffer and adjust the cap accordingly.
-                    if state.cap > message_len {
-                        // TODO: If we were using a ring buffer we wouldn't have to copy and
-                        // allocate here.
-                        let overflow_buf = &state.buf[message_len..state.cap].to_vec();
-                        state.cap -= message_len;
-                        state.buf[..state.cap].copy_from_slice(&overflow_buf[..]);
-                    // Otherwise, read again!
-                    } else {
-                        state.cap = 0;
-                        needs_more_bytes = true;
-                    }
-                    // In any case, after reading a message the next step is to read a varint.
-                    state.step = Step::Header {
-                        factor: 1,
-                        varint: 0,
-                    };
-                }
-            }
+fn varint_decode(buf: &[u8]) -> Option<(usize, u64)> {
+    let mut value = 0u64;
+    let mut m = 1u64;
+    let mut offset = 0usize;
+    for _i in 0..8 {
+        if offset >= buf.len() {
+            return None;
+        }
+        let byte = buf[offset];
+        offset += 1;
+        value += m * u64::from(byte & 127);
+        m *= 128;
+        if byte & 128 == 0 {
+            break;
         }
     }
-    result
+    Some((offset, value))
 }

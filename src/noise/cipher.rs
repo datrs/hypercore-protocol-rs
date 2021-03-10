@@ -9,6 +9,12 @@ const NONCE_SIZE: usize = 24;
 
 pub struct Cipher(XSalsa20);
 
+impl std::fmt::Debug for Cipher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cipher(XSalsa20)")
+    }
+}
+
 impl Cipher {
     pub fn from_handshake_rx(handshake: &HandshakeResult) -> Result<Self> {
         let cipher = XSalsa20::new_var(
