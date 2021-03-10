@@ -1,12 +1,45 @@
-<h1 align="center">hypercore-protocol-rs</h1>
+<h1 align="center">hypercore-protocol</h1>
+<div align="center">
+  <strong>
+    Rust implementation of the <a href="https://github.com/mafintosh/hypercore-protocol">Hypercore</a> wire protocol
+  </strong>
+</div>
 
-**A Rust implementation of the wire protocol of [Hypercore](https://github.com/mafintosh/hypercore-protocol)**
+<br />
 
-*Unstable and not finished! My spare time projects for some time, slowly getting there while playing with [datrs](https://github.com/datrs).* If someone wants to help to fill the gaps feel free to open issues or submit PRs. The best starting place is to say hi on IRC in #datrs on freenode.
+<div align="center">
+  <!-- Crates version -->
+  <a href="https://crates.io/crates/hypercore-protocol">
+    <img src="https://img.shields.io/crates/v/hypercore-protocol.svg?style=flat-square"
+    alt="Crates.io version" />
+  </a>
+  <!-- Downloads -->
+  <a href="https://crates.io/crates/hypercore-protocol">
+    <img src="https://img.shields.io/crates/d/hypercore-protocol.svg?style=flat-square"
+      alt="Download" />
+  </a>
+  <!-- docs.rs docs -->
+  <a href="https://docs.rs/hypercore-protocol">
+    <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square"
+      alt="docs.rs docs" />
+  </a>
+</div>
 
-This crate provides a low-level API to hypercore-protocol and exposes traits that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 9 (Dat 2) only.
+<div align="center">
+  <h4>
+    <a href="https://docs.rs/hypercore-protocol">
+      API Docs
+    </a>
+    <span> | </span>
+    <a href="#contributing">
+      Contributing
+    </a>
+  </h4>
+</div>
 
-It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake (currently depending on unreleased changes on its master branch).
+This crate provides a low-level streaming API to hypercore-protocol and exposes an interface that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 9 (Dat 2) only.
+
+It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake.
 
 Current features are:
 
@@ -15,8 +48,9 @@ Current features are:
 * Accept channels opened by the remote end if your end knows the key
 * Create and verify capability hashes
 * Send and receive all protocol messages
+* Register and use protocol extensions
 
-*Note: To sync with NodeJS the minimum required version is hypercore `9` and hypercore-protocol `8`.*
+*We're actively looking for contributors to the datrust development! If you're interested, say hi in the `#rust` channel on the [Hypercore Protocol Discord](https://chat.hypercore-protocol.org/) :-)*
 
 ## Examples
 
@@ -46,3 +80,23 @@ Runs the `basic.rs` example with a replication stream from NodeJS hypercore. The
 * Use this key to connect from Rust and pipe the file content to stdout:
   `cargo run --example basic -- server 8000 KEY`
 
+
+## Contributing
+
+We're actively looking for contributors to the datrust development! 
+
+If you're interested, the easiest is to say hi in the `#rust` channel on the [Hypercore Protocol Discord](https://chat.hypercore-protocol.org/).
+
+Contributions include pull requests, issue reports, documentation, design
+and other work that benefits this project.
+
+This project is welcoming contributions from anyone who acts in good faith!
+We do not tolerate toxic behavior or discriminations against other contributors.
+People who engage with this project in bad faith or fail to reflect and change
+harmful behavior may be excluded from contributing. Should you feel that someone
+acted in such a way, please reach out to the authors of this project.
+
+Open, diverse, and inclusive communities live and die on the basis of trust.
+Contributors can disagree with one another so long as they trust that those
+disagreements are in good faith and everyone is working towards a common
+goal.
