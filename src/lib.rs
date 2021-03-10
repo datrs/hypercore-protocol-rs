@@ -52,8 +52,10 @@
 //! ```
 //! See [examples/basic.rs](https://github.com/Frando/hypercore-protocol-rust-experiments/blob/master/examples/basic.rs) for an actual example of how to use a protocol stream.
 
-// Otherwise some macro calls in the next_loop are prohibited.
-#![recursion_limit = "256"]
+#![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
+#![deny(missing_debug_implementations, nonstandard_style)]
+// #![warn(missing_docs, missing_doc_code_examples, unreachable_pub)]
+#![warn(missing_docs, missing_doc_code_examples)]
 
 mod builder;
 mod channels;
@@ -67,6 +69,7 @@ mod util;
 mod writer;
 
 /// The wire messages used by the protocol.
+#[allow(missing_docs)]
 pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
     pub use crate::message::ExtensionMessage;

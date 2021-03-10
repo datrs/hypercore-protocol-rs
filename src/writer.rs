@@ -9,12 +9,12 @@ use std::task::{Context, Poll};
 
 const BUF_SIZE: usize = 1024 * 64;
 
+#[derive(Debug)]
 pub struct ProtocolWriter<W>
 where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     writer: W,
-    queue: VecDeque<Frame>,
     state: State,
 }
 
@@ -26,7 +26,6 @@ where
         Self {
             writer,
             state: State::new(),
-            queue: VecDeque::new(),
         }
     }
 
@@ -34,7 +33,7 @@ where
     where
         F: Into<Frame>,
     {
-        self.queue.push_back(frame.into())
+        self.state.queue_frame(frame)
     }
 
     pub fn can_park_frame(&self) -> bool {
@@ -55,12 +54,11 @@ where
         self.state.try_queue_direct(frame)
     }
 
-    pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
+    pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         let this = self.get_mut();
         let state = &mut this.state;
         let writer = &mut this.writer;
-        let queue = &mut this.queue;
-        state.poll_send(cx, writer, queue)
+        state.poll_send(cx, writer)
     }
 
     pub fn into_inner(self) -> W {
@@ -80,6 +78,7 @@ pub enum Step {
 }
 
 pub struct State {
+    queue: VecDeque<Frame>,
     buf: Vec<u8>,
     current_frame: Option<Frame>,
     start: usize,
@@ -89,8 +88,9 @@ pub struct State {
 }
 
 impl fmt::Debug for State {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("State")
+            .field("queue (len)", &self.queue.len())
             .field("step", &self.step)
             .field("buf (len)", &self.buf.len())
             .field("current_frame", &self.current_frame)
@@ -104,6 +104,7 @@ impl fmt::Debug for State {
 impl State {
     fn new() -> Self {
         Self {
+            queue: VecDeque::new(),
             buf: vec![0u8; BUF_SIZE],
             current_frame: None,
             start: 0,
@@ -111,6 +112,13 @@ impl State {
             cipher: None,
             step: Step::Processing,
         }
+    }
+
+    pub fn queue_frame<F>(&mut self, frame: F)
+    where
+        F: Into<Frame>,
+    {
+        self.queue.push_back(frame.into())
     }
 
     fn try_queue_direct<T: Encoder>(
@@ -163,20 +171,15 @@ impl State {
         self.end - self.start
     }
 
-    fn poll_send<W>(
-        &mut self,
-        cx: &mut Context,
-        mut writer: &mut W,
-        queue: &mut VecDeque<Frame>,
-    ) -> Poll<Result<()>>
+    fn poll_send<W>(&mut self, cx: &mut Context<'_>, mut writer: &mut W) -> Poll<Result<()>>
     where
         W: AsyncWrite + Unpin,
     {
         loop {
             self.step = match self.step {
                 Step::Processing => {
-                    if self.current_frame.is_none() && !queue.is_empty() {
-                        self.current_frame = queue.pop_front();
+                    if self.current_frame.is_none() && !self.queue.is_empty() {
+                        self.current_frame = self.queue.pop_front();
                     }
 
                     if let Some(frame) = self.current_frame.take() {

@@ -5,6 +5,9 @@ use std::io::{Error, ErrorKind};
 use crate::constants::DISCOVERY_NS_BUF;
 use crate::DiscoveryKey;
 
+/// Calculate the discovery key of a key.
+///
+/// The discovery key is a 32 byte namespaced hash of the key.
 pub fn discovery_key(key: &[u8]) -> DiscoveryKey {
     let mut hasher = Blake2b::with_key(32, key);
     hasher.update(&DISCOVERY_NS_BUF);

@@ -17,7 +17,7 @@ use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
 use crate::extension::{Extension, Extensions};
-use crate::message::{ChannelMessage, EncodeError, Frame, Message};
+use crate::message::{ChannelMessage, EncodeError, Frame, FrameType, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ProtocolReader;
 use crate::schema::*;
@@ -36,20 +36,29 @@ macro_rules! return_error {
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
+/// Remote public key (32 bytes).
 pub type RemotePublicKey = [u8; 32];
+/// Discovery key (32 bytes).
 pub type DiscoveryKey = [u8; 32];
+/// Key (32 bytes).
 pub type Key = [u8; 32];
 
 /// A protocol event.
+#[non_exhaustive]
 pub enum Event {
+    /// Emitted after the handshake with the remove peer is complete.
+    /// This is the first event (if the handshake is not disabled).
     Handshake(RemotePublicKey),
+    /// Emitted when the remote peer opens a channel that we did not yet open.
     DiscoveryKey(DiscoveryKey),
+    /// Emitted when a channel is established.
     Channel(Channel),
+    /// Emitted when a channel is closed.
     Close(DiscoveryKey),
-    Error(std::io::Error),
 }
 
 /// A protocol command.
+#[derive(Debug)]
 pub enum Command {
     Open(Key),
     Close(DiscoveryKey),
@@ -68,7 +77,6 @@ impl fmt::Debug for Event {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
-            Event::Error(error) => write!(f, "{:?}", error),
         }
     }
 }
@@ -84,7 +92,7 @@ pub enum State {
 }
 
 impl fmt::Debug for State {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
@@ -94,6 +102,7 @@ impl fmt::Debug for State {
 }
 
 /// A Protocol stream.
+#[derive(Debug)]
 pub struct Protocol<R, W>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -149,6 +158,7 @@ where
         Builder::new(is_initiator)
     }
 
+    /// Whether this protocol stream initiated the underlying IO connection.
     pub fn is_initiator(&self) -> bool {
         self.options.is_initiator
     }
@@ -209,7 +219,7 @@ where
         )
     }
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Event>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<Event>> {
         let this = self.get_mut();
 
         if let State::NotInitialized = this.state {
@@ -259,8 +269,10 @@ where
             if let Some(buf) = handshake.start()? {
                 self.queue_frame_direct(buf.to_vec()).unwrap();
             }
+            self.reader.set_frame_type(FrameType::Raw);
             State::Handshake(Some(handshake))
         } else {
+            self.reader.set_frame_type(FrameType::Message);
             State::Established
         };
 
@@ -268,7 +280,7 @@ where
     }
 
     /// Poll commands.
-    fn poll_commands(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_commands(&mut self, cx: &mut Context<'_>) -> Result<()> {
         while let Poll::Ready(Some(command)) = Pin::new(&mut self.command_rx).poll_next(cx) {
             self.on_command(command)?;
         }
@@ -276,9 +288,9 @@ where
     }
 
     /// Poll the keepalive timer and queue a ping message if needed.
-    fn poll_keepalive(self: &mut Self, cx: &mut Context) {
-        if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.keepalive), cx) {
-            self.writer.queue_frame(Frame::Ping);
+    fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
+        if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
+            self.writer.queue_frame(Frame::Raw(vec![0u8; 0]));
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
@@ -295,12 +307,12 @@ where
     }
 
     /// Poll for inbound messages and processs them.
-    fn poll_inbound_read(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_inbound_read(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
             let msg = Stream::poll_next(Pin::new(&mut self.reader), cx);
             match msg {
                 Poll::Ready(Some(Ok(message))) => {
-                    self.on_message(message)?;
+                    self.on_inbound_frame(message)?;
                 }
                 Poll::Ready(Some(Err(e))) => return Err(e),
                 Poll::Pending | Poll::Ready(None) => return Ok(()),
@@ -309,47 +321,43 @@ where
     }
 
     /// Poll for outbound messages and write them.
-    fn poll_outbound_write(self: &mut Self, cx: &mut Context) -> Result<()> {
+    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
             if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
                 return Err(e);
             }
-            if !self.writer.can_park_frame() {
+            if !self.writer.can_park_frame() || !matches!(self.state, State::Established) {
                 return Ok(());
             }
-            if let State::Established = self.state {
-                match Pin::new(&mut self.outbound_rx).poll_next(cx) {
-                    Poll::Ready(Some(message)) => {
-                        self.on_outbound_message(&message);
-                        self.writer.park_frame(message);
-                    }
-                    Poll::Ready(None) => unreachable!(),
-                    Poll::Pending => return Ok(()),
+            match Pin::new(&mut self.outbound_rx).poll_next(cx) {
+                Poll::Ready(Some(message)) => {
+                    self.on_outbound_message(&message);
+                    let frame = Frame::Message(message);
+                    self.writer.park_frame(frame);
                 }
-            } else {
-                return Ok(());
+                Poll::Ready(None) => unreachable!("Channel closed before end"),
+                Poll::Pending => return Ok(()),
             }
         }
     }
 
-    fn on_message(&mut self, buf: Vec<u8>) -> Result<()> {
-        // log::trace!(
-        //     "[{}] onmessage IN len {} state {:?}",
-        //     self.is_initiator(),
-        //     buf.len(),
-        //     self.state
-        // );
-        match self.state {
-            State::Handshake(_) => self.on_handshake_message(buf),
-            State::Established => self.on_proto_message(buf),
-            State::NotInitialized => panic!("cannot receive messages before starting the protocol"),
+    fn on_inbound_frame(&mut self, frame: Frame) -> Result<()> {
+        match frame {
+            Frame::Raw(buf) => match self.state {
+                State::Handshake(_) => self.on_handshake_message(buf),
+                _ => unreachable!("May not receive raw frames outside of handshake state"),
+            },
+            Frame::Message(channel_message) => match self.state {
+                State::Established => self.on_inbound_message(channel_message),
+                _ => unreachable!("May not receive message frames when not established"),
+            },
         }
     }
 
     fn on_handshake_message(&mut self, buf: Vec<u8>) -> Result<()> {
         let mut handshake = match &mut self.state {
             State::Handshake(handshake) => handshake.take().unwrap(),
-            _ => panic!("may not call on_handshake_message when not in Handshake state"),
+            _ => unreachable!("May not call on_handshake_message when not in Handshake state"),
         };
 
         if let Some(response_buf) = handshake.read(&buf)? {
@@ -364,6 +372,7 @@ where
                 self.reader.upgrade_with_handshake(&result)?;
                 self.writer.upgrade_with_handshake(&result)?;
             }
+            self.reader.set_frame_type(FrameType::Message);
             let remote_public_key = parse_key(&result.remote_pubkey)?;
             log::debug!(
                 "handshake complete, remote_key {}",
@@ -376,28 +385,27 @@ where
         Ok(())
     }
 
-    fn on_proto_message(&mut self, buf: Vec<u8>) -> Result<()> {
-        let channel_message = ChannelMessage::decode(buf)?;
+    fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
+        // let channel_message = ChannelMessage::decode(buf)?;
         log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
         let (remote_id, message) = channel_message.into_split();
         match remote_id {
+            // Id 0 means stream-level, where only extension and options messages are supported.
             0 => match message {
                 Message::Options(msg) => self.extensions.on_remote_update(msg.extensions),
                 Message::Extension(msg) => self.extensions.on_message(msg),
                 _ => {}
             },
+            // Any other Id is a regular channel message.
             _ => match message {
                 Message::Open(msg) => self.on_open(remote_id, msg)?,
                 Message::Close(msg) => self.on_close(remote_id, msg)?,
-                _ => self.on_inbound_channel_message(remote_id, message)?,
+                _ => self
+                    .channels
+                    .forward_inbound_message(remote_id as usize, message)?,
             },
         }
         Ok(())
-    }
-
-    fn on_inbound_channel_message(&mut self, remote_id: u64, message: Message) -> Result<()> {
-        self.channels
-            .forward_inbound_message(remote_id as usize, message)
     }
 
     fn on_command(&mut self, command: Command) -> Result<()> {
@@ -409,10 +417,10 @@ where
 
     fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
-        let channel_handle = self.channels.attach_local(key.clone());
+        let channel_handle = self.channels.attach_local(key);
         // Safe because attach_local always puts Some(local_id)
         let local_id = channel_handle.local_id().unwrap();
-        let discovery_key = channel_handle.discovery_key().clone();
+        let discovery_key = *channel_handle.discovery_key();
 
         // If the channel was already opened from the remote end, verify, and if
         // verification is ok, push a channel open event.
@@ -435,7 +443,7 @@ where
         let discovery_key: DiscoveryKey = parse_key(&msg.discovery_key)?;
         let channel_handle =
             self.channels
-                .attach_remote(discovery_key.clone(), ch as usize, msg.capability.clone());
+                .attach_remote(discovery_key, ch as usize, msg.capability);
 
         if channel_handle.is_connected() {
             let local_id = channel_handle.local_id().unwrap();
@@ -466,7 +474,7 @@ where
 
     fn close_local(&mut self, local_id: u64) {
         if let Some(channel) = self.channels.get_local(local_id as usize) {
-            let discovery_key = channel.discovery_key().clone();
+            let discovery_key = *channel.discovery_key();
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
         }
@@ -474,7 +482,7 @@ where
 
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
-            let discovery_key = channel_handle.discovery_key().clone();
+            let discovery_key = *channel_handle.discovery_key();
             self.channels
                 .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
@@ -507,16 +515,13 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     type Item = Result<Event>;
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Protocol::poll_next(self, cx).map(Some)
     }
 }
 
 /// Send [Command](Command)s to the [Protocol](Protocol).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommandTx(Sender<Command>);
 
 impl CommandTx {

@@ -1,19 +1,19 @@
 use crate::schema::*;
-use bytes::Bytes;
 use pretty_hash::fmt as pretty_fmt;
-use prost::Message as ProstMessage;
+use prost::Message as _;
 use std::fmt;
 use std::io;
 
 use crate::constants::MAX_MESSAGE_SIZE;
 
+/// Error if the buffer has insufficient size to encode a message.
 #[derive(Debug)]
 pub struct EncodeError {
     required: usize,
 }
 
 impl fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Cannot encode message: Write buffer is full")
     }
 }
@@ -36,7 +36,12 @@ impl From<EncodeError> for io::Error {
     }
 }
 
+/// Encode data into a buffer.
+///
+/// This trait is implemented on data frames and their components
+/// (channel messages, messages, and individual message types through prost).
 pub trait Encoder: Sized + fmt::Debug {
+    /// Calculates the length that the encoded message needs.
     fn encoded_len(&self) -> usize;
 
     /// Encodes the message to a buffer.
@@ -60,17 +65,25 @@ impl Encoder for &[u8] {
     }
 }
 
+/// The type of a data frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrameType {
+    Raw,
+    Message,
+}
+
+/// A frame of data, either a buffer or a message.
 #[derive(Clone, PartialEq)]
 pub enum Frame {
-    Ping,
+    /// A raw binary buffer. Used in the handshaking phase.
     Raw(Vec<u8>),
+    /// A message. Used for everything after the handshake.
     Message(ChannelMessage),
 }
 
 impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Frame::Ping => write!(f, "Frame(Ping)"),
             Frame::Raw(buf) => write!(f, "Frame(Raw <{}>)", buf.len()),
             Frame::Message(message) => write!(f, "Frame({:?})", message),
         }
@@ -90,11 +103,18 @@ impl From<Vec<u8>> for Frame {
 }
 
 impl Frame {
+    /// Decode a frame from a buffer.
+    pub fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
+        match frame_type {
+            FrameType::Raw => Ok(Frame::Raw(buf.to_vec())),
+            FrameType::Message => Ok(Frame::Message(ChannelMessage::decode(buf)?)),
+        }
+    }
+
     fn body_len(&self) -> usize {
         match self {
             Self::Raw(message) => message.as_slice().encoded_len(),
             Self::Message(message) => message.encoded_len(),
-            Self::Ping => 0,
         }
     }
 }
@@ -114,10 +134,6 @@ impl Encoder for Frame {
         let header_len = len - body_len;
         varinteger::encode(body_len as u64, &mut buf[..header_len]);
         match self {
-            Self::Ping => {
-                buf[0] = 0;
-                Ok(1)
-            }
             Self::Raw(ref message) => message.as_slice().encode(&mut buf[header_len..]),
             Self::Message(ref message) => message.encode(&mut buf[header_len..]),
         }?;
@@ -127,6 +143,7 @@ impl Encoder for Frame {
 
 /// A protocol message.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub enum Message {
     Open(Open),
     Options(Options),
@@ -143,28 +160,29 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn decode(typ: u64, body: Vec<u8>) -> io::Result<Self> {
-        let bytes = Bytes::from(body);
-        // log::trace!("decode msg typ {}", typ);
+    /// Decode a message from a buffer.
+    pub fn decode(buf: &[u8], typ: u64) -> io::Result<Self> {
         match typ {
-            0 => Ok(Self::Open(Open::decode(bytes)?)),
-            1 => Ok(Self::Options(Options::decode(bytes)?)),
-            2 => Ok(Self::Status(Status::decode(bytes)?)),
-            3 => Ok(Self::Have(Have::decode(bytes)?)),
-            4 => Ok(Self::Unhave(Unhave::decode(bytes)?)),
-            5 => Ok(Self::Want(Want::decode(bytes)?)),
-            6 => Ok(Self::Unwant(Unwant::decode(bytes)?)),
-            7 => Ok(Self::Request(Request::decode(bytes)?)),
-            8 => Ok(Self::Cancel(Cancel::decode(bytes)?)),
-            9 => Ok(Self::Data(Data::decode(bytes)?)),
-            10 => Ok(Self::Close(Close::decode(bytes)?)),
-            15 => Ok(Self::Extension(ExtensionMessage::decode(bytes)?)),
+            0 => Ok(Self::Open(Open::decode(buf)?)),
+            1 => Ok(Self::Options(Options::decode(buf)?)),
+            2 => Ok(Self::Status(Status::decode(buf)?)),
+            3 => Ok(Self::Have(Have::decode(buf)?)),
+            4 => Ok(Self::Unhave(Unhave::decode(buf)?)),
+            5 => Ok(Self::Want(Want::decode(buf)?)),
+            6 => Ok(Self::Unwant(Unwant::decode(buf)?)),
+            7 => Ok(Self::Request(Request::decode(buf)?)),
+            8 => Ok(Self::Cancel(Cancel::decode(buf)?)),
+            9 => Ok(Self::Data(Data::decode(buf)?)),
+            10 => Ok(Self::Close(Close::decode(buf)?)),
+            15 => Ok(Self::Extension(ExtensionMessage::decode(buf)?)),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid message type",
             )),
         }
     }
+
+    /// Wire type of this message.
     pub fn typ(&self) -> u64 {
         match self {
             Self::Open(_) => 0,
@@ -180,10 +198,6 @@ impl Message {
             Self::Close(_) => 10,
             Self::Extension(_) => 15,
         }
-    }
-
-    pub fn into_channel_message(self, channel: u64) -> ChannelMessage {
-        ChannelMessage::new(channel, self)
     }
 }
 
@@ -223,15 +237,17 @@ impl Encoder for Message {
     }
 }
 
-fn encode_prost_message(msg: &impl ProstMessage, mut buf: &mut [u8]) -> Result<usize, EncodeError> {
+fn encode_prost_message(
+    msg: &impl prost::Message,
+    mut buf: &mut [u8],
+) -> Result<usize, EncodeError> {
     let len = msg.encoded_len();
-    msg.encode(&mut buf).map_err(|e| EncodeError::from(e))?;
+    msg.encode(&mut buf)?;
     Ok(len)
 }
 
 impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Customize so only `x` and `y` are denoted.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Open(msg) => write!(
                 f,
@@ -280,26 +296,26 @@ impl ChannelMessage {
     ///
     /// Note: `buf` has to have a valid length, and the length
     /// prefix has to be removed already.
-    pub fn decode(mut buf: Vec<u8>) -> io::Result<Self> {
+    pub fn decode(buf: &[u8]) -> io::Result<Self> {
         if buf.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received empty message",
             ));
         }
-        let mut header = 0 as u64;
+        let mut header = 0u64;
         let headerlen = varinteger::decode(&buf, &mut header);
-        let body = buf.split_off(headerlen);
+        // let body = buf.split_off(headerlen);
         let channel = header >> 4;
         let typ = header & 0b1111;
-        let message = Message::decode(typ, body)?;
+        let message = Message::decode(&buf[headerlen..], typ)?;
 
         let channel_message = Self { channel, message };
 
         Ok(channel_message)
     }
 
-    pub fn header(&self) -> u64 {
+    fn header(&self) -> u64 {
         let typ = self.message.typ();
         self.channel << 4 | typ
     }
@@ -326,19 +342,29 @@ impl Encoder for ChannelMessage {
     }
 }
 
-/// A extension message (not yet supported properly).
+/// A extension message.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionMessage {
+    /// ID of this extension
     pub id: u64,
+    /// Message content
     pub message: Vec<u8>,
 }
+
 impl ExtensionMessage {
+    /// Create a new extension message.
     pub fn new(id: u64, message: Vec<u8>) -> Self {
         Self { id, message }
     }
 
-    fn decode(buf: impl AsRef<[u8]>) -> io::Result<Self> {
-        let buf = buf.as_ref();
+    /// Decode an extension message from a buffer.
+    fn decode(buf: &[u8]) -> io::Result<Self> {
+        if buf.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Extension message may not be empty",
+            ));
+        }
         let mut id: u64 = 0;
         let id_len = varinteger::decode(&buf, &mut id);
         Ok(Self {
@@ -377,7 +403,7 @@ mod tests {
                 let channel_message = ChannelMessage::new(channel, $msg);
                 let mut buf = vec![0u8; channel_message.encoded_len()];
                 let n = channel_message.encode(&mut buf[..]).expect("Failed to encode message");
-                let decoded = ChannelMessage::decode(buf[..n].to_vec()).expect("Failed to decode message").into_split();
+                let decoded = ChannelMessage::decode(&buf[..n]).expect("Failed to decode message").into_split();
                 assert_eq!(channel, decoded.0);
                 assert_eq!($msg, decoded.1);
             )*

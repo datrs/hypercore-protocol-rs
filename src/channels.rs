@@ -44,6 +44,7 @@ impl Channel {
         &self.key
     }
 
+    /// Get the local wire ID of this channel.
     pub fn id(&self) -> usize {
         self.local_id
     }
@@ -57,10 +58,15 @@ impl Channel {
             .map_err(map_channel_err)
     }
 
+    /// Register a protocol extension.
     pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
         self.extensions.register(name.to_string()).await
     }
 
+    /// Take the receiving part out of the channel.
+    ///
+    /// After taking the receiver, this Channel will not emit messages when
+    /// polled as a stream. The returned receiver will.
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
         self.inbound_rx.take()
     }
@@ -243,8 +249,8 @@ impl ChannelHandle {
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
             outbound_tx: outbound_tx.clone(),
-            discovery_key: self.discovery_key.clone(),
-            key: local_state.key.clone(),
+            discovery_key: self.discovery_key,
+            key: local_state.key,
             local_id: local_state.local_id,
             extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
         };
@@ -289,10 +295,8 @@ impl ChannelMap {
 
         self.channels
             .entry(hdkey.clone())
-            .and_modify(|channel| channel.attach_local(local_id, key.clone()))
-            .or_insert_with(|| {
-                ChannelHandle::new_local(local_id, discovery_key.clone(), key.clone())
-            });
+            .and_modify(|channel| channel.attach_local(local_id, key))
+            .or_insert_with(|| ChannelHandle::new_local(local_id, discovery_key, key));
 
         self.local_id[local_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()

@@ -8,10 +8,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
+use crate::message::{Frame, FrameType};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
+const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 
+#[derive(Debug)]
 pub struct ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -35,6 +38,10 @@ where
         self.state.upgrade_with_handshake(handshake)
     }
 
+    pub fn set_frame_type(&mut self, frame_type: FrameType) {
+        self.state.set_frame_type(frame_type);
+    }
+
     pub fn into_inner(self) -> R {
         self.reader
     }
@@ -44,7 +51,7 @@ impl<R> Stream for ProtocolReader<R>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    type Item = Result<Vec<u8>>;
+    type Item = Result<Frame>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let state = &mut this.state;
@@ -55,7 +62,7 @@ where
 }
 
 #[derive(Debug)]
-struct State {
+pub struct State {
     /// The read buffer.
     buf: Vec<u8>,
     /// The start of the not-yet-processed byte range in the read buffer.
@@ -68,17 +75,20 @@ struct State {
     timeout: Delay,
     /// Optional encryption cipher.
     cipher: Option<Cipher>,
+    /// The frame type to be passed to the decoder.
+    frame_type: FrameType,
 }
 
 impl State {
     pub fn new() -> State {
         State {
-            buf: vec![0u8; MAX_MESSAGE_SIZE as usize],
+            buf: vec![0u8; READ_BUF_INITIAL_SIZE as usize],
             start: 0,
             end: 0,
             step: Step::Header,
             timeout: Delay::new(TIMEOUT),
             cipher: None,
+            frame_type: FrameType::Raw,
         }
     }
 }
@@ -97,7 +107,15 @@ impl State {
         Ok(())
     }
 
-    pub fn poll_reader<R>(&mut self, mut reader: &mut R, cx: &mut Context) -> Poll<Result<Vec<u8>>>
+    pub fn set_frame_type(&mut self, frame_type: FrameType) {
+        self.frame_type = frame_type;
+    }
+
+    pub fn poll_reader<R>(
+        &mut self,
+        mut reader: &mut R,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Frame>>
     where
         R: AsyncRead + Unpin,
     {
@@ -139,7 +157,7 @@ impl State {
         }
     }
 
-    fn process(&mut self) -> Option<Result<Vec<u8>>> {
+    fn process(&mut self) -> Option<Result<Frame>> {
         if self.start == self.end {
             return None;
         }
@@ -169,15 +187,18 @@ impl State {
                     body_len,
                 } => {
                     let message_len = header_len + body_len;
+                    if message_len > self.buf.len() {
+                        self.buf.resize(message_len, 0u8);
+                    }
                     if (self.end - self.start) < message_len {
                         self.cycle_buf_if_needed();
                         return None;
                     } else {
-                        let range = (self.start + header_len)..(self.start + message_len);
-                        let message = self.buf[range].to_vec();
+                        let range = self.start + header_len..self.start + message_len;
+                        let frame = Frame::decode(&self.buf[range], &self.frame_type);
                         self.start += message_len;
                         self.step = Step::Header;
-                        return Some(Ok(message));
+                        return Some(frame);
                     }
                 }
             }
