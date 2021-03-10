@@ -62,7 +62,7 @@ where
 }
 
 #[derive(Debug)]
-struct State {
+pub struct State {
     /// The read buffer.
     buf: Vec<u8>,
     /// The start of the not-yet-processed byte range in the read buffer.
