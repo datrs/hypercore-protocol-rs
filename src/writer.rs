@@ -10,74 +10,13 @@ use std::task::{Context, Poll};
 const BUF_SIZE: usize = 1024 * 64;
 
 #[derive(Debug)]
-pub struct ProtocolWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    writer: W,
-    state: State,
-}
-
-impl<W> ProtocolWriter<W>
-where
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    pub fn new(writer: W) -> Self {
-        Self {
-            writer,
-            state: State::new(),
-        }
-    }
-
-    pub fn queue_frame<F>(&mut self, frame: F)
-    where
-        F: Into<Frame>,
-    {
-        self.state.queue_frame(frame)
-    }
-
-    pub fn can_park_frame(&self) -> bool {
-        self.state.can_park_frame()
-    }
-
-    pub fn park_frame<F>(&mut self, frame: F)
-    where
-        F: Into<Frame>,
-    {
-        self.state.park_frame(frame)
-    }
-
-    pub fn try_queue_direct<T: Encoder>(
-        &mut self,
-        frame: &T,
-    ) -> std::result::Result<bool, EncodeError> {
-        self.state.try_queue_direct(frame)
-    }
-
-    pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        let this = self.get_mut();
-        let state = &mut this.state;
-        let writer = &mut this.writer;
-        state.poll_send(cx, writer)
-    }
-
-    pub fn into_inner(self) -> W {
-        self.writer
-    }
-
-    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        self.state.upgrade_with_handshake(handshake)
-    }
-}
-
-#[derive(Debug)]
 pub enum Step {
     Flushing,
     Writing,
     Processing,
 }
 
-pub struct State {
+pub struct WriteState {
     queue: VecDeque<Frame>,
     buf: Vec<u8>,
     current_frame: Option<Frame>,
@@ -87,9 +26,9 @@ pub struct State {
     step: Step,
 }
 
-impl fmt::Debug for State {
+impl fmt::Debug for WriteState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("State")
+        f.debug_struct("WriteState")
             .field("queue (len)", &self.queue.len())
             .field("step", &self.step)
             .field("buf (len)", &self.buf.len())
@@ -101,8 +40,8 @@ impl fmt::Debug for State {
     }
 }
 
-impl State {
-    fn new() -> Self {
+impl WriteState {
+    pub fn new() -> Self {
         Self {
             queue: VecDeque::new(),
             buf: vec![0u8; BUF_SIZE],
@@ -121,7 +60,7 @@ impl State {
         self.queue.push_back(frame.into())
     }
 
-    fn try_queue_direct<T: Encoder>(
+    pub fn try_queue_direct<T: Encoder>(
         &mut self,
         frame: &T,
     ) -> std::result::Result<bool, EncodeError> {
@@ -137,11 +76,11 @@ impl State {
         Ok(true)
     }
 
-    fn can_park_frame(&self) -> bool {
+    pub fn can_park_frame(&self) -> bool {
         self.current_frame.is_none()
     }
 
-    fn park_frame<F>(&mut self, frame: F)
+    pub fn park_frame<F>(&mut self, frame: F)
     where
         F: Into<Frame>,
     {
@@ -158,7 +97,7 @@ impl State {
         self.end = end;
     }
 
-    fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
+    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
         let cipher = Cipher::from_handshake_tx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
@@ -171,7 +110,7 @@ impl State {
         self.end - self.start
     }
 
-    fn poll_send<W>(&mut self, cx: &mut Context<'_>, mut writer: &mut W) -> Poll<Result<()>>
+    pub fn poll_send<W>(&mut self, cx: &mut Context<'_>, mut writer: &mut W) -> Poll<Result<()>>
     where
         W: AsyncWrite + Unpin,
     {

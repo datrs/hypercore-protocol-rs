@@ -1,3 +1,4 @@
+use crate::duplex::Duplex;
 use crate::Protocol;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 
@@ -51,19 +52,20 @@ impl Builder {
     }
 
     /// Create the protocol from a stream that implements AsyncRead + AsyncWrite + Clone.
-    pub fn connect<S>(self, stream: S) -> Protocol<S, S>
+    pub fn connect<IO>(self, io: IO) -> Protocol<IO>
     where
-        S: AsyncRead + AsyncWrite + Send + Unpin + Clone + 'static,
+        IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
-        Protocol::new(stream.clone(), stream, self.0)
+        Protocol::new(io, self.0)
     }
 
     /// Create the protocol from an AsyncRead reader and AsyncWrite writer.
-    pub fn connect_rw<R, W>(self, reader: R, writer: W) -> Protocol<R, W>
+    pub fn connect_rw<R, W>(self, reader: R, writer: W) -> Protocol<Duplex<R, W>>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        Protocol::new(reader, writer, self.0)
+        let io = Duplex::new(reader, writer);
+        Protocol::new(io, self.0)
     }
 }

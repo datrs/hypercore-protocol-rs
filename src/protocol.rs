@@ -1,6 +1,5 @@
 use async_channel::{Receiver, Sender};
 use futures_lite::io::{AsyncRead, AsyncWrite};
-use futures_lite::io::{BufReader, BufWriter};
 use futures_lite::stream::Stream;
 use futures_timer::Delay;
 use log::*;
@@ -19,11 +18,11 @@ use crate::constants::DEFAULT_KEEPALIVE;
 use crate::extension::{Extension, Extensions};
 use crate::message::{ChannelMessage, EncodeError, Frame, FrameType, Message};
 use crate::noise::{Handshake, HandshakeResult};
-use crate::reader::ProtocolReader;
+use crate::reader::ReadState;
 use crate::schema::*;
 use crate::util::map_channel_err;
 use crate::util::pretty_hash;
-use crate::writer::ProtocolWriter;
+use crate::writer::WriteState;
 
 macro_rules! return_error {
     ($msg:expr) => {
@@ -103,13 +102,10 @@ impl fmt::Debug for State {
 
 /// A Protocol stream.
 #[derive(Debug)]
-pub struct Protocol<R, W>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-    W: AsyncWrite + Send + Unpin + 'static,
-{
-    writer: ProtocolWriter<BufWriter<W>>,
-    reader: ProtocolReader<BufReader<R>>,
+pub struct Protocol<IO> {
+    write_state: WriteState,
+    read_state: ReadState,
+    io: IO,
     state: State,
     options: Options,
     handshake: Option<HandshakeResult>,
@@ -124,20 +120,18 @@ where
     extensions: Extensions,
 }
 
-impl<R, W> Protocol<R, W>
+impl<IO> Protocol<IO>
 where
-    R: AsyncRead + Send + Unpin + 'static,
-    W: AsyncWrite + Send + Unpin + 'static,
+    IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new Protocol instance.
-    pub fn new(reader: R, writer: W, options: Options) -> Self {
-        let reader = ProtocolReader::new(BufReader::new(reader));
-        let writer = ProtocolWriter::new(BufWriter::new(writer));
+    pub fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         let (outbound_tx, outbound_rx) = async_channel::bounded(1);
         Protocol {
-            writer,
-            reader,
+            io,
+            read_state: ReadState::new(),
+            write_state: WriteState::new(),
             options,
             state: State::NotInitialized,
             channels: ChannelMap::new(),
@@ -212,11 +206,8 @@ where
     }
 
     /// Stop the protocol and return the inner reader and writer.
-    pub fn release(self) -> (R, W) {
-        (
-            self.reader.into_inner().into_inner(),
-            self.writer.into_inner().into_inner(),
-        )
+    pub fn release(self) -> IO {
+        self.io
     }
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<Event>> {
@@ -269,10 +260,10 @@ where
             if let Some(buf) = handshake.start()? {
                 self.queue_frame_direct(buf.to_vec()).unwrap();
             }
-            self.reader.set_frame_type(FrameType::Raw);
+            self.read_state.set_frame_type(FrameType::Raw);
             State::Handshake(Some(handshake))
         } else {
-            self.reader.set_frame_type(FrameType::Message);
+            self.read_state.set_frame_type(FrameType::Message);
             State::Established
         };
 
@@ -290,7 +281,7 @@ where
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            self.writer.queue_frame(Frame::Raw(vec![0u8; 0]));
+            self.write_state.queue_frame(Frame::Raw(vec![0u8; 0]));
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
@@ -309,13 +300,13 @@ where
     /// Poll for inbound messages and processs them.
     fn poll_inbound_read(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
-            let msg = Stream::poll_next(Pin::new(&mut self.reader), cx);
+            let msg = self.read_state.poll_reader(cx, &mut self.io);
             match msg {
-                Poll::Ready(Some(Ok(message))) => {
+                Poll::Ready(Ok(message)) => {
                     self.on_inbound_frame(message)?;
                 }
-                Poll::Ready(Some(Err(e))) => return Err(e),
-                Poll::Pending | Poll::Ready(None) => return Ok(()),
+                Poll::Ready(Err(e)) => return Err(e),
+                Poll::Pending => return Ok(()),
             }
         }
     }
@@ -323,17 +314,18 @@ where
     /// Poll for outbound messages and write them.
     fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<()> {
         loop {
-            if let Poll::Ready(Err(e)) = Pin::new(&mut self.writer).poll_send(cx) {
+            if let Poll::Ready(Err(e)) = self.write_state.poll_send(cx, &mut self.io) {
                 return Err(e);
             }
-            if !self.writer.can_park_frame() || !matches!(self.state, State::Established) {
+            if !self.write_state.can_park_frame() || !matches!(self.state, State::Established) {
                 return Ok(());
             }
+
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
                 Poll::Ready(Some(message)) => {
                     self.on_outbound_message(&message);
                     let frame = Frame::Message(message);
-                    self.writer.park_frame(frame);
+                    self.write_state.park_frame(frame);
                 }
                 Poll::Ready(None) => unreachable!("Channel closed before end"),
                 Poll::Pending => return Ok(()),
@@ -369,10 +361,10 @@ where
         } else {
             let result = handshake.into_result()?;
             if self.options.encrypted {
-                self.reader.upgrade_with_handshake(&result)?;
-                self.writer.upgrade_with_handshake(&result)?;
+                self.read_state.upgrade_with_handshake(&result)?;
+                self.write_state.upgrade_with_handshake(&result)?;
             }
-            self.reader.set_frame_type(FrameType::Message);
+            self.read_state.set_frame_type(FrameType::Message);
             let remote_public_key = parse_key(&result.remote_pubkey)?;
             log::debug!(
                 "handshake complete, remote_key {}",
@@ -435,7 +427,8 @@ where
             capability,
         });
         let channel_message = ChannelMessage::new(local_id as u64, message);
-        self.writer.queue_frame(Frame::Message(channel_message));
+        self.write_state
+            .queue_frame(Frame::Message(channel_message));
         Ok(())
     }
 
@@ -461,7 +454,7 @@ where
 
     fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
         let frame = Frame::Raw(body);
-        self.writer.try_queue_direct(&frame)
+        self.write_state.try_queue_direct(&frame)
     }
 
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {
@@ -509,10 +502,9 @@ where
     }
 }
 
-impl<R, W> Stream for Protocol<R, W>
+impl<IO> Stream for Protocol<IO>
 where
-    R: AsyncRead + Send + Unpin + 'static,
-    W: AsyncWrite + Send + Unpin + 'static,
+    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     type Item = Result<Event>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

@@ -34,12 +34,11 @@ where
 // }
 
 // Drive a protocol stream until the first channel arrives.
-fn drive_until_channel<R, W>(
-    mut proto: Protocol<R, W>,
-) -> JoinHandle<io::Result<(Protocol<R, W>, Channel)>>
+fn drive_until_channel<IO>(
+    mut proto: Protocol<IO>,
+) -> JoinHandle<io::Result<(Protocol<IO>, Channel)>>
 where
-    R: AsyncRead + Send + Unpin + 'static,
-    W: AsyncWrite + Send + Unpin + 'static,
+    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     task::spawn(async move {
         while let Some(event) = proto.next().await {

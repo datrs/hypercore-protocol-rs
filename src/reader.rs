@@ -1,6 +1,5 @@
 use crate::noise::{Cipher, HandshakeResult};
 use futures_lite::io::AsyncRead;
-use futures_lite::stream::Stream;
 use futures_timer::Delay;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
@@ -15,54 +14,7 @@ const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
 const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 
 #[derive(Debug)]
-pub struct ProtocolReader<R>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-{
-    reader: R,
-    state: State,
-}
-
-impl<R> ProtocolReader<R>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-{
-    pub fn new(reader: R) -> Self {
-        Self {
-            reader,
-            state: State::new(),
-        }
-    }
-
-    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        self.state.upgrade_with_handshake(handshake)
-    }
-
-    pub fn set_frame_type(&mut self, frame_type: FrameType) {
-        self.state.set_frame_type(frame_type);
-    }
-
-    pub fn into_inner(self) -> R {
-        self.reader
-    }
-}
-
-impl<R> Stream for ProtocolReader<R>
-where
-    R: AsyncRead + Send + Unpin + 'static,
-{
-    type Item = Result<Frame>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        let state = &mut this.state;
-        let reader = &mut this.reader;
-        let result = state.poll_reader(reader, cx);
-        result.map(Some)
-    }
-}
-
-#[derive(Debug)]
-pub struct State {
+pub struct ReadState {
     /// The read buffer.
     buf: Vec<u8>,
     /// The start of the not-yet-processed byte range in the read buffer.
@@ -79,9 +31,9 @@ pub struct State {
     frame_type: FrameType,
 }
 
-impl State {
-    pub fn new() -> State {
-        State {
+impl ReadState {
+    pub fn new() -> ReadState {
+        ReadState {
             buf: vec![0u8; READ_BUF_INITIAL_SIZE as usize],
             start: 0,
             end: 0,
@@ -99,7 +51,7 @@ enum Step {
     Body { header_len: usize, body_len: usize },
 }
 
-impl State {
+impl ReadState {
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
         let mut cipher = Cipher::from_handshake_rx(handshake)?;
         cipher.apply(&mut self.buf[self.start..self.end]);
@@ -113,8 +65,8 @@ impl State {
 
     pub fn poll_reader<R>(
         &mut self,
-        mut reader: &mut R,
         cx: &mut Context<'_>,
+        mut reader: &mut R,
     ) -> Poll<Result<Frame>>
     where
         R: AsyncRead + Unpin,

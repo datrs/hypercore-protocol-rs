@@ -60,6 +60,7 @@
 mod builder;
 mod channels;
 mod constants;
+mod duplex;
 mod extension;
 mod message;
 mod noise;
@@ -77,6 +78,7 @@ pub mod schema {
 
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
+pub use duplex::Duplex;
 pub use extension::Extension;
 pub use message::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};

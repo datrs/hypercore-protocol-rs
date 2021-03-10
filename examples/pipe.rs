@@ -78,10 +78,9 @@ async fn run_echo(config: Config, i: u64) -> Result<()> {
 
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
-async fn onconnection<R, W>(config: Config, i: u64, mut protocol: Protocol<R, W>) -> Result<u64>
+async fn onconnection<IO>(config: Config, i: u64, mut protocol: Protocol<IO>) -> Result<u64>
 where
-    R: AsyncRead + Send + Unpin + 'static,
-    W: AsyncWrite + Send + Unpin + 'static,
+    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let key = [0u8; 32];
     let is_initiator = protocol.is_initiator();
