@@ -2,6 +2,11 @@
 
 All notable changes to this Rust implementation of hypercore-protocol will be documented here.
 
+### unreleased
+
+* Emit errors when trying to send on a channel after it was closed by either side
+* Remove the arument to `channel.close()`, because it is not needed
+
 ### 0.3.0
 
 #### API breaking changes

@@ -205,6 +205,11 @@ where
         self.command_tx.open(key).await
     }
 
+    /// Iterator of all currently opened channels.
+    pub fn channels(&self) -> impl Iterator<Item = &DiscoveryKey> {
+        self.channels.iter().map(|c| c.discovery_key())
+    }
+
     /// Stop the protocol and return the inner reader and writer.
     pub fn release(self) -> IO {
         self.io

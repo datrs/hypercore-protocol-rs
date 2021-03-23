@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::task::Poll;
 
 /// A protocol channel.
@@ -23,6 +25,7 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     extensions: Extensions,
+    closed: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for Channel {
@@ -51,6 +54,13 @@ impl Channel {
 
     /// Send a message over the channel.
     pub async fn send(&mut self, message: Message) -> Result<()> {
+        let closed = self.closed.load(Ordering::SeqCst);
+        if closed {
+            return Err(Error::new(
+                ErrorKind::ConnectionAborted,
+                "Channel is closed",
+            ));
+        }
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(message)
@@ -117,8 +127,13 @@ impl Channel {
     }
 
     /// Send a close message and close this channel.
-    pub async fn close(&mut self, msg: Close) -> Result<()> {
-        self.send(Message::Close(msg)).await
+    pub async fn close(&mut self) -> Result<()> {
+        let close = Close {
+            discovery_key: None,
+        };
+        self.send(Message::Close(close)).await?;
+        self.closed.store(true, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -153,14 +168,13 @@ impl Stream for Channel {
 }
 
 /// The handle for a channel that lives with the main Protocol.
-///
-/// This lives with the main protocol.
 #[derive(Clone, Debug)]
 pub(crate) struct ChannelHandle {
     discovery_key: DiscoveryKey,
     local_state: Option<LocalState>,
     remote_state: Option<RemoteState>,
     inbound_tx: Option<Sender<Message>>,
+    closed: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +196,7 @@ impl ChannelHandle {
             local_state: None,
             remote_state: None,
             inbound_tx: None,
+            closed: Arc::new(AtomicBool::new(false)),
         }
     }
     fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
@@ -253,6 +268,7 @@ impl ChannelHandle {
             key: local_state.key,
             local_id: local_state.local_id,
             extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
+            closed: self.closed.clone(),
         };
         self.inbound_tx = Some(inbound_tx);
         channel
@@ -266,6 +282,12 @@ impl ChannelHandle {
         } else {
             Err(error("Channel is not open"))
         }
+    }
+}
+
+impl Drop for ChannelHandle {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
     }
 }
 
@@ -412,6 +434,10 @@ impl ChannelMap {
         } else {
             self.remote_id.resize(id + 1, None)
         }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &ChannelHandle> {
+        self.channels.values()
     }
 }
 
