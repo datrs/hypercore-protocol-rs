@@ -44,6 +44,7 @@ pub type Key = [u8; 32];
 
 /// A protocol event.
 #[non_exhaustive]
+#[derive(PartialEq)]
 pub enum Event {
     /// Emitted after the handshake with the remove peer is complete.
     /// This is the first event (if the handshake is not disabled).

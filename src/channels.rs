@@ -28,6 +28,14 @@ pub struct Channel {
     closed: Arc<AtomicBool>,
 }
 
+impl PartialEq for Channel {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.discovery_key == other.discovery_key
+            && self.local_id == other.local_id
+    }
+}
+
 impl fmt::Debug for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Channel")
@@ -52,10 +60,14 @@ impl Channel {
         self.local_id
     }
 
+    /// Check if the channel is closed.
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
     /// Send a message over the channel.
     pub async fn send(&mut self, message: Message) -> Result<()> {
-        let closed = self.closed.load(Ordering::SeqCst);
-        if closed {
+        if self.closed() {
             return Err(Error::new(
                 ErrorKind::ConnectionAborted,
                 "Channel is closed",
@@ -128,6 +140,9 @@ impl Channel {
 
     /// Send a close message and close this channel.
     pub async fn close(&mut self) -> Result<()> {
+        if self.closed() {
+            return Ok(());
+        }
         let close = Close {
             discovery_key: None,
         };
