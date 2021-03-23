@@ -15,6 +15,17 @@ pub struct Options {
     pub encrypted: bool,
 }
 
+impl Options {
+    /// Create with default options.
+    pub fn new(is_initiator: bool) -> Self {
+        Self {
+            is_initiator,
+            noise: true,
+            encrypted: true,
+        }
+    }
+}
+
 /// Build a Protocol instance with options.
 #[derive(Debug)]
 pub struct Builder(Options);

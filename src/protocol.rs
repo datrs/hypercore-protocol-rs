@@ -101,6 +101,7 @@ impl fmt::Debug for State {
 }
 
 /// A Protocol stream.
+///
 #[derive(Debug)]
 pub struct Protocol<IO> {
     write_state: WriteState,
@@ -123,7 +124,7 @@ impl<IO> Protocol<IO>
 where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
-    /// Create a new Protocol instance.
+    /// Create a new protocol instance.
     pub fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         let (outbound_tx, outbound_rx) = async_channel::bounded(1);
@@ -145,7 +146,13 @@ where
         }
     }
 
-    /// Create a protocol builder.
+    /// Create a protocol instance with the default options.
+    pub fn with_defaults(io: IO, is_initiator: bool) -> Self {
+        let options = Options::new(is_initiator);
+        Protocol::new(io, options)
+    }
+
+    /// Create a protocol builder that allows to set additional options.
     pub fn builder(is_initiator: bool) -> Builder {
         Builder::new(is_initiator)
     }
