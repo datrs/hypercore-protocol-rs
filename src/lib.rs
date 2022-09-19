@@ -91,6 +91,8 @@ mod constants;
 mod duplex;
 mod extension;
 mod message;
+#[cfg(feature = "v9")]
+mod message_v9;
 mod noise;
 mod protocol;
 mod reader;
@@ -99,15 +101,17 @@ mod writer;
 
 /// The wire messages used by the protocol.
 #[allow(missing_docs)]
+#[cfg(feature = "v9")]
 pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
-    pub use crate::message::ExtensionMessage;
+    pub use crate::message_v9::ExtensionMessage;
 }
 
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 pub use duplex::Duplex;
 pub use extension::Extension;
-pub use message::Message;
+#[cfg(feature = "v9")]
+pub use message_v9::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;

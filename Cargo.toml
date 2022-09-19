@@ -24,7 +24,7 @@ bench = false
 [dependencies]
 async-channel = "1.5"
 snow = { version = "0.9.0", features = ["risky-raw-split"] }
-prost = "0.7"
+prost = { version = "0.7", optional = true }
 bytes = "1.0.1"
 varinteger = "1.0"
 rand = "0.7"
@@ -58,11 +58,14 @@ futures = "0.3.13"
 prost-build = "0.6.1"
 
 [features]
+default = ["v9"]
 wasm-bindgen = [
   "instant/wasm-bindgen", 
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
+v9 = ["prost"]
+v10 = []
 
 [profile.bench]
 # debug = true

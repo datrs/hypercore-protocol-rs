@@ -1,5 +1,6 @@
 use crate::extension::{Extension, Extensions};
-use crate::message::ChannelMessage;
+#[cfg(feature = "v9")]
+use crate::message_v9::ChannelMessage;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;

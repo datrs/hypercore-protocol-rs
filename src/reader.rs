@@ -7,7 +7,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
-use crate::message::{Frame, FrameType};
+use crate::message::FrameType;
+#[cfg(feature = "v9")]
+use crate::message_v9::Frame;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
