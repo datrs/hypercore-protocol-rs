@@ -42,10 +42,9 @@ futures-lite = "1.11.3"
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
 env_logger = "0.7.1"
-# hypercore from master branch as of 2021-03-03
-hypercore = { git = "https://github.com/datrs/hypercore", rev = "8d8cbef8a884a70e8d12d80968c1d97be2ceea0b" }
+hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
 random-access-disk = "2.0.0"
-random-access-memory = "2.0.0"
+random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
 random-access-storage = "4.0.0"
 anyhow = "1.0.28"
 criterion = "0.3.2"
@@ -55,7 +54,7 @@ sluice = "0.5.4"
 futures = "0.3.13"
 
 [build-dependencies]
-prost-build = "0.6.1"
+prost-build = { version = "0.6.1", optional = true }
 
 [features]
 default = ["v9"]
@@ -64,8 +63,8 @@ wasm-bindgen = [
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
-v9 = ["prost"]
-v10 = []
+v9 = ["prost", "prost-build", "hypercore/v9"]
+v10 = ["hypercore/v10"]
 
 [profile.bench]
 # debug = true
