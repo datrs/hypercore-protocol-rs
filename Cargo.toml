@@ -23,7 +23,7 @@ bench = false
 
 [dependencies]
 async-channel = "1.5"
-snow = { version = "0.7.0-alpha5", features = ["risky-raw-split"] }
+snow = { version = "0.9.0", features = ["risky-raw-split"] }
 prost = "0.7"
 bytes = "1.0.1"
 varinteger = "1.0"
