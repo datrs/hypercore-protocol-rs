@@ -1,4 +1,6 @@
 use crate::constants::MAX_MESSAGE_SIZE;
+#[cfg(feature = "v10")]
+use crate::message_v10::{ChannelMessage, ExtensionMessage, Message};
 #[cfg(feature = "v9")]
 use crate::message_v9::{ChannelMessage, ExtensionMessage, Message};
 use crate::schema::*;

@@ -17,6 +17,8 @@ use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
 use crate::extension::{Extension, Extensions};
 use crate::message::{EncodeError, FrameType};
+#[cfg(feature = "v10")]
+use crate::message_v10::{ChannelMessage, Frame, Message};
 #[cfg(feature = "v9")]
 use crate::message_v9::{ChannelMessage, Frame, Message};
 use crate::noise::{Handshake, HandshakeResult};

@@ -1,4 +1,6 @@
 use crate::extension::{Extension, Extensions};
+#[cfg(feature = "v10")]
+use crate::message_v10::ChannelMessage;
 #[cfg(feature = "v9")]
 use crate::message_v9::ChannelMessage;
 use crate::schema::*;

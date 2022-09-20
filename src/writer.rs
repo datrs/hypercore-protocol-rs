@@ -1,6 +1,8 @@
 use crate::message::{EncodeError, Encoder};
 #[cfg(feature = "v9")]
 use crate::message_v9::Frame;
+#[cfg(feature = "v10")]
+use crate::message_v10::Frame;
 use crate::noise::{Cipher, HandshakeResult};
 use futures_lite::{ready, AsyncWrite};
 use std::collections::VecDeque;

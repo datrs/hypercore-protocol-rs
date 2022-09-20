@@ -1,13 +1,13 @@
 // use async_std::io::{BufReader, BufWriter};
+use crate::constants::CAP_NS_BUF;
+use crate::schema::NoisePayload;
 use blake2_rfc::blake2b::Blake2b;
+#[cfg(feature = "v9")]
 use prost::Message;
 use rand::Rng;
 pub use snow::Keypair;
 use snow::{Builder, Error as SnowError, HandshakeState};
 use std::io::{Error, ErrorKind, Result};
-
-use crate::constants::CAP_NS_BUF;
-use crate::schema::NoisePayload;
 
 const CIPHERKEYLEN: usize = 32;
 const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2b";
@@ -204,6 +204,7 @@ fn generate_nonce() -> Vec<u8> {
 }
 
 #[inline]
+#[cfg(feature = "v9")]
 fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
     let nonce_msg = NoisePayload { nonce };
     let mut buf = vec![0u8; 0];
@@ -212,7 +213,23 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 }
 
 #[inline]
+#[cfg(feature = "v10")]
+fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
+    // TODO: v10
+    let mut buf = vec![0u8; 0];
+    buf
+}
+
+#[inline]
+#[cfg(feature = "v9")]
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
+}
+
+#[inline]
+#[cfg(feature = "v10")]
+fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
+    // TODO: v10
+    Ok(vec![])
 }

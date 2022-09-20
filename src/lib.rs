@@ -91,6 +91,8 @@ mod constants;
 mod duplex;
 mod extension;
 mod message;
+#[cfg(feature = "v10")]
+mod message_v10;
 #[cfg(feature = "v9")]
 mod message_v9;
 mod noise;
@@ -106,11 +108,18 @@ pub mod schema {
     include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
     pub use crate::message_v9::ExtensionMessage;
 }
+#[cfg(feature = "v10")]
+pub mod schema {
+    include!("schema_v10.rs");
+    pub use crate::message_v10::ExtensionMessage;
+}
 
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 pub use duplex::Duplex;
 pub use extension::Extension;
+#[cfg(feature = "v10")]
+pub use message_v10::Message;
 #[cfg(feature = "v9")]
 pub use message_v9::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};
