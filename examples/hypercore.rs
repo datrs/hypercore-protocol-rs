@@ -1,3 +1,5 @@
+cfg_if::cfg_if! {
+    if #[cfg(feature = "v9")] {
 use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
@@ -327,4 +329,8 @@ where
         _ => {}
     };
     Ok(())
+}
+} else {
+        fn main() {}
+    }
 }

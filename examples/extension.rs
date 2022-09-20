@@ -1,3 +1,5 @@
+cfg_if::cfg_if! {
+    if #[cfg(feature = "v9")] {
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task::{self, JoinHandle};
@@ -187,5 +189,9 @@ pub mod tcp {
         let server_stream = server_stream?;
         let client_stream = connect_task.await?;
         Ok((server_stream, client_stream))
+    }
+}
+} else {
+        fn main() {}
     }
 }

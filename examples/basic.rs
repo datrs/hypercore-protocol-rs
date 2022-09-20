@@ -1,3 +1,5 @@
+cfg_if::cfg_if! {
+    if #[cfg(feature = "v9")] {
 use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::Arc;
@@ -226,5 +228,9 @@ async fn onmessage(_feed: &Feed, state: &mut FeedState, channel: &mut Channel, m
             }
         }
         _ => {}
+    }
+}
+} else {
+        fn main() {}
     }
 }

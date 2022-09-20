@@ -52,6 +52,7 @@ pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
+cfg-if = "1.0"
 
 [build-dependencies]
 prost-build = { version = "0.6.1", optional = true }
