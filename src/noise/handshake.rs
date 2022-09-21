@@ -215,8 +215,11 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 #[inline]
 #[cfg(feature = "v10")]
 fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
-    // TODO: v10
-    let mut buf = vec![0u8; 0];
+    let mut buf: Vec<u8> = vec![0; 2];
+    // Protobuf encoding, shortcut
+    buf[0] = 10;
+    buf[1] = nonce.len() as u8;
+    buf.extend(nonce);
     buf
 }
 
@@ -230,6 +233,31 @@ fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
 #[inline]
 #[cfg(feature = "v10")]
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
-    // TODO: v10
-    Ok(vec![])
+    // Assume this is always the shortcut protobuf
+    if msg[0] != 10 && msg[1] as usize != msg.len() - 2 {
+        Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Could not decode nonce",
+        ))
+    } else {
+        let mut buf: Vec<u8> = vec![0; msg.len() - 2];
+        buf.copy_from_slice(&msg[2..]);
+        Ok(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handshake_nonce_encode_decode() {
+        let nonce = generate_nonce();
+        let payload = encode_nonce(nonce.clone());
+        assert_eq!(payload.len(), 26);
+        assert_eq!(payload[0], 10);
+        assert_eq!(payload[1] as usize, payload.len() - 2);
+        let nonce_ret = decode_nonce(&*payload).unwrap();
+        assert_eq!(nonce_ret, nonce);
+    }
 }
