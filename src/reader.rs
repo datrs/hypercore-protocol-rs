@@ -8,10 +8,10 @@ use std::task::{Context, Poll};
 
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
 use crate::message::FrameType;
-#[cfg(feature = "v9")]
-use crate::message_v9::Frame;
 #[cfg(feature = "v10")]
 use crate::message_v10::Frame;
+#[cfg(feature = "v9")]
+use crate::message_v9::Frame;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
@@ -119,6 +119,7 @@ impl ReadState {
         }
         loop {
             match self.step {
+                #[cfg(feature = "v9")]
                 Step::Header => {
                     let varint = varint_decode(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = varint {
@@ -138,6 +139,27 @@ impl ReadState {
                         return None;
                     }
                 }
+                #[cfg(feature = "v10")]
+                Step::Header => {
+                    let stat = stat_uint24_le(&self.buf[self.start..self.end]);
+                    if let Some((header_len, body_len)) = stat {
+                        let body_len = body_len as usize;
+                        if body_len > MAX_MESSAGE_SIZE as usize {
+                            return Some(Err(Error::new(
+                                ErrorKind::InvalidData,
+                                "Message length above max allowed size",
+                            )));
+                        }
+                        self.step = Step::Body {
+                            header_len,
+                            body_len,
+                        };
+                    } else {
+                        self.cycle_buf_if_needed();
+                        return None;
+                    }
+                }
+
                 Step::Body {
                     header_len,
                     body_len,
@@ -162,6 +184,7 @@ impl ReadState {
     }
 }
 
+#[cfg(feature = "v9")]
 fn varint_decode(buf: &[u8]) -> Option<(usize, u64)> {
     let mut value = 0u64;
     let mut m = 1u64;
@@ -179,4 +202,11 @@ fn varint_decode(buf: &[u8]) -> Option<(usize, u64)> {
         }
     }
     Some((offset, value))
+}
+
+#[cfg(feature = "v10")]
+fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
+    let len =
+        (((buffer[0] as u32) << 0) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;
+    Some((3, len))
 }

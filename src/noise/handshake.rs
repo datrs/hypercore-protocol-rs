@@ -1,16 +1,21 @@
 // use async_std::io::{BufReader, BufWriter};
 use crate::constants::CAP_NS_BUF;
-use crate::schema::NoisePayload;
+use crate::noise::curve::CurveResolver;
 use blake2_rfc::blake2b::Blake2b;
 #[cfg(feature = "v9")]
 use prost::Message;
-use rand::Rng;
 pub use snow::Keypair;
-use snow::{Builder, Error as SnowError, HandshakeState};
+use snow::{
+    resolvers::{DefaultResolver, FallbackResolver},
+    Builder, Error as SnowError, HandshakeState,
+};
 use std::io::{Error, ErrorKind, Result};
 
 const CIPHERKEYLEN: usize = 32;
+#[cfg(feature = "v9")]
 const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2b";
+#[cfg(feature = "v10")]
+const HANDSHAKE_PATTERN: &str = "Noise_XX_Ed25519_ChaChaPoly_BLAKE2b";
 
 #[derive(Debug, Clone, Default)]
 pub struct HandshakeResult {
@@ -59,6 +64,7 @@ impl HandshakeResult {
     }
 }
 
+#[cfg(feature = "v9")]
 pub fn build_handshake_state(
     is_initiator: bool,
 ) -> std::result::Result<(HandshakeState, Keypair), SnowError> {
@@ -67,6 +73,45 @@ pub fn build_handshake_state(
     let builder = builder.local_private_key(&key_pair.private);
     // log::trace!("hs local pubkey: {:x?}", &key_pair.public);
     let handshake_state = if is_initiator {
+        builder.build_initiator()?
+    } else {
+        builder.build_responder()?
+    };
+    Ok((handshake_state, key_pair))
+}
+
+#[cfg(feature = "v10")]
+pub fn build_handshake_state(
+    is_initiator: bool,
+) -> std::result::Result<(HandshakeState, Keypair), SnowError> {
+    use snow::params::{
+        BaseChoice, CipherChoice, DHChoice, HandshakeChoice, HandshakeModifierList,
+        HandshakePattern, HashChoice, NoiseParams,
+    };
+    // NB: HANDSHAKE_PATTERN.parse() doesn't work because the pattern has "Ed25519"
+    // instead of "25519".
+    let noise_params = NoiseParams::new(
+        HANDSHAKE_PATTERN.to_string(),
+        BaseChoice::Noise,
+        HandshakeChoice {
+            pattern: HandshakePattern::XX,
+            modifiers: HandshakeModifierList { list: vec![] },
+        },
+        DHChoice::Curve25519,
+        CipherChoice::ChaChaPoly,
+        HashChoice::Blake2b,
+    );
+    let builder: Builder<'_> = Builder::with_resolver(
+        noise_params,
+        Box::new(FallbackResolver::new(
+            Box::new(CurveResolver::default()),
+            Box::new(DefaultResolver::default()),
+        )),
+    );
+    let key_pair = builder.generate_keypair().unwrap();
+    let builder = builder.local_private_key(&key_pair.private);
+    let handshake_state = if is_initiator {
+        log::info!("building initiator");
         builder.build_initiator()?
     } else {
         builder.build_responder()?
@@ -85,6 +130,7 @@ pub struct Handshake {
 }
 
 impl Handshake {
+    #[cfg(feature = "v9")]
     pub fn new(is_initiator: bool) -> Result<Self> {
         let (state, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
 
@@ -110,10 +156,49 @@ impl Handshake {
         })
     }
 
+    #[cfg(feature = "v10")]
+    pub fn new(is_initiator: bool) -> Result<Self> {
+        let (state, local_keypair) = build_handshake_state(is_initiator).map_err(map_err)?;
+
+        let local_pubkey = local_keypair.public;
+        let local_seckey = local_keypair.private;
+        let payload = vec![];
+        // FIXME: There is no nonce anymore, should be removed
+        let local_nonce = local_pubkey.clone();
+        let result = HandshakeResult {
+            is_initiator,
+            local_pubkey,
+            local_seckey,
+            local_nonce,
+            ..Default::default()
+        };
+        Ok(Self {
+            state,
+            result,
+            payload,
+            tx_buf: vec![0u8; 512],
+            rx_buf: vec![0u8; 512],
+            complete: false,
+            did_receive: false,
+        })
+    }
+
+    #[cfg(feature = "v9")]
     pub fn start(&mut self) -> Result<Option<&'_ [u8]>> {
         if self.is_initiator() {
             let tx_len = self.send()?;
             Ok(Some(&self.tx_buf[..tx_len]))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn start(&mut self) -> Result<Option<Vec<u8>>> {
+        if self.is_initiator() {
+            let tx_len = self.send()?;
+            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
+            Ok(Some(wrapped))
         } else {
             Ok(None)
         }
@@ -133,9 +218,11 @@ impl Handshake {
             .map_err(map_err)
     }
     fn send(&mut self) -> Result<usize> {
-        self.state
+        let result = self
+            .state
             .write_message(&self.payload, &mut self.tx_buf)
-            .map_err(map_err)
+            .map_err(map_err);
+        result
     }
 
     pub fn read(&mut self, msg: &[u8]) -> Result<Option<&'_ [u8]>> {
@@ -198,6 +285,7 @@ fn map_err(e: SnowError) -> Error {
 }
 
 #[inline]
+#[cfg(feature = "v9")]
 fn generate_nonce() -> Vec<u8> {
     let random_bytes = rand::thread_rng().gen::<[u8; 24]>();
     random_bytes.to_vec()
@@ -214,12 +302,13 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 
 #[inline]
 #[cfg(feature = "v10")]
-fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
-    let mut buf: Vec<u8> = vec![0; 2];
-    // Protobuf encoding, shortcut
-    buf[0] = 10;
-    buf[1] = nonce.len() as u8;
-    buf.extend(nonce);
+fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
+    let mut buf: Vec<u8> = vec![0; 3];
+    let n = data.len();
+    buf[0] = (n & 255) as u8;
+    buf[1] = ((n >> 8) & 255) as u8;
+    buf[2] = ((n >> 16) & 255) as u8;
+    buf.extend(data);
     buf
 }
 
@@ -249,15 +338,4 @@ fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn handshake_nonce_encode_decode() {
-        let nonce = generate_nonce();
-        let payload = encode_nonce(nonce.clone());
-        assert_eq!(payload.len(), 26);
-        assert_eq!(payload[0], 10);
-        assert_eq!(payload[1] as usize, payload.len() - 2);
-        let nonce_ret = decode_nonce(&*payload).unwrap();
-        assert_eq!(nonce_ret, nonce);
-    }
 }

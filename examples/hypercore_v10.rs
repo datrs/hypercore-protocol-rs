@@ -86,11 +86,12 @@ async fn onconnection<T: 'static>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
+    info!("onconnection, initiator: {}", is_initiator);
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
-
+    info!("protocol created, polling for next()");
     while let Some(event) = protocol.next().await {
         let event = event?;
-        debug!("protocol event {:?}", event);
+        info!("protocol event {:?}", event);
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
