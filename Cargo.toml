@@ -27,7 +27,7 @@ snow = { version = "0.9.0", features = ["risky-raw-split"] }
 prost = { version = "0.7", optional = true }
 bytes = "1.0.1"
 varinteger = { version = "1.0", optional = true }
-rand = "0.7"
+rand = "0.8"
 blake2-rfc = "0.2"
 hex = "0.4"
 async-trait = "0.1"
@@ -41,6 +41,7 @@ futures-lite = "1.11.3"
 hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
 sha2 = "0.10.6"
 curve25519-dalek = "3.2.1"
+crypto_secretstream = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
@@ -67,7 +68,7 @@ wasm-bindgen = [
   "futures-timer/wasm-bindgen"
 ]
 v9 = ["prost", "prost-build", "varinteger", "hypercore/v9",]
-v10 = ["hypercore/v10"]
+v10 = ["hypercore/v10", "crypto_secretstream"]
 
 [profile.bench]
 # debug = true

@@ -1,9 +1,15 @@
 use crate::message::{EncodeError, Encoder};
-#[cfg(feature = "v9")]
-use crate::message_v9::Frame;
+
 #[cfg(feature = "v10")]
 use crate::message_v10::Frame;
-use crate::noise::{Cipher, HandshakeResult};
+#[cfg(feature = "v9")]
+use crate::message_v9::Frame;
+#[cfg(feature = "v9")]
+use crate::noise::Cipher;
+#[cfg(feature = "v10")]
+use crate::noise::EncodeCipher;
+use crate::noise::HandshakeResult;
+
 use futures_lite::{ready, AsyncWrite};
 use std::collections::VecDeque;
 use std::fmt;
@@ -26,7 +32,10 @@ pub struct WriteState {
     current_frame: Option<Frame>,
     start: usize,
     end: usize,
+    #[cfg(feature = "v9")]
     cipher: Option<Cipher>,
+    #[cfg(feature = "v10")]
+    cipher: Option<EncodeCipher>,
     step: Step,
 }
 
@@ -76,7 +85,7 @@ impl WriteState {
             return Ok(false);
         }
         let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len);
+        self.advance(len)?;
         Ok(true)
     }
 
@@ -93,19 +102,38 @@ impl WriteState {
         }
     }
 
-    fn advance(&mut self, n: usize) {
+    fn advance(&mut self, n: usize) -> std::result::Result<(), EncodeError> {
         let end = self.end + n;
         if let Some(ref mut cipher) = self.cipher {
-            cipher.apply(&mut self.buf[self.end..end]);
+            #[cfg(feature = "v9")]
+            {
+                cipher.apply(&mut self.buf[self.end..end]);
+            }
+            #[cfg(feature = "v10")]
+            {
+                cipher.encode(&mut self.buf[self.end..end])?;
+            }
         }
         self.end = end;
+        Ok(())
     }
 
+    #[cfg(feature = "v9")]
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
         let cipher = Cipher::from_handshake_tx(handshake)?;
         self.cipher = Some(cipher);
         Ok(())
     }
+    #[cfg(feature = "v10")]
+    pub fn upgrade_with_handshake_result(
+        &mut self,
+        handshake_result: &HandshakeResult,
+    ) -> Result<Vec<u8>> {
+        let (cipher, msg) = EncodeCipher::from_handshake_tx(handshake_result)?;
+        self.cipher = Some(cipher);
+        Ok(msg)
+    }
+
     fn remaining(&self) -> usize {
         self.buf.len() - self.end
     }

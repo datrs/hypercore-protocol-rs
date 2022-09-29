@@ -1,4 +1,8 @@
-use crate::noise::{Cipher, HandshakeResult};
+#[cfg(feature = "v9")]
+use crate::noise::Cipher;
+#[cfg(feature = "v10")]
+use crate::noise::DecodeCipher;
+use crate::noise::HandshakeResult;
 use futures_lite::io::AsyncRead;
 use futures_timer::Delay;
 use std::future::Future;
@@ -12,6 +16,7 @@ use crate::message::FrameType;
 use crate::message_v10::Frame;
 #[cfg(feature = "v9")]
 use crate::message_v9::Frame;
+use crate::util::stat_uint24_le;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
@@ -29,8 +34,11 @@ pub struct ReadState {
     step: Step,
     /// The timeout after which the connection is closed.
     timeout: Delay,
-    /// Optional encryption cipher.
+    /// Optional decryption cipher.
+    #[cfg(feature = "v9")]
     cipher: Option<Cipher>,
+    #[cfg(feature = "v10")]
+    cipher: Option<DecodeCipher>,
     /// The frame type to be passed to the decoder.
     frame_type: FrameType,
 }
@@ -56,9 +64,20 @@ enum Step {
 }
 
 impl ReadState {
+    #[cfg(feature = "v9")]
     pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
         let mut cipher = Cipher::from_handshake_rx(handshake)?;
         cipher.apply(&mut self.buf[self.start..self.end]);
+        self.cipher = Some(cipher);
+        Ok(())
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn upgrade_with_handshake_result(
+        &mut self,
+        handshake_result: &HandshakeResult,
+    ) -> Result<()> {
+        let cipher = DecodeCipher::from_handshake_rx(handshake_result)?;
         self.cipher = Some(cipher);
         Ok(())
     }
@@ -95,7 +114,14 @@ impl ReadState {
 
             let end = self.end + n;
             if let Some(ref mut cipher) = self.cipher {
-                cipher.apply(&mut self.buf[self.end..end]);
+                #[cfg(feature = "v9")]
+                {
+                    cipher.apply(&mut self.buf[self.end..end]);
+                }
+                #[cfg(feature = "v10")]
+                {
+                    cipher.decode(&mut self.buf[self.end..end]);
+                }
             }
             self.end = end;
             self.timeout.reset(TIMEOUT);
@@ -202,11 +228,4 @@ fn varint_decode(buf: &[u8]) -> Option<(usize, u64)> {
         }
     }
     Some((offset, value))
-}
-
-#[cfg(feature = "v10")]
-fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
-    let len =
-        (((buffer[0] as u32) << 0) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;
-    Some((3, len))
 }

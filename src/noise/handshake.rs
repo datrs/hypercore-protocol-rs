@@ -1,6 +1,7 @@
 // use async_std::io::{BufReader, BufWriter};
 use crate::constants::CAP_NS_BUF;
 use crate::noise::curve::CurveResolver;
+use crate::util::wrap_uint24_le;
 use blake2_rfc::blake2b::Blake2b;
 #[cfg(feature = "v9")]
 use prost::Message;
@@ -23,8 +24,12 @@ pub struct HandshakeResult {
     pub local_pubkey: Vec<u8>,
     pub local_seckey: Vec<u8>,
     pub remote_pubkey: Vec<u8>,
+    #[cfg(feature = "v9")]
     pub local_nonce: Vec<u8>,
+    #[cfg(feature = "v9")]
     pub remote_nonce: Vec<u8>,
+    #[cfg(feature = "v10")]
+    pub handshake_hash: Vec<u8>,
     pub split_tx: [u8; CIPHERKEYLEN],
     pub split_rx: [u8; CIPHERKEYLEN],
 }
@@ -163,13 +168,10 @@ impl Handshake {
         let local_pubkey = local_keypair.public;
         let local_seckey = local_keypair.private;
         let payload = vec![];
-        // FIXME: There is no nonce anymore, should be removed
-        let local_nonce = local_pubkey.clone();
         let result = HandshakeResult {
             is_initiator,
             local_pubkey,
             local_seckey,
-            local_nonce,
             ..Default::default()
         };
         Ok(Self {
@@ -225,6 +227,7 @@ impl Handshake {
         result
     }
 
+    #[cfg(feature = "v9")]
     pub fn read(&mut self, msg: &[u8]) -> Result<Option<&'_ [u8]>> {
         // eprintln!("hs read len {}", msg.len());
         if self.complete() {
@@ -268,6 +271,59 @@ impl Handshake {
         Ok(tx_buf)
     }
 
+    #[cfg(feature = "v10")]
+    pub fn read(&mut self, msg: &[u8]) -> Result<Option<Vec<u8>>> {
+        // eprintln!("hs read len {}", msg.len());
+        if self.complete() {
+            return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
+        }
+
+        println!("handshake::read: msg({}): {:02X?}", msg.len(), msg);
+        let rx_len = self.recv(&msg)?;
+        println!("handshake::read: recv rx_len {}", rx_len);
+
+        if !self.is_initiator() && !self.did_receive {
+            self.did_receive = true;
+            let tx_len = self.send()?;
+            return Ok(Some(self.tx_buf[..tx_len].to_vec()));
+        }
+
+        let tx_buf = if self.is_initiator() {
+            let tx_len = self.send()?;
+            println!(
+                "handshake::read: send tx_len {}: {:02X?}",
+                tx_len,
+                &self.tx_buf[..tx_len]
+            );
+            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
+            println!(
+                "handshake::read: send wrapped({}): {:02X?}",
+                wrapped.len(),
+                wrapped
+            );
+            Some(wrapped)
+        } else {
+            None
+        };
+
+        let split = self.state.dangerously_get_raw_split();
+        if self.is_initiator() {
+            self.result.split_tx = split.0;
+            self.result.split_rx = split.1;
+        } else {
+            self.result.split_tx = split.1;
+            self.result.split_rx = split.0;
+        }
+        self.result.remote_pubkey = self
+            .state
+            .get_remote_static()
+            .expect("Could not read remote static key after handshake")
+            .to_vec();
+        self.result.handshake_hash = self.state.get_handshake_hash().to_vec();
+        self.complete = true;
+        Ok(tx_buf)
+    }
+
     pub fn into_result(self) -> Result<HandshakeResult> {
         if !self.complete() {
             Err(Error::new(ErrorKind::Other, "Handshake is not complete"))
@@ -301,38 +357,10 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 }
 
 #[inline]
-#[cfg(feature = "v10")]
-fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
-    let mut buf: Vec<u8> = vec![0; 3];
-    let n = data.len();
-    buf[0] = (n & 255) as u8;
-    buf[1] = ((n >> 8) & 255) as u8;
-    buf[2] = ((n >> 16) & 255) as u8;
-    buf.extend(data);
-    buf
-}
-
-#[inline]
 #[cfg(feature = "v9")]
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
-}
-
-#[inline]
-#[cfg(feature = "v10")]
-fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
-    // Assume this is always the shortcut protobuf
-    if msg[0] != 10 && msg[1] as usize != msg.len() - 2 {
-        Err(Error::new(
-            ErrorKind::PermissionDenied,
-            "Could not decode nonce",
-        ))
-    } else {
-        let mut buf: Vec<u8> = vec![0; msg.len() - 2];
-        buf.copy_from_slice(&msg[2..]);
-        Ok(buf)
-    }
 }
 
 #[cfg(test)]

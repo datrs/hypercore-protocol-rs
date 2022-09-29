@@ -1,5 +1,6 @@
 use crate::message::{EncodeError, Encoder, FrameType};
 use crate::schema::*;
+use crate::util::write_uint24_le;
 use pretty_hash::fmt as pretty_fmt;
 use std::fmt;
 use std::io;
@@ -56,9 +57,10 @@ impl Frame {
 impl Encoder for Frame {
     fn encoded_len(&self) -> usize {
         let body_len = self.body_len();
-        // TODO: v10
-        // body_len + varinteger::length(body_len as u64)
-        body_len
+        match self {
+            Self::Raw(_) => body_len,
+            Self::Message(_) => 3 + body_len,
+        }
     }
 
     fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
@@ -68,10 +70,9 @@ impl Encoder for Frame {
         }
         let body_len = self.body_len();
         let header_len = len - body_len;
-        // TODO: v10
-        // varinteger::encode(body_len as u64, &mut buf[..header_len]);
+        write_uint24_le(body_len, buf);
         match self {
-            Self::Raw(ref message) => message.as_slice().encode(&mut buf[header_len..]),
+            Self::Raw(ref message) => message.as_slice().encode(buf),
             Self::Message(ref message) => message.encode(&mut buf[header_len..]),
         }?;
         Ok(len)

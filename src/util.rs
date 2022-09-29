@@ -24,3 +24,29 @@ pub fn map_channel_err<T>(err: async_channel::SendError<T>) -> Error {
         format!("Cannot forward on channel: {}", err),
     )
 }
+
+pub const UINT_24_LENGTH: usize = 3;
+
+#[inline]
+pub fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
+    let mut buf: Vec<u8> = vec![0; 3];
+    let n = data.len();
+    write_uint24_le(n, &mut buf);
+    buf.extend(data);
+    buf
+}
+
+#[inline]
+pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
+    buf[0] = (n & 255) as u8;
+    buf[1] = ((n >> 8) & 255) as u8;
+    buf[2] = ((n >> 16) & 255) as u8;
+}
+
+#[inline]
+pub fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
+    // FIXME: when to return None!
+    let len =
+        (((buffer[0] as u32) << 0) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;
+    Some((UINT_24_LENGTH, len))
+}

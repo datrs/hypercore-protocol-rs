@@ -1,10 +1,5 @@
 // TODO: Use v10 structs here
 
-/// Sent as part of the noise protocol.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NoisePayload {
-    pub nonce: std::vec::Vec<u8>,
-}
 /// type=0
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {

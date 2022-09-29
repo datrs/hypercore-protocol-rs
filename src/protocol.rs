@@ -1,4 +1,5 @@
 use async_channel::{Receiver, Sender};
+use blake2_rfc::blake2b::Blake2b;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::Stream;
 use futures_timer::Delay;
@@ -24,8 +25,7 @@ use crate::message_v9::{ChannelMessage, Frame, Message};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ReadState;
 use crate::schema::*;
-use crate::util::map_channel_err;
-use crate::util::pretty_hash;
+use crate::util::{map_channel_err, pretty_hash};
 use crate::writer::WriteState;
 
 macro_rules! return_error {
@@ -371,8 +371,17 @@ where
         } else {
             let result = handshake.into_result()?;
             if self.options.encrypted {
-                self.read_state.upgrade_with_handshake(&result)?;
-                self.write_state.upgrade_with_handshake(&result)?;
+                #[cfg(feature = "v9")]
+                {
+                    self.read_state.upgrade_with_handshake(&result)?;
+                    self.write_state.upgrade_with_handshake(&result)?;
+                }
+                #[cfg(feature = "v10")]
+                {
+                    let msg = self.write_state.upgrade_with_handshake_result(&result)?;
+                    self.read_state.upgrade_with_handshake_result(&result)?;
+                    self.queue_frame_direct(msg).unwrap();
+                }
             }
             self.read_state.set_frame_type(FrameType::Message);
             let remote_public_key = parse_key(&result.remote_pubkey)?;
