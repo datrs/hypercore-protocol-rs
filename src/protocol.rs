@@ -301,6 +301,7 @@ where
         if let ChannelMessage {
             channel,
             message: Message::Close(_),
+            ..
         } = message
         {
             self.close_local(*channel);
@@ -427,6 +428,7 @@ where
     }
 
     fn command_open(&mut self, key: Key) -> Result<()> {
+        println!("protocol::command_open");
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key);
         // Safe because attach_local always puts Some(local_id)
@@ -472,8 +474,17 @@ where
     }
 
     fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
-        let frame = Frame::Raw(body);
-        self.write_state.try_queue_direct(&frame)
+        #[cfg(feature = "v9")]
+        {
+            let frame = Frame::Raw(body);
+            self.write_state.try_queue_direct(&frame)
+        }
+
+        #[cfg(feature = "v10")]
+        {
+            let mut frame = Frame::Raw(body);
+            self.write_state.try_queue_direct(&mut frame)
+        }
     }
 
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {

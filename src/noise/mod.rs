@@ -7,5 +7,5 @@ mod handshake;
 #[cfg(feature = "v9")]
 pub use cipher::Cipher;
 #[cfg(feature = "v10")]
-pub use cipher_v10::{DecodeCipher, EncodeCipher};
+pub use cipher_v10::{DecryptCipher, EncryptCipher};
 pub use handshake::{Handshake, HandshakeResult};

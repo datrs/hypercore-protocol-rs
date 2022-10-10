@@ -1,13 +1,13 @@
-use crate::message::{EncodeError, Encoder};
+use crate::message::EncodeError;
 
 #[cfg(feature = "v10")]
-use crate::message_v10::Frame;
+use crate::message_v10::{Encoder, Frame};
 #[cfg(feature = "v9")]
-use crate::message_v9::Frame;
+use crate::message_v9::{Encoder, Frame};
 #[cfg(feature = "v9")]
 use crate::noise::Cipher;
 #[cfg(feature = "v10")]
-use crate::noise::EncodeCipher;
+use crate::noise::EncryptCipher;
 use crate::noise::HandshakeResult;
 
 use futures_lite::{ready, AsyncWrite};
@@ -35,7 +35,7 @@ pub struct WriteState {
     #[cfg(feature = "v9")]
     cipher: Option<Cipher>,
     #[cfg(feature = "v10")]
-    cipher: Option<EncodeCipher>,
+    cipher: Option<EncryptCipher>,
     step: Step,
 }
 
@@ -73,6 +73,7 @@ impl WriteState {
         self.queue.push_back(frame.into())
     }
 
+    #[cfg(feature = "v9")]
     pub fn try_queue_direct<T: Encoder>(
         &mut self,
         frame: &T,
@@ -85,7 +86,35 @@ impl WriteState {
             return Ok(false);
         }
         let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len)?;
+        self.advance(len, len)?;
+        Ok(true)
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn try_queue_direct<T: Encoder>(
+        &mut self,
+        frame: &mut T,
+    ) -> std::result::Result<bool, EncodeError> {
+        let promised_len = frame.encoded_len();
+        let padded_promised_len = self.safe_encrypted_len(promised_len);
+        println!(
+            "Writer::try_queue_direct, promised={}, with_padding={}",
+            promised_len, padded_promised_len
+        );
+        if self.buf.len() < padded_promised_len {
+            self.buf.resize(padded_promised_len, 0u8);
+        }
+        if padded_promised_len > self.remaining() {
+            return Ok(false);
+        }
+        let actual_len = frame.encode(&mut self.buf[self.end..])?;
+        if actual_len != promised_len {
+            panic!(
+                "encoded_len() did not return that right size, expected={}, actual={}",
+                promised_len, actual_len
+            );
+        }
+        self.advance(padded_promised_len)?;
         Ok(true)
     }
 
@@ -104,17 +133,26 @@ impl WriteState {
 
     fn advance(&mut self, n: usize) -> std::result::Result<(), EncodeError> {
         let end = self.end + n;
-        if let Some(ref mut cipher) = self.cipher {
+
+        let encrypted_end = if let Some(ref mut cipher) = self.cipher {
             #[cfg(feature = "v9")]
             {
                 cipher.apply(&mut self.buf[self.end..end]);
+                end
             }
             #[cfg(feature = "v10")]
             {
-                cipher.encode(&mut self.buf[self.end..end])?;
+                println!(
+                    "Writer::advance: encrypting buf range {}..{}",
+                    self.end, end
+                );
+                self.end + cipher.encrypt(&mut self.buf[self.end..end])?
             }
-        }
-        self.end = end;
+        } else {
+            end
+        };
+
+        self.end = encrypted_end;
         Ok(())
     }
 
@@ -124,12 +162,13 @@ impl WriteState {
         self.cipher = Some(cipher);
         Ok(())
     }
+
     #[cfg(feature = "v10")]
     pub fn upgrade_with_handshake_result(
         &mut self,
         handshake_result: &HandshakeResult,
     ) -> Result<Vec<u8>> {
-        let (cipher, msg) = EncodeCipher::from_handshake_tx(handshake_result)?;
+        let (cipher, msg) = EncryptCipher::from_handshake_tx(handshake_result)?;
         self.cipher = Some(cipher);
         Ok(msg)
     }
@@ -153,11 +192,19 @@ impl WriteState {
                         self.current_frame = self.queue.pop_front();
                     }
 
+                    #[cfg(feature = "v9")]
                     if let Some(frame) = self.current_frame.take() {
                         if !self.try_queue_direct(&frame)? {
                             self.current_frame = Some(frame);
                         }
                     }
+                    #[cfg(feature = "v10")]
+                    if let Some(mut frame) = self.current_frame.take() {
+                        if !self.try_queue_direct(&mut frame)? {
+                            self.current_frame = Some(frame);
+                        }
+                    }
+
                     if self.pending() == 0 {
                         return Poll::Ready(Ok(()));
                     }
@@ -179,6 +226,21 @@ impl WriteState {
                     Step::Processing
                 }
             }
+        }
+    }
+
+    fn safe_encrypted_len(&self, encoded_len: usize) -> usize {
+        if let Some(cipher) = &self.cipher {
+            #[cfg(feature = "v9")]
+            {
+                encoded_len
+            }
+            #[cfg(feature = "v10")]
+            {
+                cipher.safe_encrypted_len(encoded_len)
+            }
+        } else {
+            encoded_len
         }
     }
 }

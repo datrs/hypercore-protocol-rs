@@ -1,4 +1,4 @@
-// TODO: Use v10 structs here
+use hypercore::compact_encoding::{CompactEncoding, State};
 
 /// type=0
 #[derive(Debug, Clone, PartialEq)]
@@ -6,6 +6,31 @@ pub struct Open {
     pub discovery_key: std::vec::Vec<u8>,
     pub capability: ::std::option::Option<std::vec::Vec<u8>>,
 }
+
+impl CompactEncoding<Open> for State {
+    fn preencode(&mut self, value: &Open) {
+        // self.preencode(&value.index);
+        // self.preencode(&value.length);
+        // self.preencode_fixed_32();
+    }
+
+    fn encode(&mut self, value: &Open, buffer: &mut [u8]) {
+        // self.encode(&value.index, buffer);
+        // self.encode(&value.length, buffer);
+        // self.encode_fixed_32(&value.hash, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Open {
+        // let index: u64 = self.decode(buffer);
+        // let length: u64 = self.decode(buffer);
+        // let hash: Box<[u8]> = self.decode_fixed_32(buffer);
+        Open {
+            discovery_key: vec![],
+            capability: None,
+        }
+    }
+}
+
 /// type=1, overall feed options. can be sent multiple times
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {

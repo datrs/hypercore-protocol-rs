@@ -76,7 +76,7 @@ fn usage() {
 
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
-// Unfortunately, everything that touches the hypercore_store or a feed has to be generic
+// Unfortunately, everything that touches the hypercore_store or a hypercore has to be generic
 // at the moment.
 async fn onconnection<T: 'static>(
     stream: TcpStream,
@@ -95,19 +95,19 @@ where
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
-                    for feed in hypercore_store.hypercores.values() {
-                        protocol.open(feed.key().clone()).await?;
+                    for hypercore in hypercore_store.hypercores.values() {
+                        protocol.open(hypercore.key().clone()).await?;
                     }
                 }
             }
             Event::DiscoveryKey(dkey) => {
-                if let Some(feed) = hypercore_store.get(&dkey) {
-                    protocol.open(feed.key().clone()).await?;
+                if let Some(hypercore) = hypercore_store.get(&dkey) {
+                    protocol.open(hypercore.key().clone()).await?;
                 }
             }
             Event::Channel(channel) => {
-                if let Some(feed) = hypercore_store.get(channel.discovery_key()) {
-                    feed.onpeer(channel);
+                if let Some(hypercore) = hypercore_store.get(channel.discovery_key()) {
+                    hypercore.onpeer(channel);
                 }
             }
             Event::Close(_dkey) => {}

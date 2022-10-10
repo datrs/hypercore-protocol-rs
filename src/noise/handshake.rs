@@ -18,6 +18,17 @@ const HANDSHAKE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2b";
 #[cfg(feature = "v10")]
 const HANDSHAKE_PATTERN: &str = "Noise_XX_Ed25519_ChaChaPoly_BLAKE2b";
 
+// These the output of, see `hash_namespace` test below for how they are produced
+// https://github.com/hypercore-protocol/hypercore/blob/70b271643c4e4b1e5ecae5bb579966dfe6361ff3/lib/caps.js#L9
+const REPLICATE_INITIATOR: [u8; 32] = [
+    0x51, 0x81, 0x2A, 0x2A, 0x35, 0x9B, 0x50, 0x36, 0x95, 0x36, 0x77, 0x5D, 0xF8, 0x9E, 0x18, 0xE4,
+    0x77, 0x40, 0xF3, 0xDB, 0x72, 0xAC, 0xA, 0xE7, 0xB, 0x29, 0x59, 0x4C, 0x19, 0x4D, 0xC3, 0x16,
+];
+const REPLICATE_RESPONDER: [u8; 32] = [
+    0x4, 0x38, 0x49, 0x2D, 0x2, 0x97, 0xC, 0xC1, 0x35, 0x28, 0xAC, 0x2, 0x62, 0xBC, 0xA0, 0x7,
+    0x4E, 0x9, 0x26, 0x26, 0x2, 0x56, 0x86, 0x5A, 0xCC, 0xC0, 0xBF, 0x15, 0xBD, 0x79, 0x12, 0x7D,
+];
+
 #[derive(Debug, Clone, Default)]
 pub struct HandshakeResult {
     pub is_initiator: bool,
@@ -35,6 +46,7 @@ pub struct HandshakeResult {
 }
 
 impl HandshakeResult {
+    #[cfg(feature = "v9")]
     pub fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
         let mut context = Blake2b::with_key(32, &self.split_rx[..32]);
         context.update(CAP_NS_BUF);
@@ -44,6 +56,16 @@ impl HandshakeResult {
         Some(hash.as_bytes().to_vec())
     }
 
+    #[cfg(feature = "v10")]
+    pub fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
+        Some(replicate_capability(
+            self.is_initiator,
+            key,
+            &self.handshake_hash,
+        ))
+    }
+
+    #[cfg(feature = "v9")]
     pub fn remote_capability(&self, key: &[u8]) -> Option<Vec<u8>> {
         let mut context = Blake2b::with_key(32, &self.split_tx[..32]);
         context.update(CAP_NS_BUF);
@@ -51,6 +73,15 @@ impl HandshakeResult {
         context.update(key);
         let hash = context.finalize();
         Some(hash.as_bytes().to_vec())
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn remote_capability(&self, key: &[u8]) -> Option<Vec<u8>> {
+        Some(replicate_capability(
+            self.is_initiator,
+            key,
+            &self.handshake_hash,
+        ))
     }
 
     pub fn verify_remote_capability(&self, capability: Option<Vec<u8>>, key: &[u8]) -> Result<()> {
@@ -320,6 +351,11 @@ impl Handshake {
             .expect("Could not read remote static key after handshake")
             .to_vec();
         self.result.handshake_hash = self.state.get_handshake_hash().to_vec();
+        println!(
+            "handshake::read: got handshake_hash({}): {:02X?}",
+            self.result.handshake_hash.len(),
+            self.result.handshake_hash
+        );
         self.complete = true;
         Ok(tx_buf)
     }
@@ -361,6 +397,36 @@ fn encode_nonce(nonce: Vec<u8>) -> Vec<u8> {
 fn decode_nonce(msg: &[u8]) -> Result<Vec<u8>> {
     let decoded = NoisePayload::decode(msg)?;
     Ok(decoded.nonce)
+}
+
+/// Create a hash used to indicate replication capability.
+/// See https://github.com/hypercore-protocol/hypercore/blob/70b271643c4e4b1e5ecae5bb579966dfe6361ff3/lib/caps.js#L11
+#[cfg(feature = "v10")]
+pub fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8]) -> Vec<u8> {
+    let seed = if is_initiator {
+        REPLICATE_INITIATOR
+    } else {
+        REPLICATE_RESPONDER
+    };
+
+    println!("handshake.rs: capability from seed: {:02X?}", seed);
+
+    let mut hasher = Blake2b::with_key(32, handshake_hash);
+    hasher.update(&seed);
+    hasher.update(&key);
+    let hash = hasher.finalize();
+    let capability = hash.as_bytes().to_vec();
+    println!(
+        "handshake.rs: Created capability({}): {:02X?} from is_initator={}, key={:02X?}, handshake_hash({})={:02X?}",
+        capability.len(),
+        capability,
+        is_initiator,
+        key,
+        handshake_hash.len(),
+        handshake_hash
+    );
+
+    capability
 }
 
 #[cfg(test)]

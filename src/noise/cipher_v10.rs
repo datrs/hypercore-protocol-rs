@@ -2,7 +2,7 @@ use crate::message::EncodeError;
 use crate::noise::HandshakeResult;
 use crate::util::{stat_uint24_le, write_uint24_le, UINT_24_LENGTH};
 use blake2_rfc::blake2b::Blake2b;
-use crypto_secretstream::{Header, Key, PullStream, PushStream};
+use crypto_secretstream::{Header, Key, PullStream, PushStream, Tag};
 use rand::rngs::OsRng;
 use std::convert::TryInto;
 
@@ -10,33 +10,33 @@ const STREAM_ID_LENGTH: usize = 32;
 const KEY_LENGTH: usize = 32;
 const HEADER_MSG_LEN: usize = UINT_24_LENGTH + STREAM_ID_LENGTH + Header::BYTES;
 
-pub struct DecodeCipher {
+pub struct DecryptCipher {
     is_initiator: bool,
     handshake_hash: Vec<u8>,
     pull_stream_bridge_key: Option<Key>,
     pull_stream: Option<PullStream>,
 }
 
-pub struct EncodeCipher {
+pub struct EncryptCipher {
     is_initiator: bool,
     handshake_hash: Vec<u8>,
     push_stream: PushStream,
     header_message: Option<[u8; HEADER_MSG_LEN]>,
 }
 
-impl std::fmt::Debug for DecodeCipher {
+impl std::fmt::Debug for DecryptCipher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DecodeCipher(crypto_secretstream)")
+        write!(f, "DecryptCipher(crypto_secretstream)")
     }
 }
 
-impl std::fmt::Debug for EncodeCipher {
+impl std::fmt::Debug for EncryptCipher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EncodeCipher(crypto_secretstream)")
+        write!(f, "EncryptCipher(crypto_secretstream)")
     }
 }
 
-impl DecodeCipher {
+impl DecryptCipher {
     pub fn from_handshake_rx(handshake_result: &HandshakeResult) -> std::io::Result<Self> {
         let key: [u8; KEY_LENGTH] = handshake_result.split_rx[..KEY_LENGTH]
             .try_into()
@@ -50,23 +50,28 @@ impl DecodeCipher {
         })
     }
 
-    pub fn decode(&mut self, buf: &mut [u8]) {
+    pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+        let mut decrypt_end = buf.len();
         let new_pull_stream = match self.pull_stream.as_mut() {
             Some(pull_stream) => {
                 let stat = stat_uint24_le(buf);
                 if let Some((header_len, body_len)) = stat {
-                    let mut to_decode = buf[header_len..header_len + body_len as usize].to_vec();
+                    let mut to_decrypt = buf[header_len..header_len + body_len as usize].to_vec();
                     let tag = pull_stream
-                        .pull(&mut to_decode, &[])
+                        .pull(&mut to_decrypt, &[])
                         .map_err(|err| println!("pull_stream err, {}", err.to_string()))
                         .unwrap();
+                    let decryptd_len = to_decrypt.len();
                     println!(
-                        "DecodeCipher::decode: got tag {:?} and message {:02X?}",
-                        tag, to_decode
+                        "DecryptCipher::decrypt: {} bytes decrypted into tag {:?} and message({}) {:02X?}",
+                        buf.len(),
+                        tag, decryptd_len, to_decrypt
                     );
+                    write_uint24_le(decryptd_len, buf);
+                    decrypt_end = 3 + to_decrypt.len();
+                    buf[3..decrypt_end].copy_from_slice(to_decrypt.as_slice());
                 } else {
-                    // TODO: result
-                    panic!("Invalid data to pull stream");
+                    return Err(EncodeError::new(buf.len()));
                 };
                 None
             }
@@ -83,8 +88,7 @@ impl DecodeCipher {
                         .try_into()
                         .expect("stream id slice with incorrect length");
                     if expected_stream_id != remote_stream_id {
-                        // FIXME: Error here, not panic
-                        panic!("Invalid stream id received");
+                        return Err(EncodeError::new(buf.len()));
                     }
 
                     let header: [u8; 24] = buf[header_len + 32..header_len + body_len as usize]
@@ -95,8 +99,7 @@ impl DecodeCipher {
                         &self.pull_stream_bridge_key.as_ref().unwrap(),
                     )
                 } else {
-                    // FIXME: Error here
-                    panic!("Invalid data to initial secret stream response");
+                    return Err(EncodeError::new(buf.len()));
                 };
 
                 Some(pull_stream)
@@ -106,10 +109,11 @@ impl DecodeCipher {
             self.pull_stream = Some(new_pull_stream);
             self.pull_stream_bridge_key = None;
         }
+        Ok(decrypt_end)
     }
 }
 
-impl EncodeCipher {
+impl EncryptCipher {
     pub fn from_handshake_tx(
         handshake_result: &HandshakeResult,
     ) -> std::io::Result<(Self, Vec<u8>)> {
@@ -141,7 +145,21 @@ impl EncodeCipher {
         ))
     }
 
-    pub fn encode(&mut self, buf: &mut [u8]) -> Result<(), EncodeError> {
+    /// Get the length needed for encryption, that includes padding.
+    pub fn safe_encrypted_len(&self, plaintext_len: usize) -> usize {
+        if self.header_message.is_some() {
+            plaintext_len
+        } else {
+            // ChaCha20-Poly1305 uses padding in two places, use two 15 bytes as a safe
+            // extra room.
+            // https://mailarchive.ietf.org/arch/msg/cfrg/u734TEOSDDWyQgE0pmhxjdncwvw/
+            plaintext_len + 2 * 15
+        }
+    }
+
+    /// Encrypts message in the given buffer to the same buffer, returns number of bytes
+    /// of total message.
+    pub fn encrypt(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
         let is_header_message: bool = if let Some(header_message) = self.header_message {
             if header_message == buf {
                 true
@@ -151,13 +169,35 @@ impl EncodeCipher {
         } else {
             false
         };
-        if is_header_message {
+        let len = if is_header_message {
             self.header_message = None;
+            buf.len()
         } else {
-            // TODO: Encode
-            println!("EncodeCipher::encode: encoding");
-        }
-        Ok(())
+            let stat = stat_uint24_le(buf);
+            println!("EncryptCipher::encrypt: encrypting");
+            if let Some((header_len, body_len)) = stat {
+                let mut to_encrypt = buf[header_len..header_len + body_len as usize].to_vec();
+                self.push_stream
+                    .push(&mut to_encrypt, &[], Tag::Message)
+                    .map_err(|err| println!("push_stream err, {}", err.to_string()))
+                    .unwrap();
+                let encrypted_len = to_encrypt.len();
+                println!(
+                    "EncryptCipher::encrypt: buf={}, header_len={}, body_len={}, encrypted={} => {:02X?}",
+                    buf.len(),
+                    header_len,
+                    body_len,
+                    encrypted_len,
+                    to_encrypt
+                );
+                write_uint24_le(encrypted_len, buf);
+                buf[3..3 + encrypted_len].copy_from_slice(to_encrypt.as_slice());
+                3 + encrypted_len
+            } else {
+                return Err(EncodeError::new(buf.len()));
+            }
+        };
+        Ok(len)
     }
 }
 

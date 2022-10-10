@@ -1,7 +1,7 @@
 #[cfg(feature = "v9")]
 use crate::noise::Cipher;
 #[cfg(feature = "v10")]
-use crate::noise::DecodeCipher;
+use crate::noise::DecryptCipher;
 use crate::noise::HandshakeResult;
 use futures_lite::io::AsyncRead;
 use futures_timer::Delay;
@@ -38,7 +38,7 @@ pub struct ReadState {
     #[cfg(feature = "v9")]
     cipher: Option<Cipher>,
     #[cfg(feature = "v10")]
-    cipher: Option<DecodeCipher>,
+    cipher: Option<DecryptCipher>,
     /// The frame type to be passed to the decoder.
     frame_type: FrameType,
 }
@@ -77,7 +77,7 @@ impl ReadState {
         &mut self,
         handshake_result: &HandshakeResult,
     ) -> Result<()> {
-        let cipher = DecodeCipher::from_handshake_rx(handshake_result)?;
+        let cipher = DecryptCipher::from_handshake_rx(handshake_result)?;
         self.cipher = Some(cipher);
         Ok(())
     }
@@ -95,9 +95,12 @@ impl ReadState {
         R: AsyncRead + Unpin,
     {
         loop {
+            println!("reader.rs: poll_reader loop");
             if let Some(result) = self.process() {
+                println!("reader.rs: returning Poll:Ready");
                 return Poll::Ready(result);
             }
+            println!("reader.rs: process not ready");
 
             let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
                 Poll::Ready(Ok(n)) if n > 0 => n,
@@ -113,17 +116,27 @@ impl ReadState {
             };
 
             let end = self.end + n;
-            if let Some(ref mut cipher) = self.cipher {
+            println!(
+                "reader.rs: got n={}, start={}, end={}, data={:02X?}",
+                n,
+                self.end,
+                end,
+                &self.buf[self.end..end]
+            );
+            let decoded_end = if let Some(ref mut cipher) = self.cipher {
                 #[cfg(feature = "v9")]
                 {
                     cipher.apply(&mut self.buf[self.end..end]);
+                    end
                 }
                 #[cfg(feature = "v10")]
                 {
-                    cipher.decode(&mut self.buf[self.end..end]);
+                    self.end + cipher.decrypt(&mut self.buf[self.end..end])?
                 }
-            }
-            self.end = end;
+            } else {
+                end
+            };
+            self.end = decoded_end;
             self.timeout.reset(TIMEOUT);
         }
     }
@@ -167,8 +180,18 @@ impl ReadState {
                 }
                 #[cfg(feature = "v10")]
                 Step::Header => {
+                    println!(
+                        "reader: Step:Header: start={}, end={}, buf={:02X?}",
+                        self.start,
+                        self.end,
+                        &self.buf[self.start..self.end]
+                    );
                     let stat = stat_uint24_le(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = stat {
+                        println!(
+                            "reader: Step:Header: header_len={}, body_len={}",
+                            header_len, body_len
+                        );
                         let body_len = body_len as usize;
                         if body_len > MAX_MESSAGE_SIZE as usize {
                             return Some(Err(Error::new(
@@ -190,6 +213,10 @@ impl ReadState {
                     header_len,
                     body_len,
                 } => {
+                    println!(
+                        "reader: Step::Body header_len={}, body_len={}",
+                        header_len, body_len
+                    );
                     let message_len = header_len + body_len;
                     if message_len > self.buf.len() {
                         self.buf.resize(message_len, 0u8);
