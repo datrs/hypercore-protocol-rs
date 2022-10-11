@@ -1,5 +1,4 @@
 use async_channel::{Receiver, Sender};
-use blake2_rfc::blake2b::Blake2b;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::Stream;
 use futures_timer::Delay;
@@ -22,6 +21,8 @@ use crate::message::{EncodeError, FrameType};
 use crate::message_v10::{ChannelMessage, Frame, Message};
 #[cfg(feature = "v9")]
 use crate::message_v9::{ChannelMessage, Frame, Message};
+#[cfg(feature = "v10")]
+use crate::noise::{DecryptCipher, EncryptCipher};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ReadState;
 use crate::schema::*;
@@ -92,6 +93,8 @@ pub enum State {
     // The Handshake struct sits behind an option only so that we can .take()
     // it out, it's never actually empty when in State::Handshake.
     Handshake(Option<Handshake>),
+    #[cfg(feature = "v10")]
+    SecretStream(Option<EncryptCipher>),
     Established,
 }
 
@@ -100,6 +103,7 @@ impl fmt::Debug for State {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
+            State::SecretStream(_) => write!(f, "SecretStream"),
             State::Established => write!(f, "Established"),
         }
     }
@@ -348,7 +352,12 @@ where
         match frame {
             Frame::Raw(buf) => match self.state {
                 State::Handshake(_) => self.on_handshake_message(buf),
-                _ => unreachable!("May not receive raw frames outside of handshake state"),
+                #[cfg(feature = "v10")]
+                State::SecretStream(_) => self.on_secret_stream_message(buf),
+                _ => unreachable!(
+                    "May not receive raw frames outside of handshake state, was {:?}",
+                    self.state
+                ),
             },
             Frame::Message(channel_message) => match self.state {
                 State::Established => self.on_inbound_message(channel_message),
@@ -367,22 +376,14 @@ where
             self.queue_frame_direct(response_buf.to_vec()).unwrap();
         }
 
+        #[cfg(feature = "v9")]
         if !handshake.complete() {
             self.state = State::Handshake(Some(handshake));
         } else {
             let result = handshake.into_result()?;
             if self.options.encrypted {
-                #[cfg(feature = "v9")]
-                {
-                    self.read_state.upgrade_with_handshake(&result)?;
-                    self.write_state.upgrade_with_handshake(&result)?;
-                }
-                #[cfg(feature = "v10")]
-                {
-                    let msg = self.write_state.upgrade_with_handshake_result(&result)?;
-                    self.read_state.upgrade_with_handshake_result(&result)?;
-                    self.queue_frame_direct(msg).unwrap();
-                }
+                self.read_state.upgrade_with_handshake(&result)?;
+                self.write_state.upgrade_with_handshake(&result)?;
             }
             self.read_state.set_frame_type(FrameType::Message);
             let remote_public_key = parse_key(&result.remote_pubkey)?;
@@ -394,6 +395,46 @@ where
             self.state = State::Established;
             self.queue_event(Event::Handshake(remote_public_key));
         }
+
+        #[cfg(feature = "v10")]
+        if !handshake.complete() {
+            self.state = State::Handshake(Some(handshake));
+        } else {
+            let handshake_result = handshake.into_result()?;
+
+            // The cipher will be put to use to the writer only after the peer's answer has come
+            let (cipher, init_msg) = EncryptCipher::from_handshake_tx(&handshake_result)?;
+            self.state = State::SecretStream(Some(cipher));
+
+            // Send the secret stream init message header to the other side
+            self.queue_frame_direct(init_msg).unwrap();
+            // Store handshake result
+            self.handshake = Some(handshake_result);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "v10")]
+    fn on_secret_stream_message(&mut self, buf: Vec<u8>) -> Result<()> {
+        let mut encrypt_cipher = match &mut self.state {
+            State::SecretStream(encrypt_cipher) => encrypt_cipher.take().unwrap(),
+            _ => {
+                unreachable!("May not call on_secret_stream_message when not in SecretStream state")
+            }
+        };
+        let handshake_result = &self
+            .handshake
+            .as_ref()
+            .expect("Handshake result must be set before secret stream");
+        let decrypt_cipher = DecryptCipher::from_handshake_rx_and_init_msg(handshake_result, &buf)?;
+        self.read_state.upgrade_with_decrypt_cipher(decrypt_cipher);
+        self.write_state.upgrade_with_encrypt_cipher(encrypt_cipher);
+        self.read_state.set_frame_type(FrameType::Message);
+
+        // Lastly notify that handshake is ready
+        let remote_public_key = parse_key(&handshake_result.remote_pubkey)?;
+        self.queue_event(Event::Handshake(remote_public_key));
+        self.state = State::Established;
         Ok(())
     }
 

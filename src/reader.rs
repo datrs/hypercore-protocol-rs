@@ -73,13 +73,8 @@ impl ReadState {
     }
 
     #[cfg(feature = "v10")]
-    pub fn upgrade_with_handshake_result(
-        &mut self,
-        handshake_result: &HandshakeResult,
-    ) -> Result<()> {
-        let cipher = DecryptCipher::from_handshake_rx(handshake_result)?;
-        self.cipher = Some(cipher);
-        Ok(())
+    pub fn upgrade_with_decrypt_cipher(&mut self, decrypt_cipher: DecryptCipher) {
+        self.cipher = Some(decrypt_cipher);
     }
 
     pub fn set_frame_type(&mut self, frame_type: FrameType) {

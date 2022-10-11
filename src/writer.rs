@@ -164,13 +164,8 @@ impl WriteState {
     }
 
     #[cfg(feature = "v10")]
-    pub fn upgrade_with_handshake_result(
-        &mut self,
-        handshake_result: &HandshakeResult,
-    ) -> Result<Vec<u8>> {
-        let (cipher, msg) = EncryptCipher::from_handshake_tx(handshake_result)?;
-        self.cipher = Some(cipher);
-        Ok(msg)
+    pub fn upgrade_with_encrypt_cipher(&mut self, encrypt_cipher: EncryptCipher) {
+        self.cipher = Some(encrypt_cipher);
     }
 
     fn remaining(&self) -> usize {

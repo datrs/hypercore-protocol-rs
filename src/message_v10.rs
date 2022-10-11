@@ -7,8 +7,6 @@ use pretty_hash::fmt as pretty_fmt;
 use std::fmt;
 use std::io;
 
-use crate::constants::MAX_MESSAGE_SIZE;
-
 /// Encode data into a buffer.
 ///
 /// This trait is implemented on data frames and their components
