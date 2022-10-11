@@ -143,8 +143,11 @@ impl WriteState {
             #[cfg(feature = "v10")]
             {
                 println!(
-                    "Writer::advance: encrypting buf range {}..{}",
-                    self.end, end
+                    "Writer::advance: encrypting buf range {}..{}({}): {:02X?}",
+                    self.end,
+                    end,
+                    end - self.end,
+                    &self.buf[self.end..end]
                 );
                 self.end + cipher.encrypt(&mut self.buf[self.end..end])?
             }

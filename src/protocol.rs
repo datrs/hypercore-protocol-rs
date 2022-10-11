@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
-use crate::constants::DEFAULT_KEEPALIVE;
+use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
 use crate::extension::{Extension, Extensions};
 use crate::message::{EncodeError, FrameType};
 #[cfg(feature = "v10")]
@@ -416,7 +416,7 @@ where
 
     #[cfg(feature = "v10")]
     fn on_secret_stream_message(&mut self, buf: Vec<u8>) -> Result<()> {
-        let mut encrypt_cipher = match &mut self.state {
+        let encrypt_cipher = match &mut self.state {
             State::SecretStream(encrypt_cipher) => encrypt_cipher.take().unwrap(),
             _ => {
                 unreachable!("May not call on_secret_stream_message when not in SecretStream state")
@@ -438,6 +438,7 @@ where
         Ok(())
     }
 
+    #[cfg(feature = "v9")]
     fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
         // let channel_message = ChannelMessage::decode(buf)?;
         log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
@@ -461,6 +462,26 @@ where
         Ok(())
     }
 
+    #[cfg(feature = "v10")]
+    fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
+        // let channel_message = ChannelMessage::decode(buf)?;
+        let (remote_id, message) = channel_message.into_split();
+        println!(
+            "protocol.rs::on_inbound_message, remote_id={}, message={:?}",
+            remote_id, message
+        );
+        match message {
+            Message::Open(msg) => self.on_open(remote_id, msg)?,
+            Message::Close(msg) => self.on_close(remote_id, msg)?,
+            // TODO:
+            // _ => self
+            //     .channels
+            //     .forward_inbound_message(remote_id as usize, message)?,
+            _ => (),
+        }
+        Ok(())
+    }
+
     fn on_command(&mut self, command: Command) -> Result<()> {
         match command {
             Command::Open(key) => self.command_open(key),
@@ -468,8 +489,8 @@ where
         }
     }
 
+    #[cfg(feature = "v9")]
     fn command_open(&mut self, key: Key) -> Result<()> {
-        println!("protocol::command_open");
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key);
         // Safe because attach_local always puts Some(local_id)
@@ -489,6 +510,35 @@ where
             capability,
         });
         let channel_message = ChannelMessage::new(local_id as u64, message);
+        self.write_state
+            .queue_frame(Frame::Message(channel_message));
+        Ok(())
+    }
+
+    #[cfg(feature = "v10")]
+    fn command_open(&mut self, key: Key) -> Result<()> {
+        // Create a new channel.
+        let channel_handle = self.channels.attach_local(key);
+        // Safe because attach_local always puts Some(local_id)
+        let local_id = channel_handle.local_id().unwrap();
+        let discovery_key = *channel_handle.discovery_key();
+
+        // If the channel was already opened from the remote end, verify, and if
+        // verification is ok, push a channel open event.
+        if channel_handle.is_connected() {
+            self.accept_channel(local_id)?;
+        }
+
+        // Tell the remote end about the new channel.
+        let capability = self.capability(&key);
+        let channel = local_id as u64;
+        let message = Message::Open(Open {
+            channel,
+            protocol: PROTOCOL_NAME.to_string(),
+            discovery_key: discovery_key.to_vec(),
+            capability,
+        });
+        let channel_message = ChannelMessage::new(channel, message);
         self.write_state
             .queue_frame(Frame::Message(channel_message));
         Ok(())

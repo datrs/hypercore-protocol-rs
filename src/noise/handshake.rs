@@ -78,7 +78,7 @@ impl HandshakeResult {
     #[cfg(feature = "v10")]
     pub fn remote_capability(&self, key: &[u8]) -> Option<Vec<u8>> {
         Some(replicate_capability(
-            self.is_initiator,
+            !self.is_initiator,
             key,
             &self.handshake_hash,
         ))

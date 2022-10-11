@@ -3,30 +3,55 @@ use hypercore::compact_encoding::{CompactEncoding, State};
 /// type=0
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
+    pub channel: u64,
+    pub protocol: String,
     pub discovery_key: std::vec::Vec<u8>,
     pub capability: ::std::option::Option<std::vec::Vec<u8>>,
 }
 
 impl CompactEncoding<Open> for State {
     fn preencode(&mut self, value: &Open) {
-        // self.preencode(&value.index);
-        // self.preencode(&value.length);
-        // self.preencode_fixed_32();
+        self.preencode(&value.channel);
+        self.preencode(&value.protocol);
+        self.preencode(&value.discovery_key);
+        if value.capability.is_some() {
+            self.end += 1; // flags for future use
+            self.preencode_fixed_32();
+        }
+        println!("OPEN PREENCODE {:?}", self);
     }
 
     fn encode(&mut self, value: &Open, buffer: &mut [u8]) {
-        // self.encode(&value.index, buffer);
-        // self.encode(&value.length, buffer);
-        // self.encode_fixed_32(&value.hash, buffer);
+        self.encode(&value.channel, buffer);
+        self.encode(&value.protocol, buffer);
+        self.encode(&value.discovery_key, buffer);
+        if let Some(capability) = &value.capability {
+            self.start += 1; // flags for future use
+            self.encode_fixed_32(capability, buffer);
+        }
+        println!("OPEN ENCODE {:?}", self);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Open {
-        // let index: u64 = self.decode(buffer);
-        // let length: u64 = self.decode(buffer);
-        // let hash: Box<[u8]> = self.decode_fixed_32(buffer);
+        let channel: u64 = self.decode(buffer);
+        let protocol: String = self.decode(buffer);
+        let discovery_key: Vec<u8> = self.decode(buffer);
+        println!(
+            "OPEN DECODE self={:?}, channel={}, discovery_key={:02X?}, protocol={}",
+            self, channel, discovery_key, protocol
+        );
+        let capability: Option<Vec<u8>> = if self.start < self.end {
+            self.start += 1; // flags for future use
+            let capability: Vec<u8> = self.decode_fixed_32(buffer).to_vec();
+            Some(capability)
+        } else {
+            None
+        };
         Open {
-            discovery_key: vec![],
-            capability: None,
+            channel,
+            protocol,
+            discovery_key,
+            capability,
         }
     }
 }

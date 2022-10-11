@@ -154,7 +154,7 @@ impl EncryptCipher {
                     to_encrypt
                 );
             write_uint24_le(encrypted_len, buf);
-            buf[3..3 + encrypted_len].copy_from_slice(to_encrypt.as_slice());
+            buf[header_len..header_len + encrypted_len].copy_from_slice(to_encrypt.as_slice());
             Ok(3 + encrypted_len)
         } else {
             Err(EncodeError::new(buf.len()))

@@ -1,4 +1,3 @@
-use crate::constants::PROTOCOL_NAME;
 use crate::message::{EncodeError, FrameType};
 use crate::schema::*;
 use crate::util::write_uint24_le;
@@ -130,10 +129,6 @@ impl Message {
     /// Decode a message from a buffer.
     pub fn decode(buf: &[u8], typ: u64) -> io::Result<Self> {
         match typ {
-            0 => Ok(Self::Open(Open {
-                capability: None,
-                discovery_key: vec![],
-            })),
             1 => Ok(Self::Options(Options {
                 ack: None,
                 extensions: vec![],
@@ -310,7 +305,7 @@ impl ChannelMessage {
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
     pub fn decode(buf: &[u8]) -> io::Result<Self> {
-        println!("ChannelMessage::decode, {:02X?}", buf);
+        println!("ChannelMessage::decode buf({}): {:02X?}", buf.len(), buf);
         if buf.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -318,24 +313,35 @@ impl ChannelMessage {
             ));
         }
 
-        let mut header = 0u64;
-        // TODO: v10
-        let headerlen = 0;
-        // let headerlen = varinteger::decode(&buf, &mut header);
-        // let body = buf.split_off(headerlen);
-        let channel = header >> 4;
-        let typ = header & 0b1111;
-        let message = Message::decode(&buf[headerlen..], typ)?;
-
-        let channel_message = Self {
-            channel,
-            message,
-            state: None,
+        // Open message is different from all the rest, needs a special case
+        let channel_message = if buf.len() == 85 && buf[0] == 0x00 && buf[1] == 0x01 {
+            let mut state = State::new_with_start_and_end(2, buf.len());
+            let open_msg: Open = state.decode(buf);
+            Self {
+                channel: open_msg.channel,
+                message: Message::Open(open_msg),
+                state: None,
+            }
+        } else {
+            let mut header = 0u64;
+            // TODO: v10
+            let headerlen = 0;
+            // let headerlen = varinteger::decode(&buf, &mut header);
+            // let body = buf.split_off(headerlen);
+            let channel = header >> 4;
+            let typ = header & 0b1111;
+            let message = Message::decode(&buf[headerlen..], typ)?;
+            Self {
+                channel,
+                message,
+                state: None,
+            }
         };
-
         Ok(channel_message)
     }
 
+    /// Performance optimization for letting calling encoded_len() already do
+    /// the preencode phase of compact_encoding.
     fn prepare_state(&mut self) {
         if self.state.is_none() {
             let mut state = match self.message {
@@ -343,12 +349,7 @@ impl ChannelMessage {
                     // Open message has unique 0x00, 0x01 first bytes, and a missing type
                     // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
                     let mut state = State::new_with_start_and_end(2, 2);
-                    state.preencode(&self.channel);
-                    state.preencode(&PROTOCOL_NAME.to_string());
-                    state.preencode(&message.discovery_key);
-                    if let Some(capability) = &message.capability {
-                        state.preencode(capability);
-                    }
+                    state.preencode(message);
                     state
                 }
                 _ => {
@@ -358,43 +359,36 @@ impl ChannelMessage {
                     let typ = self.message.typ();
                     state.preencode(&self.channel);
                     state.preencode(&typ);
+                    // TODO:
+                    // state.preencode(message);
                     state
                 }
             };
-
-            let message_len = self.message.encoded_len();
-            state.end += message_len;
             self.state = Some(state);
-        };
+        }
     }
 }
 
 impl Encoder for ChannelMessage {
     fn encoded_len(&mut self) -> usize {
         self.prepare_state();
-        let state = self.state.as_ref().unwrap();
-        state.end
+        self.state.as_ref().unwrap().end
     }
 
     fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
         println!("ChannelMessage::encode, {:02X?}", self.message);
         self.prepare_state();
         let state = self.state.as_mut().unwrap();
+        println!("ChannelMessage::encode, state found at {:?}", state);
         let len: usize = match self.message {
             Message::Open(ref message) => {
                 buf[0] = 0x00;
                 buf[1] = 0x01;
-                state.encode(&self.channel, buf);
-                state.encode(&PROTOCOL_NAME.to_string(), buf);
-                state.encode(&message.discovery_key, buf);
-                if let Some(capability) = &message.capability {
-                    state.encode(capability, buf);
-                }
+                state.encode(message, buf);
                 state.start
             }
             _ => {
                 let typ = self.message.typ();
-                state.encode(&self.channel, buf);
                 state.encode(&typ, buf);
                 state.start
             }
@@ -482,6 +476,7 @@ mod tests {
     fn encode_decode() {
         message_enc_dec! {
             Message::Open(Open{
+                protocol: "".to_string(),
                 discovery_key: vec![2u8; 20],
                 capability: None
             }),
