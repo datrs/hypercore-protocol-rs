@@ -178,16 +178,87 @@ where
     }
 
     pub fn onpeer(&self, mut channel: Channel) {
-        let mut state = PeerState::default();
+        let mut peer_state = PeerState::default();
         let mut hypercore = self.hypercore.clone();
         task::spawn(async move {
-            let msg = Want {
-                start: 0,
-                length: None,
+
+            // The one that has stuff sends:
+            // 0000 <- batch
+            // 01 <- channel
+            // 05 <- msg_len
+            // 00 <- type=Synchronize
+            // 07 <- true/true/true
+            // 00 <- fork
+            // 04 <- length
+            // 00 <- remote_length
+            // 04 <- msg_len
+            // 08 <- type=Range
+            // 00 <- false/false
+            // 00 <- start
+            // 04 <- length
+
+            // The one without stuff sends:
+            // 0000 <- batch
+            // 01 <- channel
+            // 05 <- msg_len
+            // 00 <- type=Syncronize
+            // 07 <- true/true/true
+            // 00 <- fork
+            // 00 <- length
+            // 00 <- remote_length
+
+            let info = {
+                 let hypercore = hypercore.lock().await;
+                 hypercore.info()
             };
-            channel.send(Message::Want(msg)).await.unwrap();
+
+            if info.fork != peer_state.remote_fork {
+              peer_state.can_upgrade = false;
+            }
+            let remote_length = if info.fork == peer_state.remote_fork {peer_state.remote_length} else {0};
+
+            let sync_msg = Synchronize {
+                fork: info.fork,
+                length: info.length,
+                remote_length,
+                can_upgrade: peer_state.can_upgrade,
+                uploading: true,
+                downloading: true,
+            };
+
+            if info.contiguous_length > 0 {
+                let range_msg = Range {
+                    drop: false,
+                    start: 0,
+                    length: info.contiguous_length,
+                };
+                channel.send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)]).await.unwrap();
+            } else {
+                channel.send(Message::Synchronize(sync_msg)).await.unwrap();
+            }
+
+
+            // JS: has this:
+            // if (this.core.tree.fork !== this.remoteFork) {
+            //   this.canUpgrade = false
+            // }
+            // this.needsSync = false
+            // this.wireSync.send({
+            //   fork: this.core.tree.fork,
+            //   length: this.core.tree.length,
+            //   remoteLength: this.core.tree.fork === this.remoteFork ? this.remoteLength : 0,
+            //   canUpgrade: this.canUpgrade,
+            //   uploading: true,
+            //   downloading: true
+            // })
+            //
+            // const contig = this.core.header.contiguousLength
+            // if (contig > 0) {
+            //   this.broadcastRange(0, contig, false)
+            // }
+
             while let Some(message) = channel.next().await {
-                let result = onmessage(&mut hypercore, &mut state, &mut channel, message).await;
+                let result = onmessage(&mut hypercore, &mut peer_state, &mut channel, message).await;
                 if let Err(e) = result {
                     error!("protocol error: {}", e);
                     break;
@@ -201,11 +272,27 @@ where
 /// This would have a bitfield to support sparse sync in the actual impl.
 #[derive(Debug)]
 struct PeerState {
-    remote_head: Option<u64>,
+    can_upgrade: bool,
+    remote_fork: u64,
+    remote_length: u64,
+    remote_can_upgrade: bool,
+    remote_uploading: bool,
+    remote_downloading: bool,
+    remote_synced: bool,
+    length_acked: u64,
 }
 impl Default for PeerState {
     fn default() -> Self {
-        PeerState { remote_head: None }
+        PeerState {
+            can_upgrade: true,
+            remote_fork: 0,
+            remote_length: 0,
+            remote_can_upgrade: false,
+            remote_uploading: true,
+            remote_downloading: true,
+            remote_synced: false,
+            length_acked: 0,
+        }
     }
 }
 
@@ -219,6 +306,52 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     match message {
+        Message::Synchronize(message) => {
+            let _length_changed = message.length != state.remote_length;
+            let info = {
+                 let hypercore = hypercore.lock().await;
+                 hypercore.info()
+            };
+            let same_fork = message.fork == info.fork;
+
+            state.remote_fork = message.fork;
+            state.remote_length = message.length;
+            state.remote_can_upgrade = message.can_upgrade;
+            state.remote_uploading = message.uploading;
+            state.remote_downloading = message.downloading;
+
+            state.length_acked = if same_fork { message.remote_length } else { 0 };
+
+            if state.remote_length > info.length && state.length_acked == info.length {
+                // This is sent by node here
+                // 01 <- channel
+                // 01 <- type=Request
+                // 08 <- upgrade JS => (m.block ? 1 : 0) | (m.hash ? 2 : 0) | (m.seek ? 4 : 0) | (m.upgrade ? 8 : 0)
+                // 01 <- id, some kind of InFlight id, maybe to recognize the response of Request response
+                // 00 <- fork
+                // 00 <- upgradeStart
+                // 04 <- upgradeEnd
+                let msg = Request {
+                    id: 1, // There should be proper handling for in-flight request ids
+                    fork: info.fork,
+                    hash: None,
+                    block: None,
+                    seek: None,
+                    upgrade: Some(RequestUpgrade{
+                        start: info.length,
+                        length: state.remote_length - info.length
+                    })
+                };
+                channel.send(Message::Request(msg)).await?;
+            }
+
+            // TODO: Other requests that should be sent here, now only handles the simple asking
+            // for data
+
+        }
+        Message::Data(message) => {
+            println!("hypercore_v10::onmessage: TODO: Handling of {:?}", message)
+        }
         // TODO
         _ => {}
     };

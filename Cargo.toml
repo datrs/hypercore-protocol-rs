@@ -38,7 +38,8 @@ futures-timer = "3.0"
 instant = "0.1"
 getrandom = "0.1"
 futures-lite = "1.11.3"
-hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
+# hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
+hypercore = { path = "../hypercore", default-features = false }
 sha2 = "0.10.6"
 curve25519-dalek = "3.2.1"
 crypto_secretstream = { version = "0.1.0", optional = true }

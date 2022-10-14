@@ -122,8 +122,14 @@ pub struct Protocol<IO> {
     channels: ChannelMap,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
+    #[cfg(feature = "v9")]
     outbound_rx: Receiver<ChannelMessage>,
+    #[cfg(feature = "v10")]
+    outbound_rx: Receiver<Vec<ChannelMessage>>,
+    #[cfg(feature = "v9")]
     outbound_tx: Sender<ChannelMessage>,
+    #[cfg(feature = "v10")]
+    outbound_tx: Sender<Vec<ChannelMessage>>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
     extensions: Extensions,
@@ -134,9 +140,36 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new protocol instance.
+    #[cfg(feature = "v9")]
     pub fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         let (outbound_tx, outbound_rx) = async_channel::bounded(1);
+        Protocol {
+            io,
+            read_state: ReadState::new(),
+            write_state: WriteState::new(),
+            options,
+            state: State::NotInitialized,
+            channels: ChannelMap::new(),
+            handshake: None,
+            extensions: Extensions::new(outbound_tx.clone(), 0),
+            command_rx,
+            command_tx: CommandTx(command_tx),
+            outbound_tx,
+            outbound_rx,
+            keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
+            queued_events: VecDeque::new(),
+        }
+    }
+
+    /// Create a new protocol instance.
+    #[cfg(feature = "v10")]
+    pub fn new(io: IO, options: Options) -> Self {
+        let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
+        let (outbound_tx, outbound_rx): (
+            Sender<Vec<ChannelMessage>>,
+            Receiver<Vec<ChannelMessage>>,
+        ) = async_channel::bounded(1);
         Protocol {
             io,
             read_state: ReadState::new(),
@@ -337,9 +370,21 @@ where
             }
 
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
+                #[cfg(feature = "v9")]
                 Poll::Ready(Some(message)) => {
                     self.on_outbound_message(&message);
                     let frame = Frame::Message(message);
+                    self.write_state.park_frame(frame);
+                }
+                #[cfg(feature = "v10")]
+                Poll::Ready(Some(messages)) => {
+                    if messages.is_empty() {
+                        return Ok(());
+                    }
+                    messages
+                        .iter()
+                        .for_each(|message| self.on_outbound_message(&message));
+                    let frame = Frame::MessageBatch(messages);
                     self.write_state.park_frame(frame);
                 }
                 Poll::Ready(None) => unreachable!("Channel closed before end"),
@@ -359,9 +404,20 @@ where
                     self.state
                 ),
             },
+            #[cfg(feature = "v9")]
             Frame::Message(channel_message) => match self.state {
                 State::Established => self.on_inbound_message(channel_message),
                 _ => unreachable!("May not receive message frames when not established"),
+            },
+            #[cfg(feature = "v10")]
+            Frame::MessageBatch(channel_messages) => match self.state {
+                State::Established => {
+                    for channel_message in channel_messages {
+                        self.on_inbound_message(channel_message)?
+                    }
+                    Ok(())
+                }
+                _ => unreachable!("May not receive message batch frames when not established"),
             },
         }
     }
@@ -473,11 +529,9 @@ where
         match message {
             Message::Open(msg) => self.on_open(remote_id, msg)?,
             Message::Close(msg) => self.on_close(remote_id, msg)?,
-            // TODO:
-            // _ => self
-            //     .channels
-            //     .forward_inbound_message(remote_id as usize, message)?,
-            _ => (),
+            _ => self
+                .channels
+                .forward_inbound_message(remote_id as usize, message)?,
         }
         Ok(())
     }
@@ -540,7 +594,7 @@ where
         });
         let channel_message = ChannelMessage::new(channel, message);
         self.write_state
-            .queue_frame(Frame::Message(channel_message));
+            .queue_frame(Frame::MessageBatch(vec![channel_message]));
         Ok(())
     }
 

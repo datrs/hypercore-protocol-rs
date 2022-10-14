@@ -140,19 +140,22 @@ impl EncryptCipher {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
             let mut to_encrypt = buf[header_len..header_len + body_len as usize].to_vec();
+            println!(
+                "EncryptCipher::encrypt: about to encrypt({})={:02X?}, header_len={}, body_len={}",
+                to_encrypt.len(),
+                to_encrypt,
+                header_len,
+                body_len,
+            );
             self.push_stream
                 .push(&mut to_encrypt, &[], Tag::Message)
                 .map_err(|err| println!("push_stream err, {}", err.to_string()))
                 .unwrap();
             let encrypted_len = to_encrypt.len();
             println!(
-                    "EncryptCipher::encrypt: buf={}, header_len={}, body_len={}, encrypted={} => {:02X?}",
-                    buf.len(),
-                    header_len,
-                    body_len,
-                    encrypted_len,
-                    to_encrypt
-                );
+                "EncryptCipher::encrypt: result({})={:02X?}",
+                encrypted_len, to_encrypt
+            );
             write_uint24_le(encrypted_len, buf);
             buf[header_len..header_len + encrypted_len].copy_from_slice(to_encrypt.as_slice());
             Ok(3 + encrypted_len)

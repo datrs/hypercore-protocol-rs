@@ -40,22 +40,22 @@ impl Encoder for &[u8] {
 pub enum Frame {
     /// A raw binary buffer. Used in the handshaking phase.
     Raw(Vec<u8>),
-    /// A message. Used for everything after the handshake.
-    Message(ChannelMessage),
+    /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
+    MessageBatch(Vec<ChannelMessage>),
 }
 
 impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Frame::Raw(buf) => write!(f, "Frame(Raw <{}>)", buf.len()),
-            Frame::Message(message) => write!(f, "Frame({:?})", message),
+            Frame::MessageBatch(messages) => write!(f, "Frame({:?})", messages),
         }
     }
 }
 
 impl From<ChannelMessage> for Frame {
     fn from(m: ChannelMessage) -> Self {
-        Self::Message(m)
+        Self::MessageBatch(vec![m])
     }
 }
 
@@ -70,39 +70,171 @@ impl Frame {
     pub fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
             FrameType::Raw => Ok(Frame::Raw(buf.to_vec())),
-            FrameType::Message => Ok(Frame::Message(ChannelMessage::decode(buf)?)),
+            FrameType::Message => {
+                if buf.len() >= 5 && buf[0] == 0x00 {
+                    if buf[1] == 0x00 {
+                        println!("DECODING BATCH FRAME {:02X?}", &buf);
+                        // Batch of messages
+                        let mut messages: Vec<ChannelMessage> = vec![];
+                        let mut state = State::new_with_start_and_end(2, buf.len());
+
+                        // First, there is the original channel
+                        let mut current_channel: u64 = state.decode(&buf);
+                        while state.start < state.end {
+                            // Length of the message is inbetween here
+                            let channel_message_length: usize = state.decode(&buf);
+                            println!(
+                                "CHL={}, CC={}, s={:?}",
+                                channel_message_length, current_channel, state
+                            );
+                            if state.start + channel_message_length > state.end {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "received invalid message length",
+                                ));
+                            }
+                            // Then the actual message
+                            let channel_message = ChannelMessage::decode(
+                                &buf[state.start..state.start + channel_message_length],
+                                current_channel,
+                            )?;
+                            messages.push(channel_message);
+                            state.start += channel_message_length;
+
+                            // After that, if there is an extra 0x00, that means the channel
+                            // changed. This works because of LE encoding, and channels starting
+                            // from the index 1.
+                            if state.start < state.end && buf[state.start + 1] == 0x00 {
+                                state.start += 1;
+                                current_channel = state.decode(&buf);
+                            }
+                        }
+                        Ok(Frame::MessageBatch(messages))
+                    } else if buf[1] == 0x01 {
+                        // Open message
+                        println!("DECODING OPEN FRAME {:02X?}", &buf);
+                        Ok(Frame::MessageBatch(vec![
+                            ChannelMessage::decode_open_message(&buf[2..])?,
+                        ]))
+                    } else {
+                        Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "received too short special message",
+                        ))
+                    }
+                } else if buf.len() >= 2 {
+                    // Single message
+                    println!("DECODING SINGLE FRAME {:02X?}", &buf);
+                    let mut state = State::from_buffer(buf);
+                    let channel: u64 = state.decode(&buf);
+                    Ok(Frame::MessageBatch(vec![ChannelMessage::decode(
+                        &buf[state.start..],
+                        channel,
+                    )?]))
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "received too short message",
+                    ))
+                }
+            }
         }
     }
 
-    fn body_len(&mut self) -> usize {
+    fn preencode(&mut self, state: &mut State) -> usize {
         match self {
-            Self::Raw(message) => message.as_slice().encoded_len(),
-            Self::Message(message) => message.encoded_len(),
+            Self::Raw(message) => {
+                state.end += message.as_slice().encoded_len();
+            }
+            Self::MessageBatch(messages) => {
+                if messages.len() == 1 {
+                    if let Message::Open(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x01 intro bytes
+                        state.end += 2 + &messages[0].encoded_len();
+                    } else {
+                        state.preencode(&messages[0].channel);
+                        state.end += messages[0].encoded_len();
+                    }
+                } else if messages.len() > 1 {
+                    // Two intro bytes 0x00 0x00, then channel id, then lengths
+                    state.end += 2;
+                    let mut current_channel: u64 = messages[0].channel;
+                    state.preencode(&current_channel);
+                    for message in messages.iter_mut() {
+                        if message.channel != current_channel {
+                            // Channel changed, need to add a 0x00 in between and then the new
+                            // channel
+                            state.end += 1;
+                            state.preencode(&message.channel);
+                            current_channel = message.channel;
+                        }
+                        let message_length = message.encoded_len();
+                        state.preencode(&message_length);
+                        state.end += message_length;
+                    }
+                }
+            }
         }
+        state.end
     }
 }
 
 impl Encoder for Frame {
     fn encoded_len(&mut self) -> usize {
-        let body_len = self.body_len();
+        let body_len = self.preencode(&mut State::new());
         match self {
             Self::Raw(_) => body_len,
-            Self::Message(_) => 3 + body_len,
+            Self::MessageBatch(_) => 3 + body_len,
         }
     }
 
     fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let len = self.encoded_len();
+        let mut state = State::new();
+        let header_len = if let Self::Raw(_) = self { 0 } else { 3 };
+        let body_len = self.preencode(&mut state);
+        let len = body_len + header_len;
         if buf.len() < len {
             return Err(EncodeError::new(len));
         }
-        let body_len = self.body_len();
-        let header_len = len - body_len;
-        write_uint24_le(body_len, buf);
         match self {
-            Self::Raw(ref message) => message.as_slice().encode(buf),
-            Self::Message(ref mut message) => message.encode(&mut buf[header_len..]),
-        }?;
+            Self::Raw(ref message) => {
+                message.as_slice().encode(buf)?;
+            }
+            Self::MessageBatch(ref mut messages) => {
+                write_uint24_le(body_len, buf);
+                state.start += 3;
+                if messages.len() == 1 {
+                    if let Message::Open(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x01 intro bytes
+                        state.encode(&(0 as u8), buf);
+                        state.encode(&(1 as u8), buf);
+                        state.start += messages[0].encode(&mut buf[state.start..])?;
+                    } else {
+                        state.encode(&messages[0].channel, buf);
+                        state.start += messages[0].encode(&mut buf[state.start..])?;
+                    }
+                } else if messages.len() > 1 {
+                    // Two intro bytes 0x00 0x00, then channel id, then lengths
+                    buf[header_len] = 0x00;
+                    buf[header_len + 1] = 0x00;
+                    state.start += 2;
+                    let mut current_channel: u64 = messages[0].channel;
+                    state.encode(&current_channel, buf);
+                    for message in messages.iter_mut() {
+                        if message.channel != current_channel {
+                            // Channel changed, need to add a 0x00 in between and then the new
+                            // channel
+                            state.encode(&(0 as u8), buf);
+                            state.encode(&message.channel, buf);
+                            current_channel = message.channel;
+                        }
+                        let message_length = message.encoded_len();
+                        state.encode(&message_length, buf);
+                        state.start += message.encode(&mut buf[state.start..])?;
+                    }
+                }
+            }
+        };
         Ok(len)
     }
 }
@@ -112,134 +244,76 @@ impl Encoder for Frame {
 #[allow(missing_docs)]
 pub enum Message {
     Open(Open),
+    Synchronize(Synchronize),
+    Request(Request),
+    Data(Data),
+    Range(Range),
+
+    // TODO: Convert this legacy stuff:
     Options(Options),
     Status(Status),
     Have(Have),
     Unhave(Unhave),
     Want(Want),
     Unwant(Unwant),
-    Request(Request),
     Cancel(Cancel),
-    Data(Data),
     Close(Close),
     Extension(ExtensionMessage),
 }
 
 impl Message {
-    /// Decode a message from a buffer.
+    /// Wire type of this message.
+    pub fn typ(&self) -> u64 {
+        match self {
+            Self::Synchronize(_) => 0,
+            Self::Request(_) => 1,
+            Self::Data(_) => 3,
+            Self::Range(_) => 8,
+            value => unimplemented!("{} does not have a type", value),
+        }
+    }
+
+    /// Decode a message from a buffer based on type.
     pub fn decode(buf: &[u8], typ: u64) -> io::Result<Self> {
+        let mut state = State::from_buffer(buf);
         match typ {
-            1 => Ok(Self::Options(Options {
-                ack: None,
-                extensions: vec![],
-            })),
-            2 => Ok(Self::Status(Status {
-                downloading: None,
-                uploading: None,
-            })),
-            3 => Ok(Self::Have(Have {
-                ack: None,
-                bitfield: None,
-                length: None,
-                start: 0,
-            })),
-            4 => Ok(Self::Unhave(Unhave {
-                length: None,
-                start: 0,
-            })),
-            5 => Ok(Self::Want(Want {
-                length: None,
-                start: 0,
-            })),
-            6 => Ok(Self::Unwant(Unwant {
-                length: None,
-                start: 0,
-            })),
-            7 => Ok(Self::Request(Request {
-                bytes: None,
-                hash: None,
-                index: 0,
-                nodes: None,
-            })),
-            8 => Ok(Self::Cancel(Cancel {
-                bytes: None,
-                hash: None,
-                index: 0,
-            })),
-            9 => Ok(Self::Data(Data {
-                index: 0,
-                signature: None,
-                nodes: vec![],
-                value: None,
-            })),
-            10 => Ok(Self::Close(Close {
-                discovery_key: None,
-            })),
-            15 => Ok(Self::Extension(ExtensionMessage::decode(buf)?)),
+            0 => Ok(Self::Synchronize(state.decode(buf))),
+            1 => Ok(Self::Request(state.decode(buf))),
+            3 => Ok(Self::Data(state.decode(buf))),
+            8 => Ok(Self::Range(state.decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "Invalid message type",
+                format!("Invalid message type: {}", typ),
             )),
         }
     }
 
-    /// Wire type of this message.
-    pub fn typ(&self) -> u64 {
+    /// Pre-encodes a message to state, returns length
+    pub fn preencode(&mut self, state: &mut State) -> usize {
         match self {
-            Self::Open(_) => 0,
-            Self::Options(_) => 1,
-            Self::Status(_) => 2,
-            Self::Have(_) => 3,
-            Self::Unhave(_) => 4,
-            Self::Want(_) => 5,
-            Self::Unwant(_) => 6,
-            Self::Request(_) => 7,
-            Self::Cancel(_) => 8,
-            Self::Data(_) => 9,
-            Self::Close(_) => 10,
-            Self::Extension(_) => 15,
+            Self::Open(ref message) => state.preencode(message),
+            Self::Synchronize(ref message) => state.preencode(message),
+            Self::Request(ref message) => state.preencode(message),
+            Self::Data(ref message) => state.preencode(message),
+            Self::Range(ref message) => state.preencode(message),
+            // TODO: The rest
+            value => unimplemented!("{} can not be pre-encoded", value),
         }
-    }
-}
-
-impl Encoder for Message {
-    fn encoded_len(&mut self) -> usize {
-        match self {
-            Self::Open(ref message) => {
-                let mut state = State::new();
-                state.preencode(message);
-                state.end
-            }
-            Self::Options(ref message) => 0,
-            Self::Status(ref message) => 0,
-            Self::Have(ref message) => 0,
-            Self::Unhave(ref message) => 0,
-            Self::Want(ref message) => 0,
-            Self::Unwant(ref message) => 0,
-            Self::Request(ref message) => 0,
-            Self::Cancel(ref message) => 0,
-            Self::Data(ref message) => 0,
-            Self::Close(ref message) => 0,
-            Self::Extension(ref message) => 0,
-        }
+        state.end
     }
 
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+    /// Encodes a message to a given buffer, using preencoded state, results size
+    pub fn encode(&mut self, state: &mut State, buf: &mut [u8]) -> usize {
         match self {
-            _ => Ok(0)
-            // Self::Open(ref message) => encode_prost_message(message, buf),
-            // Self::Options(ref message) => encode_prost_message(message, buf),
-            // Self::Status(ref message) => encode_prost_message(message, buf),
-            // Self::Have(ref message) => encode_prost_message(message, buf),
-            // Self::Unhave(ref message) => encode_prost_message(message, buf),
-            // Self::Want(ref message) => encode_prost_message(message, buf),
-            // Self::Unwant(ref message) => encode_prost_message(message, buf),
-            // Self::Request(ref message) => encode_prost_message(message, buf),
-            // Self::Cancel(ref message) => encode_prost_message(message, buf),
-            // Self::Data(ref message) => encode_prost_message(message, buf),
-            // Self::Close(ref message) => encode_prost_message(message, buf),
-            // Self::Extension(ref message) => message.encode(buf),
+            Self::Open(ref message) => state.encode(message, buf),
+            Self::Synchronize(ref message) => state.encode(message, buf),
+            Self::Request(ref message) => state.encode(message, buf),
+            Self::Data(ref message) => state.encode(message, buf),
+            Self::Range(ref message) => state.encode(message, buf),
+            // TODO: The rest
+            value => unimplemented!("{} can not be encoded", value),
         }
+        state.start
     }
 }
 
@@ -254,11 +328,13 @@ impl fmt::Display for Message {
             ),
             Self::Data(msg) => write!(
                 f,
-                "Data(index {}, value: <{}>, nodes: {}, signature <{}>)",
-                msg.index,
-                msg.value.as_ref().map_or(0, |d| d.len()),
-                msg.nodes.len(),
-                msg.signature.as_ref().map_or(0, |d| d.len()),
+                "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade: {})",
+                msg.request,
+                msg.fork,
+                msg.block.is_some(),
+                msg.hash.is_some(),
+                msg.seek.is_some(),
+                msg.upgrade.is_some(),
             ),
             _ => write!(f, "{:?}", &self),
         }
@@ -300,69 +376,67 @@ impl ChannelMessage {
         (self.channel, self.message)
     }
 
-    /// Decode a channel message from a buffer.
+    /// Decodes an open message for a channel message from a buffer.
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
-    pub fn decode(buf: &[u8]) -> io::Result<Self> {
+    pub fn decode_open_message(buf: &[u8]) -> io::Result<Self> {
+        if buf.len() <= 5 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "received too short Open message",
+            ));
+        }
+
+        let mut state = State::new_with_start_and_end(0, buf.len());
+        let open_msg: Open = state.decode(buf);
+        Ok(Self {
+            channel: open_msg.channel,
+            message: Message::Open(open_msg),
+            state: None,
+        })
+    }
+
+    /// Decode a normal channel message from a buffer.
+    ///
+    /// Note: `buf` has to have a valid length, and without the 3 LE
+    /// bytes in it
+    pub fn decode(buf: &[u8], channel: u64) -> io::Result<Self> {
         println!("ChannelMessage::decode buf({}): {:02X?}", buf.len(), buf);
-        if buf.is_empty() {
+        if buf.len() <= 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received empty message",
             ));
         }
-
-        // Open message is different from all the rest, needs a special case
-        let channel_message = if buf.len() == 85 && buf[0] == 0x00 && buf[1] == 0x01 {
-            let mut state = State::new_with_start_and_end(2, buf.len());
-            let open_msg: Open = state.decode(buf);
-            Self {
-                channel: open_msg.channel,
-                message: Message::Open(open_msg),
-                state: None,
-            }
-        } else {
-            let mut header = 0u64;
-            // TODO: v10
-            let headerlen = 0;
-            // let headerlen = varinteger::decode(&buf, &mut header);
-            // let body = buf.split_off(headerlen);
-            let channel = header >> 4;
-            let typ = header & 0b1111;
-            let message = Message::decode(&buf[headerlen..], typ)?;
-            Self {
-                channel,
-                message,
-                state: None,
-            }
-        };
-        Ok(channel_message)
+        let mut state = State::from_buffer(buf);
+        let typ: u64 = state.decode(&buf);
+        let message = Message::decode(&buf[state.start..], typ)?;
+        Ok(Self {
+            channel,
+            message,
+            state: None,
+        })
     }
 
     /// Performance optimization for letting calling encoded_len() already do
     /// the preencode phase of compact_encoding.
     fn prepare_state(&mut self) {
         if self.state.is_none() {
-            let mut state = match self.message {
-                Message::Open(ref message) => {
-                    // Open message has unique 0x00, 0x01 first bytes, and a missing type
-                    // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
-                    let mut state = State::new_with_start_and_end(2, 2);
-                    state.preencode(message);
-                    state
-                }
-                _ => {
-                    // The header is the channel id uint followed by message type uint
-                    // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
-                    let mut state = State::new();
-                    let typ = self.message.typ();
-                    state.preencode(&self.channel);
-                    state.preencode(&typ);
-                    // TODO:
-                    // state.preencode(message);
-                    state
-                }
+            let state = if let Message::Open(_) = self.message {
+                // Open message doesn't have a type
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
+                let mut state = State::new();
+                self.message.preencode(&mut state);
+                state
+            } else {
+                // The header is the channel id uint followed by message type uint
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
+                let mut state = State::new();
+                let typ = self.message.typ();
+                state.preencode(&typ);
+                self.message.preencode(&mut state);
+                state
             };
             self.state = Some(state);
         }
@@ -380,18 +454,15 @@ impl Encoder for ChannelMessage {
         self.prepare_state();
         let state = self.state.as_mut().unwrap();
         println!("ChannelMessage::encode, state found at {:?}", state);
-        let len: usize = match self.message {
-            Message::Open(ref message) => {
-                buf[0] = 0x00;
-                buf[1] = 0x01;
-                state.encode(message, buf);
-                state.start
-            }
-            _ => {
-                let typ = self.message.typ();
-                state.encode(&typ, buf);
-                state.start
-            }
+        let len: usize = if let Message::Open(_) = self.message {
+            // Open message is different in that the type byte is missing
+            self.message.encode(state, buf);
+            state.start
+        } else {
+            let typ = self.message.typ();
+            state.encode(&typ, buf);
+            self.message.encode(state, buf);
+            state.start
         };
         Ok(len)
     }

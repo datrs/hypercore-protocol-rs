@@ -23,7 +23,10 @@ use std::task::Poll;
 /// This is the handle that can be sent to other threads.
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
+    #[cfg(feature = "v9")]
     outbound_tx: Sender<ChannelMessage>,
+    #[cfg(feature = "v10")]
+    outbound_tx: Sender<Vec<ChannelMessage>>,
     key: Key,
     discovery_key: DiscoveryKey,
     local_id: usize,
@@ -78,7 +81,36 @@ impl Channel {
         }
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
-            .send(message)
+            .send(vec![message])
+            .await
+            .map_err(map_channel_err)
+    }
+
+    /// Send a batch of messages over the channel.
+    /// NB: In javascript this is cork()/uncork(), e.g.:
+    ///
+    /// https://github.com/hypercore-protocol/hypercore/blob/29d2132de66b198b042a01e48d59fc2b38609ac7/lib/replicator.js#L361-L377
+    ///
+    /// at the protomux level, where there can be messages from multiple channels in a single
+    /// stream write:
+    ///
+    /// https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L359-L380
+    ///
+    /// Batching messages across channels like protomux is capable of doing is not (yet) implemented.
+    #[cfg(feature = "v10")]
+    pub async fn send_batch(&mut self, messages: &[Message]) -> Result<()> {
+        if self.closed() {
+            return Err(Error::new(
+                ErrorKind::ConnectionAborted,
+                "Channel is closed",
+            ));
+        }
+        let messages = messages
+            .iter()
+            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+            .collect();
+        self.outbound_tx
+            .send(messages)
             .await
             .map_err(map_channel_err)
     }
@@ -272,7 +304,29 @@ impl ChannelHandle {
         Ok((&local_state.key, remote_state.remote_capability.as_ref()))
     }
 
+    #[cfg(feature = "v9")]
     pub fn open(&mut self, outbound_tx: Sender<ChannelMessage>) -> Channel {
+        let local_state = self
+            .local_state
+            .as_ref()
+            .expect("May not open channel that is not locally attached");
+
+        let (inbound_tx, inbound_rx) = async_channel::unbounded();
+        let channel = Channel {
+            inbound_rx: Some(inbound_rx),
+            outbound_tx: outbound_tx.clone(),
+            discovery_key: self.discovery_key,
+            key: local_state.key,
+            local_id: local_state.local_id,
+            extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
+            closed: self.closed.clone(),
+        };
+        self.inbound_tx = Some(inbound_tx);
+        channel
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn open(&mut self, outbound_tx: Sender<Vec<ChannelMessage>>) -> Channel {
         let local_state = self
             .local_state
             .as_ref()
@@ -413,10 +467,27 @@ impl ChannelMap {
         channel_handle.prepare_to_verify()
     }
 
+    #[cfg(feature = "v9")]
     pub fn accept(
         &mut self,
         local_id: usize,
         outbound_tx: Sender<ChannelMessage>,
+    ) -> Result<Channel> {
+        let channel_handle = self
+            .get_local_mut(local_id)
+            .ok_or_else(|| error("Channel not found"))?;
+        if !channel_handle.is_connected() {
+            return Err(error("Channel is not opened from remote"));
+        }
+        let channel = channel_handle.open(outbound_tx);
+        Ok(channel)
+    }
+
+    #[cfg(feature = "v10")]
+    pub fn accept(
+        &mut self,
+        local_id: usize,
+        outbound_tx: Sender<Vec<ChannelMessage>>,
     ) -> Result<Channel> {
         let channel_handle = self
             .get_local_mut(local_id)
