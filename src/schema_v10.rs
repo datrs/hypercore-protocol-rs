@@ -345,7 +345,7 @@ impl CompactEncoding<Data> for State {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataBlock {
     pub index: u64,
-    pub value: u64,
+    pub value: Vec<u8>,
     pub nodes: Vec<Node>,
 }
 
@@ -364,7 +364,7 @@ impl CompactEncoding<DataBlock> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> DataBlock {
         let index: u64 = self.decode(buffer);
-        let value: u64 = self.decode(buffer);
+        let value: Vec<u8> = self.decode(buffer);
         let nodes: Vec<Node> = self.decode(buffer);
         DataBlock {
             index,

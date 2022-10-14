@@ -206,6 +206,8 @@ where
             // 00 <- fork
             // 00 <- length
             // 00 <- remote_length
+            //
+            //
 
             let info = {
                  let hypercore = hypercore.lock().await;
@@ -298,7 +300,7 @@ impl Default for PeerState {
 
 async fn onmessage<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
-    state: &mut PeerState,
+    peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
 ) -> Result<()>
@@ -307,22 +309,22 @@ where
 {
     match message {
         Message::Synchronize(message) => {
-            let _length_changed = message.length != state.remote_length;
+            let _length_changed = message.length != peer_state.remote_length;
             let info = {
                  let hypercore = hypercore.lock().await;
                  hypercore.info()
             };
             let same_fork = message.fork == info.fork;
 
-            state.remote_fork = message.fork;
-            state.remote_length = message.length;
-            state.remote_can_upgrade = message.can_upgrade;
-            state.remote_uploading = message.uploading;
-            state.remote_downloading = message.downloading;
+            peer_state.remote_fork = message.fork;
+            peer_state.remote_length = message.length;
+            peer_state.remote_can_upgrade = message.can_upgrade;
+            peer_state.remote_uploading = message.uploading;
+            peer_state.remote_downloading = message.downloading;
 
-            state.length_acked = if same_fork { message.remote_length } else { 0 };
+            peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
 
-            if state.remote_length > info.length && state.length_acked == info.length {
+            if peer_state.remote_length > info.length && peer_state.length_acked == info.length {
                 // This is sent by node here
                 // 01 <- channel
                 // 01 <- type=Request
@@ -339,7 +341,7 @@ where
                     seek: None,
                     upgrade: Some(RequestUpgrade{
                         start: info.length,
-                        length: state.remote_length - info.length
+                        length: peer_state.remote_length - info.length
                     })
                 };
                 channel.send(Message::Request(msg)).await?;
@@ -350,7 +352,66 @@ where
 
         }
         Message::Data(message) => {
-            println!("hypercore_v10::onmessage: TODO: Handling of {:?}", message)
+            let info = {
+                 let hypercore = hypercore.lock().await;
+                 hypercore.info()
+            };
+            if let Some(upgrade) = &message.upgrade {
+                // TODO: This upgrade data should be pushed to hypercore somehow
+                let new_length = upgrade.length;
+
+                // Node sends another Synchronize message:
+                //
+                // 01 <- channel
+                // 00 <- type=Synchronize
+                // 06 <- false(can_upgrade)/true(uploading)/true(downloading)
+                // 00 <- fork
+                // 04 <- length
+                // 04 <- remote_length
+                //
+                // followed immeadiately with 4 Requests:
+                // 01 <- channel
+                // 01 <- type=Request
+                // 01 <- flags => evaluates to RequestBlock
+                // 01 <- id, increments to 4
+                // 00 <- fork
+                // 00 <- start, increments to 3
+                // 02 <- nodes, 2 != 1 has to do with MerkleTree using double values, see missingNodes()
+                //
+                // Let's just send a batch
+                let mut messages: Vec<Message> = vec![];
+
+                let remote_length = if info.fork == peer_state.remote_fork { peer_state.remote_length } else { 0 };
+
+                messages.push(Message::Synchronize(Synchronize {
+                    fork: info.fork,
+                    length: new_length,
+                    remote_length,
+                    can_upgrade: false,
+                    uploading: true,
+                    downloading: true,
+                }));
+
+                for i in info.length..new_length {
+                    messages.push(Message::Request(Request {
+                        id: i+1,
+                        fork: info.fork,
+                        hash: None,
+                        block: Some(RequestBlock {
+                            index: i,
+                            nodes: 2 // TODO: here should be missingNodes() thingy
+                        }),
+                        seek: None,
+                        upgrade: None
+                    }));
+                }
+                channel.send_batch(&messages).await.unwrap();
+            }
+
+            if let Some(block) = &message.block {
+                println!("Got data block, {:?}", block);
+            }
+
         }
         // TODO
         _ => {}

@@ -90,13 +90,12 @@ impl ReadState {
         R: AsyncRead + Unpin,
     {
         loop {
-            println!("reader.rs: poll_reader loop");
+            println!("reader.rs: poll_reader loop self.end={}", self.end);
             if let Some(result) = self.process() {
                 println!("reader.rs: returning Poll:Ready");
                 return Poll::Ready(result);
             }
-            println!("reader.rs: process not ready");
-
+            println!("reader.rs: poll_reader, getting n");
             let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
                 Poll::Ready(Ok(n)) if n > 0 => n,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
@@ -118,7 +117,7 @@ impl ReadState {
                 end,
                 &self.buf[self.end..end]
             );
-            let decoded_end = if let Some(ref mut cipher) = self.cipher {
+            let decrypted_end = if let Some(ref mut cipher) = self.cipher {
                 #[cfg(feature = "v9")]
                 {
                     cipher.apply(&mut self.buf[self.end..end]);
@@ -131,7 +130,11 @@ impl ReadState {
             } else {
                 end
             };
-            self.end = decoded_end;
+            println!(
+                "reader.rs: encrypted portion ends at {} but decrypted at {}",
+                end, decrypted_end
+            );
+            self.end = decrypted_end;
             self.timeout.reset(TIMEOUT);
         }
     }
