@@ -67,8 +67,7 @@ impl DecryptCipher {
         })
     }
 
-    pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let mut decrypt_end = buf.len();
+    pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<(usize, usize), EncodeError> {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
             let mut to_decrypt = buf[header_len..header_len + body_len as usize].to_vec();
@@ -86,9 +85,12 @@ impl DecryptCipher {
                 to_decrypt
             );
             write_uint24_le(decryptd_len, buf);
-            decrypt_end = 3 + to_decrypt.len();
-            buf[3..decrypt_end].copy_from_slice(to_decrypt.as_slice());
-            Ok(decrypt_end)
+            let decrypted_end = 3 + to_decrypt.len();
+            buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
+            // Set extra bytes in the buffer to 0
+            let encrypted_end = header_len + body_len as usize;
+            buf[decrypted_end..encrypted_end].fill(0x00);
+            Ok((decrypted_end, encrypted_end))
         } else {
             Err(EncodeError::new(buf.len()))
         }

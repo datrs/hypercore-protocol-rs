@@ -60,7 +60,12 @@ impl ReadState {
 #[derive(Debug)]
 enum Step {
     Header,
-    Body { header_len: usize, body_len: usize },
+    Body {
+        header_len: usize,
+        body_len: usize,
+    },
+    /// Multiple messages one after another
+    Batch,
 }
 
 impl ReadState {
@@ -117,24 +122,32 @@ impl ReadState {
                 end,
                 &self.buf[self.end..end]
             );
-            let decrypted_end = if let Some(ref mut cipher) = self.cipher {
+            if let Some(ref mut cipher) = self.cipher {
                 #[cfg(feature = "v9")]
                 {
                     cipher.apply(&mut self.buf[self.end..end]);
-                    end
+                    self.end = end;
                 }
                 #[cfg(feature = "v10")]
                 {
-                    self.end + cipher.decrypt(&mut self.buf[self.end..end])?
+                    let mut dec_end = self.end;
+                    let mut enc_end = self.end;
+                    // Go through the whole section, encrypt all sections if there are many
+                    while enc_end < end {
+                        let (de, ee) = cipher.decrypt(&mut self.buf[enc_end..end])?;
+                        dec_end = enc_end + de;
+                        enc_end += ee;
+                    }
+                    self.end = dec_end;
+                    println!(
+                        "reader.rs: chunk ends at {}, encrypted portion ends at {}, decrypted ends at {}",
+                        end, enc_end, dec_end
+                    );
                 }
             } else {
-                end
-            };
-            println!(
-                "reader.rs: encrypted portion ends at {} but decrypted at {}",
-                end, decrypted_end
-            );
-            self.end = decrypted_end;
+                self.end = end;
+            }
+
             self.timeout.reset(TIMEOUT);
         }
     }
@@ -151,6 +164,7 @@ impl ReadState {
     }
 
     fn process(&mut self) -> Option<Result<Frame>> {
+        println!("reader.rs::process start={}, end={}", self.start, self.end);
         if self.start == self.end {
             return None;
         }
@@ -179,28 +193,28 @@ impl ReadState {
                 #[cfg(feature = "v10")]
                 Step::Header => {
                     println!(
-                        "reader: Step:Header: start={}, end={}, buf={:02X?}",
-                        self.start,
-                        self.end,
-                        &self.buf[self.start..self.end]
+                        "reader.rs::process::Step::Header self.start={}, self.end={}",
+                        self.start, self.end
                     );
                     let stat = stat_uint24_le(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = stat {
-                        println!(
-                            "reader: Step:Header: header_len={}, body_len={}",
-                            header_len, body_len
-                        );
-                        let body_len = body_len as usize;
-                        if body_len > MAX_MESSAGE_SIZE as usize {
-                            return Some(Err(Error::new(
-                                ErrorKind::InvalidData,
-                                "Message length above max allowed size",
-                            )));
+                        if (self.start + header_len + body_len as usize) < self.end {
+                            // There are more than one message here, create a batch from all of
+                            // then
+                            self.step = Step::Batch;
+                        } else {
+                            let body_len = body_len as usize;
+                            if body_len > MAX_MESSAGE_SIZE as usize {
+                                return Some(Err(Error::new(
+                                    ErrorKind::InvalidData,
+                                    "Message length above max allowed size",
+                                )));
+                            }
+                            self.step = Step::Body {
+                                header_len,
+                                body_len,
+                            };
                         }
-                        self.step = Step::Body {
-                            header_len,
-                            body_len,
-                        };
                     } else {
                         self.cycle_buf_if_needed();
                         return None;
@@ -212,9 +226,10 @@ impl ReadState {
                     body_len,
                 } => {
                     println!(
-                        "reader: Step::Body header_len={}, body_len={}",
-                        header_len, body_len
+                        "reader.rs::process::Step::Body header_len={}, body_len={}, self.start={}, self.end={}",
+                        header_len, body_len, self.start, self.end
                     );
+
                     let message_len = header_len + body_len;
                     if message_len > self.buf.len() {
                         self.buf.resize(message_len, 0u8);
@@ -229,6 +244,19 @@ impl ReadState {
                         self.step = Step::Header;
                         return Some(frame);
                     }
+                }
+                Step::Batch => {
+                    println!(
+                        "reader.rs::process::Step::Batch total_len={}, self.start={}, self.end={}",
+                        self.end - self.start,
+                        self.start,
+                        self.end
+                    );
+                    let frame =
+                        Frame::decode_multiple(&self.buf[self.start..self.end], &self.frame_type);
+                    self.start = self.end;
+                    self.step = Step::Header;
+                    return Some(frame);
                 }
             }
         }
