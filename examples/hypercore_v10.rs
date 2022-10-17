@@ -6,7 +6,7 @@ use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures_lite::stream::StreamExt;
-use hypercore::{Hypercore, Node, Proof, PublicKey, Signature, Storage};
+use hypercore::{Hypercore, Node, Proof, PublicKey, Signature, Storage, RequestUpgrade, RequestBlock};
 use log::*;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;

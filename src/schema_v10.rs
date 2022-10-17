@@ -1,5 +1,7 @@
 use hypercore::compact_encoding::{CompactEncoding, State};
-use hypercore::{DataBlock, DataHash, DataSeek, DataUpgrade};
+use hypercore::{
+    DataBlock, DataHash, DataSeek, DataUpgrade, RequestBlock, RequestSeek, RequestUpgrade,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
@@ -183,74 +185,6 @@ impl CompactEncoding<Request> for State {
             seek,
             upgrade,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RequestBlock {
-    pub index: u64,
-    pub nodes: u64,
-}
-
-impl CompactEncoding<RequestBlock> for State {
-    fn preencode(&mut self, value: &RequestBlock) {
-        self.preencode(&value.index);
-        self.preencode(&value.nodes);
-    }
-
-    fn encode(&mut self, value: &RequestBlock, buffer: &mut [u8]) {
-        self.encode(&value.index, buffer);
-        self.encode(&value.nodes, buffer);
-    }
-
-    fn decode(&mut self, buffer: &[u8]) -> RequestBlock {
-        let index: u64 = self.decode(buffer);
-        let nodes: u64 = self.decode(buffer);
-        RequestBlock { index, nodes }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RequestSeek {
-    pub bytes: u64,
-}
-
-impl CompactEncoding<RequestSeek> for State {
-    fn preencode(&mut self, value: &RequestSeek) {
-        self.preencode(&value.bytes);
-    }
-
-    fn encode(&mut self, value: &RequestSeek, buffer: &mut [u8]) {
-        self.encode(&value.bytes, buffer);
-    }
-
-    fn decode(&mut self, buffer: &[u8]) -> RequestSeek {
-        let bytes: u64 = self.decode(buffer);
-        RequestSeek { bytes }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RequestUpgrade {
-    pub start: u64,
-    pub length: u64,
-}
-
-impl CompactEncoding<RequestUpgrade> for State {
-    fn preencode(&mut self, value: &RequestUpgrade) {
-        self.preencode(&value.start);
-        self.preencode(&value.length);
-    }
-
-    fn encode(&mut self, value: &RequestUpgrade, buffer: &mut [u8]) {
-        self.encode(&value.start, buffer);
-        self.encode(&value.length, buffer);
-    }
-
-    fn decode(&mut self, buffer: &[u8]) -> RequestUpgrade {
-        let start: u64 = self.decode(buffer);
-        let length: u64 = self.decode(buffer);
-        RequestUpgrade { start, length }
     }
 }
 
