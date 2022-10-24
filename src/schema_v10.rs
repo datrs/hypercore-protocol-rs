@@ -1,6 +1,6 @@
 use hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore::{
-    DataBlock, DataHash, DataSeek, DataUpgrade, RequestBlock, RequestSeek, RequestUpgrade,
+    DataBlock, DataHash, DataSeek, DataUpgrade, Proof, RequestBlock, RequestSeek, RequestUpgrade,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -272,6 +272,19 @@ impl CompactEncoding<Data> for State {
             hash,
             seek,
             upgrade,
+        }
+    }
+}
+
+impl Data {
+    /// Transform Data message into a Proof emptying fields
+    pub fn into_proof(&mut self) -> Proof {
+        Proof {
+            fork: self.fork,
+            block: self.block.take(),
+            hash: self.hash.take(),
+            seek: self.seek.take(),
+            upgrade: self.upgrade.take(),
         }
     }
 }

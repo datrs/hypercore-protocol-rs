@@ -46,9 +46,9 @@ crypto_secretstream = { version = "0.1.0", optional = true }
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
 env_logger = "0.7.1"
+random-access-storage = { git = "https://github.com/ttiurani/random-access-storage" , branch = "v10"}
 random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
-random-access-storage = "4.0.0"
 anyhow = "1.0.28"
 criterion = "0.3.2"
 pretty-bytes = "0.2.2"

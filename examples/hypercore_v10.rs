@@ -352,12 +352,24 @@ where
 
         }
         Message::Data(message) => {
-            let info = {
-                 let hypercore = hypercore.lock().await;
-                 hypercore.info()
+            println!("Got message {:?}", message);
+            let (old_info, applied, new_info) = {
+                 let mut hypercore = hypercore.lock().await;
+                 let old_info = hypercore.info();
+                 let proof = message.clone().into_proof();
+                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
+                 let new_info = hypercore.info();
+
+                 // If all have been replicated, print the result
+                 if new_info.contiguous_length == new_info.length {
+                     for i in 0..new_info.contiguous_length {
+                         println!("replicated index {}: {}", i, String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap());
+                     }
+                 }
+
+                 (old_info, applied, new_info)
             };
             if let Some(upgrade) = &message.upgrade {
-                // TODO: This upgrade data should be pushed to hypercore somehow
                 let new_length = upgrade.length;
 
                 // Node sends another Synchronize message:
@@ -381,10 +393,10 @@ where
                 // Let's just send a batch
                 let mut messages: Vec<Message> = vec![];
 
-                let remote_length = if info.fork == peer_state.remote_fork { peer_state.remote_length } else { 0 };
+                let remote_length = if new_info.fork == peer_state.remote_fork { peer_state.remote_length } else { 0 };
 
                 messages.push(Message::Synchronize(Synchronize {
-                    fork: info.fork,
+                    fork: new_info.fork,
                     length: new_length,
                     remote_length,
                     can_upgrade: false,
@@ -392,10 +404,10 @@ where
                     downloading: true,
                 }));
 
-                for i in info.length..new_length {
+                for i in old_info.length..new_length {
                     messages.push(Message::Request(Request {
                         id: i+1,
-                        fork: info.fork,
+                        fork: new_info.fork,
                         hash: None,
                         block: Some(RequestBlock {
                             index: i,
@@ -407,11 +419,6 @@ where
                 }
                 channel.send_batch(&messages).await.unwrap();
             }
-
-            if let Some(block) = &message.block {
-                println!("TODO: Got data block, {:?}", block);
-            }
-
         }
         // TODO
         _ => {}
