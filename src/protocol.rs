@@ -379,14 +379,13 @@ where
                 }
                 #[cfg(feature = "v10")]
                 Poll::Ready(Some(messages)) => {
-                    if messages.is_empty() {
-                        return Ok(());
+                    if !messages.is_empty() {
+                        messages
+                            .iter()
+                            .for_each(|message| self.on_outbound_message(&message));
+                        let frame = Frame::MessageBatch(messages);
+                        self.write_state.park_frame(frame);
                     }
-                    messages
-                        .iter()
-                        .for_each(|message| self.on_outbound_message(&message));
-                    let frame = Frame::MessageBatch(messages);
-                    self.write_state.park_frame(frame);
                 }
                 Poll::Ready(None) => unreachable!("Channel closed before end"),
                 Poll::Pending => return Ok(()),
