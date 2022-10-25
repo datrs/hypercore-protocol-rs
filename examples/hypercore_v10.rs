@@ -50,7 +50,6 @@ fn main() {
         } else {
             let mut hypercore = Hypercore::new(storage).await.unwrap();
             hypercore.append_batch(&[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"]).await.unwrap();
-            hypercore.append(b"world").await.unwrap();
             hypercore
         };
         println!("KEY={}", hex::encode(hypercore.key_pair().public.as_bytes()));
@@ -310,7 +309,9 @@ where
 {
     match message {
         Message::Synchronize(message) => {
-            let _length_changed = message.length != peer_state.remote_length;
+            println!("Got Synchronize message {:?}", message);
+            let length_changed = message.length != peer_state.remote_length;
+            let first_sync = !peer_state.remote_synced;
             let info = {
                  let hypercore = hypercore.lock().await;
                  hypercore.info()
@@ -322,10 +323,26 @@ where
             peer_state.remote_can_upgrade = message.can_upgrade;
             peer_state.remote_uploading = message.uploading;
             peer_state.remote_downloading = message.downloading;
+            peer_state.remote_synced = true;
 
             peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
 
-            if peer_state.remote_length > info.length && peer_state.length_acked == info.length {
+            let mut messages = vec![];
+
+            if first_sync {
+                // Need to send another sync back that acknowledges the received sync
+                let msg = Synchronize {
+                    fork: info.fork,
+                    length: info.length,
+                    remote_length: peer_state.remote_length,
+                    can_upgrade: peer_state.can_upgrade,
+                    uploading: true,
+                    downloading: true,
+                };
+                messages.push(Message::Synchronize(msg));
+            }
+
+            if peer_state.remote_length > info.length && peer_state.length_acked == info.length && length_changed {
                 // This is sent by node here
                 // 01 <- channel
                 // 01 <- type=Request
@@ -345,15 +362,36 @@ where
                         length: peer_state.remote_length - info.length
                     })
                 };
-                channel.send(Message::Request(msg)).await?;
+                messages.push(Message::Request(msg));
             }
+
+            channel.send_batch(&messages).await?;
 
             // TODO: Other requests that should be sent here, now only handles the simple asking
             // for data
 
         }
+        Message::Request(message) => {
+            println!("Got Request message {:?}", message);
+            let (info, proof) = {
+                 let mut hypercore = hypercore.lock().await;
+                 let proof = hypercore.create_proof(message.block, message.hash, message.seek, message.upgrade).await?;
+                 (hypercore.info(), proof)
+            };
+            if let Some(proof) = proof {
+                let msg = Data {
+                    request: message.id,
+                    fork: info.fork,
+                    hash: proof.hash,
+                    block: proof.block,
+                    seek: proof.seek,
+                    upgrade: proof.upgrade
+                };
+                channel.send(Message::Data(msg)).await?;
+            }
+        }
         Message::Data(message) => {
-            println!("Got message {:?}", message);
+            println!("Got Data message {:?}", message);
             let (old_info, applied, new_info) = {
                  let mut hypercore = hypercore.lock().await;
                  let old_info = hypercore.info();
