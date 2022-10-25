@@ -316,7 +316,8 @@ impl Handshake {
         if !self.is_initiator() && !self.did_receive {
             self.did_receive = true;
             let tx_len = self.send()?;
-            return Ok(Some(self.tx_buf[..tx_len].to_vec()));
+            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
+            return Ok(Some(wrapped));
         }
 
         let tx_buf = if self.is_initiator() {

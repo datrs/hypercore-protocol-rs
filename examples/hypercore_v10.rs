@@ -53,7 +53,8 @@ fn main() {
             hypercore.append(b"world").await.unwrap();
             hypercore
         };
-        info!("{} opened hypercore: {}", mode, hex::encode(hypercore.key_pair().public.as_bytes()));
+        println!("KEY={}", hex::encode(hypercore.key_pair().public.as_bytes()));
+        info!("{} opened hypercore", mode);
         // Wrap it and add to the hypercore store.
         let hypercore_wrapper = HypercoreWrapper::from_memory_hypercore(hypercore);
         hypercore_store.add(hypercore_wrapper);

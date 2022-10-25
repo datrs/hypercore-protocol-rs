@@ -328,7 +328,8 @@ where
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            self.write_state.queue_frame(Frame::Raw(vec![0u8; 0]));
+            self.write_state
+                .queue_frame(Frame::RawBatch(vec![vec![0u8; 0]]));
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
@@ -395,15 +396,20 @@ where
 
     fn on_inbound_frame(&mut self, frame: Frame) -> Result<()> {
         match frame {
-            Frame::Raw(buf) => match self.state {
-                State::Handshake(_) => self.on_handshake_message(buf),
-                #[cfg(feature = "v10")]
-                State::SecretStream(_) => self.on_secret_stream_message(buf),
-                _ => unreachable!(
-                    "May not receive raw frames outside of handshake state, was {:?}",
-                    self.state
-                ),
-            },
+            Frame::RawBatch(raw_batch) => {
+                for buf in raw_batch {
+                    match self.state {
+                        State::Handshake(_) => self.on_handshake_message(buf),
+                        #[cfg(feature = "v10")]
+                        State::SecretStream(_) => self.on_secret_stream_message(buf),
+                        _ => unreachable!(
+                            "May not receive raw frames outside of handshake state, was {:?}",
+                            self.state
+                        ),
+                    };
+                }
+                Ok(())
+            }
             #[cfg(feature = "v9")]
             Frame::Message(channel_message) => match self.state {
                 State::Established => self.on_inbound_message(channel_message),
@@ -627,7 +633,7 @@ where
 
         #[cfg(feature = "v10")]
         {
-            let mut frame = Frame::Raw(body);
+            let mut frame = Frame::RawBatch(vec![body]);
             self.write_state.try_queue_direct(&mut frame)
         }
     }

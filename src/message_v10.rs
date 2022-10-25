@@ -38,8 +38,8 @@ impl Encoder for &[u8] {
 /// A frame of data, either a buffer or a message.
 #[derive(Clone, PartialEq)]
 pub enum Frame {
-    /// A raw binary buffer. Used in the handshaking phase.
-    Raw(Vec<u8>),
+    /// A raw batch binary buffer. Used in the handshaking phase.
+    RawBatch(Vec<Vec<u8>>),
     /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
     MessageBatch(Vec<ChannelMessage>),
 }
@@ -47,7 +47,7 @@ pub enum Frame {
 impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Frame::Raw(buf) => write!(f, "Frame(Raw <{}>)", buf.len()),
+            Frame::RawBatch(batch) => write!(f, "Frame(RawBatch <{}>)", batch.len()),
             Frame::MessageBatch(messages) => write!(f, "Frame({:?})", messages),
         }
     }
@@ -61,7 +61,7 @@ impl From<ChannelMessage> for Frame {
 
 impl From<Vec<u8>> for Frame {
     fn from(m: Vec<u8>) -> Self {
-        Self::Raw(m)
+        Self::RawBatch(vec![m])
     }
 }
 
@@ -69,9 +69,33 @@ impl Frame {
     /// Decodes a frame from a buffer containing multiple concurrent messages.
     pub fn decode_multiple(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
-            FrameType::Raw => unreachable!("Can only decode multiple into MessageBatch, not raw"),
+            FrameType::Raw => {
+                let mut index = 0;
+                let mut raw_batch: Vec<Vec<u8>> = vec![];
+                while index < buf.len() {
+                    // There might be zero bytes in between, and with LE, the next message will
+                    // start with a non-zero
+                    if buf[index] == 0 {
+                        index += 1;
+                        continue;
+                    }
+                    let stat = stat_uint24_le(&buf[index..]);
+                    if let Some((header_len, body_len)) = stat {
+                        raw_batch.push(
+                            buf[index + header_len..index + header_len + body_len as usize]
+                                .to_vec(),
+                        );
+                        index += header_len + body_len as usize;
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "received invalid data in raw batch",
+                        ));
+                    }
+                }
+                Ok(Frame::RawBatch(raw_batch))
+            }
             FrameType::Message => {
-                // TODO:
                 let mut index = 0;
                 let mut combined_messages: Vec<ChannelMessage> = vec![];
                 while index < buf.len() {
@@ -119,7 +143,7 @@ impl Frame {
     /// Decode a frame from a buffer.
     pub fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
-            FrameType::Raw => Ok(Frame::Raw(buf.to_vec())),
+            FrameType::Raw => Ok(Frame::RawBatch(vec![buf.to_vec()])),
             FrameType::Message => {
                 let (frame, _) = Self::decode_message(buf)?;
                 Ok(frame)
@@ -195,8 +219,10 @@ impl Frame {
 
     fn preencode(&mut self, state: &mut State) -> usize {
         match self {
-            Self::Raw(message) => {
-                state.end += message.as_slice().encoded_len();
+            Self::RawBatch(raw_batch) => {
+                for raw in raw_batch {
+                    state.end += raw.as_slice().encoded_len();
+                }
             }
             Self::MessageBatch(messages) => {
                 if messages.len() == 1 {
@@ -235,22 +261,24 @@ impl Encoder for Frame {
     fn encoded_len(&mut self) -> usize {
         let body_len = self.preencode(&mut State::new());
         match self {
-            Self::Raw(_) => body_len,
+            Self::RawBatch(_) => body_len,
             Self::MessageBatch(_) => 3 + body_len,
         }
     }
 
     fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
         let mut state = State::new();
-        let header_len = if let Self::Raw(_) = self { 0 } else { 3 };
+        let header_len = if let Self::RawBatch(_) = self { 0 } else { 3 };
         let body_len = self.preencode(&mut state);
         let len = body_len + header_len;
         if buf.len() < len {
             return Err(EncodeError::new(len));
         }
         match self {
-            Self::Raw(ref message) => {
-                message.as_slice().encode(buf)?;
+            Self::RawBatch(ref raw_batch) => {
+                for raw in raw_batch {
+                    raw.as_slice().encode(buf)?;
+                }
             }
             Self::MessageBatch(ref mut messages) => {
                 write_uint24_le(body_len, buf);
