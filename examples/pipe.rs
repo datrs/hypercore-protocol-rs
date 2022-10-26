@@ -1,3 +1,4 @@
+cfg_if::cfg_if! { if #[cfg(feature = "v9")] {
 use anyhow::Result;
 use async_std::task;
 use futures_lite::prelude::*;
@@ -199,3 +200,5 @@ fn parse_env_u64(name: &str, default: u64) -> u64 {
         .map(|v| v.parse().unwrap())
         .unwrap_or(default)
 }
+// cfg_if
+} else { fn main() {} } }

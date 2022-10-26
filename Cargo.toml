@@ -69,6 +69,10 @@ wasm-bindgen = [
 ]
 v9 = ["prost", "prost-build", "varinteger", "hypercore/v9",]
 v10 = ["hypercore/v10", "crypto_secretstream"]
+# Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
+# to verify that this crate works. To run them, use:
+# cargo test --features js-interop-tests
+js_interop_tests = []
 
 [profile.bench]
 # debug = true

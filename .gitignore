@@ -2,3 +2,6 @@
 Cargo.lock
 SANDBOX
 flamegraph.svg
+tests/js/work
+package-lock.json
+node_modules
