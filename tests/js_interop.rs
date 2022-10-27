@@ -154,7 +154,7 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
     let item_count = 4;
     let item_size = 4;
     let data_char = '1';
-    let _server = js_start_server(
+    let server = js_start_server(
         server_writer,
         port,
         item_count,
@@ -178,6 +178,7 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
     )
     .await?;
     assert_result(result_path, item_count, item_size, data_char).await?;
+    drop(server);
 
     Ok(())
 }
@@ -285,8 +286,20 @@ async fn assert_result(
     item_size: usize,
     data_char: char,
 ) -> Result<()> {
-    let mut reader = async_std::io::BufReader::new(async_std::fs::File::open(result_path).await?);
+    // First we need to wait for the file to be ready
+    loop {
+        let path = Path::new(&result_path);
+        if path.exists() {
+            let metadata = async_std::fs::metadata(path).await?;
+            // There's a index + space + line feed
+            if metadata.len() >= (item_count * (3 + item_size)) as u64 {
+                break;
+            }
+        }
+        async_std::task::sleep(Duration::from_millis(100)).await;
+    }
 
+    let mut reader = async_std::io::BufReader::new(async_std::fs::File::open(result_path).await?);
     let mut i: usize = 0;
     let expected_value = data_char.to_string().repeat(item_size);
     let mut line = String::new();
@@ -705,9 +718,6 @@ where
                     hypercore.info()
                 };
                 if message.start == 0 && message.length == info.contiguous_length {
-                    // We need to wait here for the other side to finish writing the file,
-                    // which in node's case could be a while.
-                    async_std::task::sleep(Duration::from_millis(100)).await;
                     return Ok(true);
                 }
             }
