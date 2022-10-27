@@ -52,6 +52,34 @@ impl CompactEncoding<Open> for State {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Close {
+    pub discovery_key: Option<Vec<u8>>,
+}
+
+impl CompactEncoding<Close> for State {
+    fn preencode(&mut self, value: &Close) {
+        if let Some(discovery_key) = value.discovery_key.as_ref() {
+            self.preencode(discovery_key);
+        }
+    }
+
+    fn encode(&mut self, value: &Close, buffer: &mut [u8]) {
+        if let Some(discovery_key) = value.discovery_key.as_ref() {
+            self.encode(discovery_key, buffer);
+        }
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Close {
+        let discovery_key: Option<Vec<u8>> = if buffer.len() > 0 {
+            Some(self.decode(buffer))
+        } else {
+            None
+        };
+        Close { discovery_key }
+    }
+}
+
 /// Type 0
 #[derive(Debug, Clone, PartialEq)]
 pub struct Synchronize {
@@ -414,11 +442,4 @@ pub struct Cancel {
     pub index: u64,
     pub bytes: ::std::option::Option<u64>,
     pub hash: ::std::option::Option<bool>,
-}
-
-/// type=10, explicitly close a channel.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Close {
-    /// only send this if you did not do an open
-    pub discovery_key: ::std::option::Option<std::vec::Vec<u8>>,
 }

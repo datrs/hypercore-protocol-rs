@@ -50,7 +50,7 @@ if (process.argv[2] === 'server') {
 
 async function runServer(isWriter, itemCount, itemSize, itemChar, testSet) {
     const isInitiator = false;
-    const hypercore = isWriter ? await createWriteHypercore(itemCount, itemSize, itemChar, testSet) : await createReadHypercore(testSet);
+    const hypercore = isWriter ? await createWriterHypercore(itemCount, itemSize, itemChar, testSet) : await createReaderHypercore(testSet);
     const server = net.createServer(async socket => onconnection({ isInitiator, hypercore, socket, itemCount }))
     server.listen(port, hostname, async () => {
       const { address, port } = server.address()
@@ -60,7 +60,7 @@ async function runServer(isWriter, itemCount, itemSize, itemChar, testSet) {
 
 async function runClient(isWriter, itemCount, itemSize, itemChar, testSet) {
     const isInitiator = true;
-    const hypercore = isWriter ? await createWriteHypercore(itemCount, itemSize, itemChar, testSet) : await createReadHypercore(testSet);
+    const hypercore = isWriter ? await createWriterHypercore(itemCount, itemSize, itemChar, testSet) : await createReaderHypercore(testSet);
     const socket = await net.connect(port, hostname);
     await onconnection({ isInitiator, hypercore, socket, itemCount });
 }
@@ -99,7 +99,7 @@ async function onconnection (opts) {
   socket.pipe(hypercore.replicate(isInitiator)).pipe(socket)
 }
 
-async function createWriteHypercore(itemCount, itemSize, itemChar, testSet){
+async function createWriterHypercore(itemCount, itemSize, itemChar, testSet){
     const core = new Hypercore(`work/${testSet}/writer`, testKeyPair.publicKey, {keyPair: testKeyPair});
     let data = Buffer.alloc(itemSize, itemChar);
     for (let i=0; i<itemCount; i++) {
@@ -108,6 +108,6 @@ async function createWriteHypercore(itemCount, itemSize, itemChar, testSet){
     return core;
 }
 
-async function createReadHypercore(testSet) {
+async function createReaderHypercore(testSet) {
     return new Hypercore(`work/${testSet}/reader`, testKeyPair.publicKey);
 }

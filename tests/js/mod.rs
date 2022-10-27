@@ -3,8 +3,9 @@ use std::fs::{create_dir_all, remove_dir_all, remove_file};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-
 use instant::Duration;
+
+use crate::_util::wait_for_localhost_port;
 
 pub fn cleanup() {
     if Path::new("tests/js/node_modules").exists() {
@@ -90,8 +91,7 @@ impl JavascriptServer {
                 test_set
             );
         }));
-        // Need to sleep for a while for the server to be ready
-        async_std::task::sleep(Duration::from_millis(500)).await;
+        wait_for_localhost_port(port).await;
     }
 }
 

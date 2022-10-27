@@ -2,6 +2,7 @@
     "name": "hypercore-protocol-rs-js-interop-tests",
     "version": "0.0.1",
     "dependencies": {
-        "hypercore": "file:../../../hypercore-js"
+        "hypercore": "file:../../../hypercore-js",
+        "hypercore": "^10"
     }
 }

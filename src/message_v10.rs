@@ -324,6 +324,7 @@ impl Encoder for Frame {
 #[allow(missing_docs)]
 pub enum Message {
     Open(Open),
+    Close(Close),
     Synchronize(Synchronize),
     Request(Request),
     Data(Data),
@@ -337,7 +338,6 @@ pub enum Message {
     Want(Want),
     Unwant(Unwant),
     Cancel(Cancel),
-    Close(Close),
     Extension(ExtensionMessage),
 }
 
@@ -516,6 +516,9 @@ impl ChannelMessage {
                 let mut state = State::new();
                 self.message.preencode(&mut state);
                 state
+            } else if let Message::Close(_) = self.message {
+                // Close message isn't sent
+                State::new()
             } else {
                 // The header is the channel id uint followed by message type uint
                 // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
@@ -544,6 +547,9 @@ impl Encoder for ChannelMessage {
         let len: usize = if let Message::Open(_) = self.message {
             // Open message is different in that the type byte is missing
             self.message.encode(state, buf);
+            state.start
+        } else if let Message::Close(_) = self.message {
+            // Close message isn't sent
             state.start
         } else {
             let typ = self.message.typ();
