@@ -327,14 +327,23 @@ where
 
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
+        #[cfg(feature = "v9")]
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            self.write_state
-                .queue_frame(Frame::RawBatch(vec![vec![0u8; 0]]));
+            self.write_state.queue_frame(Frame::Raw(vec![0u8; 0]));
+            self.keepalive.reset(KEEPALIVE_DURATION);
+        }
+        #[cfg(feature = "v10")]
+        if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
+            if let State::Established = self.state {
+                // 24 bit header for the empty message, hence the 3
+                self.write_state
+                    .queue_frame(Frame::RawBatch(vec![vec![0u8; 3]]));
+            }
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
 
-    fn on_outbound_message(&mut self, message: &ChannelMessage) {
+    fn on_outbound_message(&mut self, message: &ChannelMessage) -> bool {
         // If message is close, close the local channel.
         if let ChannelMessage {
             channel,
@@ -343,6 +352,9 @@ where
         } = message
         {
             self.close_local(*channel);
+            false
+        } else {
+            true
         }
     }
 
@@ -380,9 +392,10 @@ where
                 #[cfg(feature = "v10")]
                 Poll::Ready(Some(messages)) => {
                     if !messages.is_empty() {
-                        messages
-                            .iter()
-                            .for_each(|message| self.on_outbound_message(&message));
+                        let messages: Vec<ChannelMessage> = messages
+                            .into_iter()
+                            .filter(|message| self.on_outbound_message(&message))
+                            .collect();
                         let frame = Frame::MessageBatch(messages);
                         self.write_state.park_frame(frame);
                     }

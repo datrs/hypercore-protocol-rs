@@ -202,6 +202,10 @@ impl ReadState {
                             // There are more than one message here, create a batch from all of
                             // then
                             self.step = Step::Batch;
+                        } else if body_len == 0 {
+                            // This is a keepalive message, just remain in Step::Header
+                            self.cycle_buf_if_needed();
+                            return None;
                         } else {
                             let body_len = body_len as usize;
                             if body_len > MAX_MESSAGE_SIZE as usize {

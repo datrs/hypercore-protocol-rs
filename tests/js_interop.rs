@@ -1,5 +1,6 @@
 #![cfg(feature = "v10")]
 
+use _util::wait_for_localhost_port;
 use anyhow::Result;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
@@ -39,6 +40,7 @@ const TEST_SET_NODE_CLIENT_RUST_SERVER: &str = "ncrs";
 const TEST_SET_RUST_CLIENT_RUST_SERVER: &str = "rcrs";
 const TEST_SET_SERVER_WRITER: &str = "sw";
 const TEST_SET_CLIENT_WRITER: &str = "cw";
+const TEST_SET_SIMPLE: &str = "simple";
 
 #[async_std::test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
@@ -68,6 +70,34 @@ async fn js_interop_rcns_simple_client_writer() -> Result<()> {
     Ok(())
 }
 
+#[async_std::test]
+#[cfg_attr(not(feature = "js_interop_tests"), ignore)]
+async fn js_interop_ncrs_simple_server_writer() -> Result<()> {
+    js_interop_ncrs_simple(true, 8105).await?;
+    Ok(())
+}
+
+#[async_std::test]
+#[cfg_attr(not(feature = "js_interop_tests"), ignore)]
+async fn js_interop_ncrs_simple_client_writer() -> Result<()> {
+    js_interop_ncrs_simple(false, 8106).await?;
+    Ok(())
+}
+
+#[async_std::test]
+#[cfg_attr(not(feature = "js_interop_tests"), ignore)]
+async fn js_interop_rcrs_simple_server_writer() -> Result<()> {
+    js_interop_rcrs_simple(true, 8107).await?;
+    Ok(())
+}
+
+#[async_std::test]
+#[cfg_attr(not(feature = "js_interop_tests"), ignore)]
+async fn js_interop_rcrs_simple_client_writer() -> Result<()> {
+    js_interop_rcrs_simple(false, 8108).await?;
+    Ok(())
+}
+
 async fn js_interop_ncns_simple(server_writer: bool, port: u32) -> Result<()> {
     init();
     let test_set = format!(
@@ -78,7 +108,7 @@ async fn js_interop_ncns_simple(server_writer: bool, port: u32) -> Result<()> {
         } else {
             TEST_SET_CLIENT_WRITER
         },
-        "simple"
+        TEST_SET_SIMPLE
     );
     let (result_path, _writer_path, _reader_path) = prepare_test_set(&test_set);
     let item_count = 4;
@@ -117,7 +147,7 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
         } else {
             TEST_SET_CLIENT_WRITER
         },
-        "simple"
+        TEST_SET_SIMPLE
     );
     let (result_path, writer_path, reader_path) = prepare_test_set(&test_set);
     let item_count = 4;
@@ -146,6 +176,103 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
         &result_path,
     )
     .await?;
+    assert_result(result_path, item_count, item_size, data_char).await?;
+
+    Ok(())
+}
+
+async fn js_interop_ncrs_simple(server_writer: bool, port: u32) -> Result<()> {
+    init();
+    let test_set = format!(
+        "{}_{}_{}",
+        TEST_SET_NODE_CLIENT_RUST_SERVER,
+        if server_writer {
+            TEST_SET_SERVER_WRITER
+        } else {
+            TEST_SET_CLIENT_WRITER
+        },
+        TEST_SET_SIMPLE
+    );
+    let (result_path, writer_path, reader_path) = prepare_test_set(&test_set);
+    let item_count = 4;
+    let item_size = 4;
+    let data_char = '1';
+
+    let _server = start_server(
+        server_writer,
+        port,
+        item_count,
+        item_size,
+        data_char,
+        if server_writer {
+            &writer_path
+        } else {
+            &reader_path
+        },
+        &result_path,
+    )
+    .await?;
+    js_run_client(
+        !server_writer,
+        port,
+        item_count,
+        item_size,
+        data_char,
+        &test_set.clone(),
+    )
+    .await;
+
+    assert_result(result_path, item_count, item_size, data_char).await?;
+
+    Ok(())
+}
+
+async fn js_interop_rcrs_simple(server_writer: bool, port: u32) -> Result<()> {
+    init();
+    let test_set = format!(
+        "{}_{}_{}",
+        TEST_SET_RUST_CLIENT_RUST_SERVER,
+        if server_writer {
+            TEST_SET_SERVER_WRITER
+        } else {
+            TEST_SET_CLIENT_WRITER
+        },
+        TEST_SET_SIMPLE
+    );
+    let (result_path, writer_path, reader_path) = prepare_test_set(&test_set);
+    let item_count = 4;
+    let item_size = 4;
+    let data_char = '1';
+
+    let _server = start_server(
+        server_writer,
+        port,
+        item_count,
+        item_size,
+        data_char,
+        if server_writer {
+            &writer_path
+        } else {
+            &reader_path
+        },
+        &result_path,
+    )
+    .await?;
+    run_client(
+        !server_writer,
+        port,
+        item_count,
+        item_size,
+        data_char,
+        if server_writer {
+            &reader_path
+        } else {
+            &writer_path
+        },
+        &result_path,
+    )
+    .await?;
+
     assert_result(result_path, item_count, item_size, data_char).await?;
 
     Ok(())
@@ -195,6 +322,33 @@ async fn run_client(
     );
     tcp_client(port, on_replication_connection, Arc::new(hypercore_wrapper)).await?;
     Ok(())
+}
+
+async fn start_server(
+    is_writer: bool,
+    port: u32,
+    item_count: usize,
+    item_size: usize,
+    data_char: char,
+    data_path: &str,
+    result_path: &str,
+) -> Result<RustServer> {
+    let hypercore = if is_writer {
+        create_writer_hypercore(item_count, item_size, data_char, &data_path).await?
+    } else {
+        create_reader_hypercore(&data_path).await?
+    };
+    let hypercore_wrapper = HypercoreWrapper::from_disk_hypercore(
+        hypercore,
+        if is_writer {
+            None
+        } else {
+            Some(result_path.to_string())
+        },
+    );
+    let mut server = RustServer::new();
+    server.run(Arc::new(hypercore_wrapper), port).await;
+    Ok(server)
 }
 
 async fn create_writer_hypercore(
@@ -280,7 +434,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-struct HypercoreWrapper<T>
+pub struct HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
@@ -455,38 +609,25 @@ where
                     upgrade: proof.upgrade,
                 };
                 channel.send(Message::Data(msg)).await?;
+            } else {
+                panic!("Could not create proof from {:?}", message.id);
             }
         }
         Message::Data(message) => {
-            let (old_info, applied, new_info) = {
+            let (old_info, applied, new_info, synced) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
-
-                if new_info.contiguous_length == new_info.length {
-                    if let Some(result_path) = result_path.as_ref() {
-                        let mut writer = async_std::io::BufWriter::new(
-                            async_std::fs::File::create(result_path).await?,
-                        );
-                        for i in 0..new_info.contiguous_length {
-                            let value =
-                                String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap();
-                            let line = format!("{} {}\n", i, value);
-                            writer.write(line.as_bytes()).await?;
-                        }
-                        writer.flush().await?;
-                        return Ok(true);
-                    }
-                }
-
-                (old_info, applied, new_info)
+                let mut lines: Vec<String> = vec![];
+                let synced = new_info.contiguous_length == new_info.length;
+                (old_info, applied, new_info, synced)
             };
             assert!(applied, "Could not apply proof");
+            let mut messages: Vec<Message> = vec![];
             if let Some(upgrade) = &message.upgrade {
                 let new_length = upgrade.length;
-                let mut messages: Vec<Message> = vec![];
 
                 let remote_length = if new_info.fork == peer_state.remote_fork {
                     peer_state.remote_length
@@ -513,7 +654,40 @@ where
                         upgrade: None,
                     }));
                 }
-                channel.send_batch(&messages).await.unwrap();
+            }
+            if let Some(block) = &message.block {
+                // Send Range if the number of items changed, both for the single and
+                // for the contiguous length
+                if old_info.length < new_info.length {
+                    messages.push(Message::Range(Range {
+                        drop: false,
+                        start: block.index,
+                        length: 1,
+                    }));
+                }
+                if old_info.contiguous_length < new_info.contiguous_length {
+                    messages.push(Message::Range(Range {
+                        drop: false,
+                        start: 0,
+                        length: new_info.contiguous_length,
+                    }));
+                }
+            }
+            channel.send_batch(&messages).await.unwrap();
+            if synced {
+                if let Some(result_path) = result_path.as_ref() {
+                    let mut hypercore = hypercore.lock().await;
+                    let mut writer = async_std::io::BufWriter::new(
+                        async_std::fs::File::create(result_path).await?,
+                    );
+                    for i in 0..new_info.contiguous_length {
+                        let value = String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap();
+                        let line = format!("{} {}\n", i, value);
+                        writer.write(line.as_bytes()).await?;
+                    }
+                    writer.flush().await?;
+                    return Ok(true);
+                }
             }
         }
         Message::Range(message) => {
@@ -556,6 +730,33 @@ impl Default for PeerState {
             remote_downloading: true,
             remote_synced: false,
             length_acked: 0,
+        }
+    }
+}
+
+pub struct RustServer {
+    handle: Option<async_std::task::JoinHandle<()>>,
+}
+
+impl RustServer {
+    pub fn new() -> RustServer {
+        RustServer { handle: None }
+    }
+
+    pub async fn run(&mut self, hypercore: Arc<HypercoreWrapper<RandomAccessDisk>>, port: u32) {
+        self.handle = Some(async_std::task::spawn(async move {
+            tcp_server(port, on_replication_connection, hypercore)
+                .await
+                .expect("Server return ok");
+        }));
+        wait_for_localhost_port(port).await;
+    }
+}
+
+impl Drop for RustServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            async_std::task::block_on(handle.cancel());
         }
     }
 }

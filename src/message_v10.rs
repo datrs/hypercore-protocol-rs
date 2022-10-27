@@ -212,7 +212,7 @@ impl Frame {
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "received too short message",
+                format!("received too short message, {:02X?}", buf),
             ))
         }
     }
