@@ -65,6 +65,47 @@ async function runClient(isWriter, itemCount, itemSize, itemChar, testSet) {
     await onconnection({ isInitiator, hypercore, socket, itemCount });
 }
 
+class Mutex {
+  constructor () {
+    this.locked = false
+    this.destroyed = false
+
+    this._destroying = null
+    this._destroyError = null
+    this._queue = []
+    this._enqueue = (resolve, reject) => this._queue.push([resolve, reject])
+  }
+
+  lock () {
+    if (this.destroyed) return Promise.reject(this._destroyError)
+    if (this.locked) return new Promise(this._enqueue)
+    this.locked = true
+    return Promise.resolve()
+  }
+
+  unlock () {
+    if (!this._queue.length) {
+      this.locked = false
+      return
+    }
+    this._queue.shift()[0]()
+  }
+
+  destroy (err) {
+    if (!this._destroying) this._destroying = this.locked ? this.lock().catch(() => {}) : Promise.resolve()
+
+    this.destroyed = true
+    this._destroyError = err || new Error('Mutex has been destroyed')
+
+    if (err) {
+      while (this._queue.length) this._queue.shift()[1](err)
+    }
+
+    return this._destroying
+  }
+}
+
+let mutex = new Mutex()
 async function onconnection (opts) {
   const { isInitiator, hypercore, socket, itemCount } = opts
   const { remoteAddress, remotePort } = socket
@@ -80,21 +121,27 @@ async function onconnection (opts) {
   })
 
   hypercore.on('append', async _ => {
-      console.error(`${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, replaying:`)
+      await mutex.lock()
+      console.error(`${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, count match=${hypercore.length === itemCount}`)
       if (hypercore.length === itemCount) {
           let fileContent = "";
           for (let i = 0; i < hypercore.length; i++) {
+              console.error(`${isInitiator} Getting value for index ${i}`);
               let value = await hypercore.get(i);
               fileContent += `${i} ${value}\n`;
           }
           try {
+              console.error(`${isInitiator} Writing file`);
               await fs.writeFile(resultFile, fileContent);
           } catch (error) {
-              console.log(error);
+              console.error(`${isInitiator} got error`, error);
               process.exit(3);
           }
+
+          console.error(`${isInitiator} Wrote content ${fileContent}`);
           process.exit(0);
       }
+      mutex.unlock()
   })
   socket.pipe(hypercore.replicate(isInitiator)).pipe(socket)
 }

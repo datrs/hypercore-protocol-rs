@@ -12,6 +12,7 @@ use hypercore::{
     Hypercore, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, SecretKey, Storage,
     PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
+use instant::Duration;
 use random_access_disk::RandomAccessDisk;
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
@@ -673,8 +674,7 @@ where
                     }));
                 }
             }
-            channel.send_batch(&messages).await.unwrap();
-            if synced {
+            let exit = if synced {
                 if let Some(result_path) = result_path.as_ref() {
                     let mut hypercore = hypercore.lock().await;
                     let mut writer = async_std::io::BufWriter::new(
@@ -686,8 +686,16 @@ where
                         writer.write(line.as_bytes()).await?;
                     }
                     writer.flush().await?;
-                    return Ok(true);
+                    true
+                } else {
+                    false
                 }
+            } else {
+                false
+            };
+            channel.send_batch(&messages).await.unwrap();
+            if exit {
+                return Ok(true);
             }
         }
         Message::Range(message) => {
@@ -697,6 +705,9 @@ where
                     hypercore.info()
                 };
                 if message.start == 0 && message.length == info.contiguous_length {
+                    // We need to wait here for the other side to finish writing the file,
+                    // which in node's case could be a while.
+                    async_std::task::sleep(Duration::from_millis(100)).await;
                     return Ok(true);
                 }
             }
