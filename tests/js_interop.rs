@@ -35,6 +35,8 @@ fn init() {
 
 const TEST_SET_NODE_CLIENT_NODE_SERVER: &str = "ncns";
 const TEST_SET_RUST_CLIENT_NODE_SERVER: &str = "rcns";
+const TEST_SET_NODE_CLIENT_RUST_SERVER: &str = "ncrs";
+const TEST_SET_RUST_CLIENT_RUST_SERVER: &str = "rcrs";
 const TEST_SET_SERVER_WRITER: &str = "sw";
 const TEST_SET_CLIENT_WRITER: &str = "cw";
 
@@ -59,6 +61,13 @@ async fn js_interop_rcns_simple_server_writer() -> Result<()> {
     Ok(())
 }
 
+#[async_std::test]
+#[cfg_attr(not(feature = "js_interop_tests"), ignore)]
+async fn js_interop_rcns_simple_client_writer() -> Result<()> {
+    js_interop_rcns_simple(false, 8104).await?;
+    Ok(())
+}
+
 async fn js_interop_ncns_simple(server_writer: bool, port: u32) -> Result<()> {
     init();
     let test_set = format!(
@@ -71,13 +80,12 @@ async fn js_interop_ncns_simple(server_writer: bool, port: u32) -> Result<()> {
         },
         "simple"
     );
-    let server_is_writer = true;
     let (result_path, _writer_path, _reader_path) = prepare_test_set(&test_set);
     let item_count = 4;
     let item_size = 4;
     let data_char = '1';
     let _server = js_start_server(
-        server_is_writer,
+        server_writer,
         port,
         item_count,
         item_size,
@@ -86,7 +94,7 @@ async fn js_interop_ncns_simple(server_writer: bool, port: u32) -> Result<()> {
     )
     .await?;
     js_run_client(
-        !server_is_writer,
+        !server_writer,
         port,
         item_count,
         item_size,
@@ -111,13 +119,12 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
         },
         "simple"
     );
-    let server_is_writer = true;
-    let (result_path, _writer_path, reader_path) = prepare_test_set(&test_set);
+    let (result_path, writer_path, reader_path) = prepare_test_set(&test_set);
     let item_count = 4;
     let item_size = 4;
     let data_char = '1';
     let _server = js_start_server(
-        server_is_writer,
+        server_writer,
         port,
         item_count,
         item_size,
@@ -126,12 +133,16 @@ async fn js_interop_rcns_simple(server_writer: bool, port: u32) -> Result<()> {
     )
     .await?;
     run_client(
-        !server_is_writer,
+        !server_writer,
         port,
         item_count,
         item_size,
         data_char,
-        &reader_path,
+        if server_writer {
+            &reader_path
+        } else {
+            &writer_path
+        },
         &result_path,
     )
     .await?;
@@ -174,7 +185,14 @@ async fn run_client(
     } else {
         create_reader_hypercore(data_path).await?
     };
-    let hypercore_wrapper = HypercoreWrapper::from_disk_hypercore(hypercore, result_path);
+    let hypercore_wrapper = HypercoreWrapper::from_disk_hypercore(
+        hypercore,
+        if is_writer {
+            None
+        } else {
+            Some(result_path.to_string())
+        },
+    );
     tcp_client(port, on_replication_connection, Arc::new(hypercore_wrapper)).await?;
     Ok(())
 }
@@ -269,17 +287,20 @@ where
     discovery_key: [u8; 32],
     key: [u8; 32],
     hypercore: Arc<Mutex<Hypercore<T>>>,
-    result_path: String,
+    result_path: Option<String>,
 }
 
 impl HypercoreWrapper<RandomAccessDisk> {
-    pub fn from_disk_hypercore(hypercore: Hypercore<RandomAccessDisk>, result_path: &str) -> Self {
+    pub fn from_disk_hypercore(
+        hypercore: Hypercore<RandomAccessDisk>,
+        result_path: Option<String>,
+    ) -> Self {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
             discovery_key: discovery_key(&key),
             hypercore: Arc::new(Mutex::new(hypercore)),
-            result_path: result_path.to_string(),
+            result_path,
         }
     }
 }
@@ -337,7 +358,7 @@ where
                 let ready = on_replication_message(
                     &mut hypercore,
                     &mut peer_state,
-                    &result_path,
+                    result_path.clone(),
                     &mut channel,
                     message,
                 )
@@ -355,7 +376,7 @@ where
 async fn on_replication_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
-    result_path: &str,
+    result_path: Option<String>,
     channel: &mut Channel,
     message: Message,
 ) -> Result<bool>
@@ -445,16 +466,19 @@ where
                 let new_info = hypercore.info();
 
                 if new_info.contiguous_length == new_info.length {
-                    let mut writer = async_std::io::BufWriter::new(
-                        async_std::fs::File::create(result_path).await?,
-                    );
-                    for i in 0..new_info.contiguous_length {
-                        let value = String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap();
-                        let line = format!("{} {}\n", i, value);
-                        writer.write(line.as_bytes()).await?;
+                    if let Some(result_path) = result_path.as_ref() {
+                        let mut writer = async_std::io::BufWriter::new(
+                            async_std::fs::File::create(result_path).await?,
+                        );
+                        for i in 0..new_info.contiguous_length {
+                            let value =
+                                String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap();
+                            let line = format!("{} {}\n", i, value);
+                            writer.write(line.as_bytes()).await?;
+                        }
+                        writer.flush().await?;
+                        return Ok(true);
                     }
-                    writer.flush().await?;
-                    return Ok(true);
                 }
 
                 (old_info, applied, new_info)
@@ -492,8 +516,16 @@ where
                 channel.send_batch(&messages).await.unwrap();
             }
         }
-        Message::Range(_message) => {
-            // Skip range
+        Message::Range(message) => {
+            if result_path.is_none() {
+                let info = {
+                    let hypercore = hypercore.lock().await;
+                    hypercore.info()
+                };
+                if message.start == 0 && message.length == info.contiguous_length {
+                    return Ok(true);
+                }
+            }
         }
         _ => {
             panic!("Received unexpected message {:?}", message);
