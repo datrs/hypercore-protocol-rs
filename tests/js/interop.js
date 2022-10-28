@@ -35,14 +35,12 @@ const resultFile = `work/${testSet}/result.txt`;
 
 if (process.argv[2] === 'server') {
     runServer(isWriter, itemCount, itemSize, itemChar, testSet).then(_ => {
-        console.log("Server created");
+        console.log("NODE: Server created");
     });
 } else if (process.argv[2] === 'client') {
     runClient(isWriter, itemCount, itemSize, itemChar, testSet).then(_ => {
-        console.log("client run");
+        console.log("NODE: client run");
     });
-
-
 } else {
     console.error(`Invalid mode {}, only server/client supported`, process.argv[2]);
     process.exit(2);
@@ -52,10 +50,13 @@ async function runServer(isWriter, itemCount, itemSize, itemChar, testSet) {
     const isInitiator = false;
     const hypercore = isWriter ? await createWriteHypercore(itemCount, itemSize, itemChar, testSet) : await createReadHypercore(testSet);
     const server = net.createServer(async socket => onconnection({ isInitiator, hypercore, socket, itemCount }))
-    server.listen(port, hostname, async () => {
-      const { address, port } = server.address()
-      console.error(`server listening on ${address}:${port}`)
-    });
+    try {
+      server.listen(port, hostname, async () => { const { address, port } = server.address()
+        console.error(`NODE: server listening on ${address}:${port}`)
+      });
+    } catch (error) {
+      console.error(`NODE: ${isInitiator} server listen got error`, error);
+    }
 }
 
 async function runClient(isWriter, itemCount, itemSize, itemChar, testSet) {
@@ -110,19 +111,19 @@ async function onconnection (opts) {
   const { isInitiator, hypercore, socket, itemCount } = opts
   const { remoteAddress, remotePort } = socket
   if (!isInitiator) {
-    console.error(`new connection from ${remoteAddress}:${remotePort}`)
+    console.error(`NODE: new connection from ${remoteAddress}:${remotePort}`)
   }
   socket.on('close', () => {
     if (!isInitiator) {
-      console.error(`connection closed from ${remoteAddress}:${remotePort}`)
+      console.error(`NODE: connection closed from ${remoteAddress}:${remotePort}`)
     } else {
-      console.error('connection closed from server')
+      console.error('NODE: connection closed from server')
     }
   })
 
   hypercore.on('append', async _ => {
       await mutex.lock()
-      console.error(`${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, count match=${hypercore.length === itemCount}`)
+      console.error(`NODE: ${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, count match=${hypercore.length === itemCount}`)
       if (hypercore.length === itemCount) {
           let fileContent = "";
           for (let i = 0; i < hypercore.length; i++) {
@@ -131,14 +132,14 @@ async function onconnection (opts) {
               fileContent += `${i} ${value}\n`;
           }
           try {
-              console.error(`${isInitiator} Writing file`);
+              console.error(`NODE: ${isInitiator} Writing file`);
               await fs.writeFile(resultFile, fileContent);
           } catch (error) {
-              console.error(`${isInitiator} got error`, error);
+              console.error(`NODE: ${isInitiator} got error`, error);
               process.exit(3);
           }
 
-          console.error(`${isInitiator} Wrote content ${fileContent}`);
+          console.error(`NODE: ${isInitiator} Wrote content exiting`);
           process.exit(0);
       }
       mutex.unlock()

@@ -63,32 +63,43 @@ impl JavascriptServer {
         test_set: String,
     ) {
         self.handle = Some(async_std::task::spawn(async move {
-            let status = async_std::process::Command::new("node")
-                .current_dir("tests/js")
-                .args(&[
-                    "interop.js",
-                    "server",
-                    if is_writer { "writer" } else { "reader" },
-                    &port.to_string(),
-                    &data_count.to_string(),
-                    &data_size.to_string(),
-                    &data_char.to_string(),
-                    &test_set,
-                ])
-                .kill_on_drop(true)
-                .status()
-                .await
-                .expect("Unable to execute node");
+            // This sometimes fails on OSX immediately with unix signal 4, let's retry a few times
+            let mut retries = 3;
+            let mut code: Option<i32> = None;
+            while code.is_none() && retries > 0 {
+                let status = async_std::process::Command::new("node")
+                    .current_dir("tests/js")
+                    .args(&[
+                        "interop.js",
+                        "server",
+                        if is_writer { "writer" } else { "reader" },
+                        &port.to_string(),
+                        &data_count.to_string(),
+                        &data_size.to_string(),
+                        &data_char.to_string(),
+                        &test_set,
+                    ])
+                    .kill_on_drop(true)
+                    .status()
+                    .await
+                    .expect("Unable to execute node");
+                code = status.code();
+                if code.is_none() {
+                    async_std::task::sleep(Duration::from_millis(100)).await;
+                    retries -= 1;
+                }
+            }
+
             assert_eq!(
                 Some(0),
-                status.code(),
+                code,
                 "node server did not exit successfully, is_writer={}, port={}, data_count={}, data_size={}, data_char={}, test_set={}",
                 is_writer,
                 port,
                 data_count,
                 data_size,
                 data_char,
-                test_set
+                test_set,
             );
         }));
         wait_for_localhost_port(port).await;
