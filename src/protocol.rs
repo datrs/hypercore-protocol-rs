@@ -411,9 +411,9 @@ where
             Frame::RawBatch(raw_batch) => {
                 for buf in raw_batch {
                     match self.state {
-                        State::Handshake(_) => self.on_handshake_message(buf),
+                        State::Handshake(_) => self.on_handshake_message(buf)?,
                         #[cfg(feature = "v10")]
-                        State::SecretStream(_) => self.on_secret_stream_message(buf),
+                        State::SecretStream(_) => self.on_secret_stream_message(buf)?,
                         _ => unreachable!(
                             "May not receive raw frames outside of handshake state, was {:?}",
                             self.state
