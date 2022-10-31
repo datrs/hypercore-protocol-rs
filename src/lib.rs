@@ -119,6 +119,8 @@ pub use channels::Channel;
 pub use duplex::Duplex;
 pub use extension::Extension;
 #[cfg(feature = "v10")]
+pub use hypercore; // Re-export hypercore
+#[cfg(feature = "v10")]
 pub use message_v10::Message;
 #[cfg(feature = "v9")]
 pub use message_v9::Message;

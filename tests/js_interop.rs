@@ -634,7 +634,6 @@ where
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
-                let mut lines: Vec<String> = vec![];
                 let synced = new_info.contiguous_length == new_info.length;
                 (old_info, applied, new_info, synced)
             };
