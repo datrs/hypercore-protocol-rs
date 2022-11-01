@@ -44,7 +44,8 @@ sha2 = "0.10.6"
 # With this the crate be buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch
 # to that.
 curve25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", rev = "8fa201639aeeb1a3b90f38c561441097a36105e4" }
-crypto_secretstream = { version = "0.1.0", optional = true }
+# FIXME: There's a WASM 32bit usize problem with 0.1.0
+crypto_secretstream = { git = "https://github.com/ttiurani/nacl-compat", branch = "master", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
