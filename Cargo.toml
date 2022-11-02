@@ -45,7 +45,7 @@ sha2 = "0.10.6"
 # to that.
 curve25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", rev = "8fa201639aeeb1a3b90f38c561441097a36105e4" }
 # FIXME: There's a WASM 32bit usize problem with 0.1.0
-crypto_secretstream = { git = "https://github.com/ttiurani/nacl-compat", branch = "master", optional = true }
+crypto_secretstream = { git = "https://github.com/RustCrypto/nacl-compat", rev = "8a0176ea42fd0fc5eec239458ff165b34c67182a", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
