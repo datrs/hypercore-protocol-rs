@@ -338,6 +338,27 @@ impl Data {
     }
 }
 
+/// Type 4, No data available for given request id
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoData {
+    pub request: u64,
+}
+
+impl CompactEncoding<NoData> for State {
+    fn preencode(&mut self, value: &NoData) {
+        self.preencode(&value.request);
+    }
+
+    fn encode(&mut self, value: &NoData, buffer: &mut [u8]) {
+        self.encode(&value.request, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> NoData {
+        let request: u64 = self.decode(buffer);
+        NoData { request }
+    }
+}
+
 /// Type=5, Want
 #[derive(Debug, Clone, PartialEq)]
 pub struct Want {
