@@ -335,12 +335,6 @@ pub enum Message {
     Bitfield(Bitfield),
     Range(Range),
     Extension(Extension),
-
-    // TODO: Convert this legacy stuff:
-    Options(Options),
-    Status(Status),
-    Have(Have),
-    Unhave(Unhave),
 }
 
 impl Message {
@@ -397,7 +391,6 @@ impl Message {
             Self::Bitfield(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             Self::Extension(ref message) => state.preencode(message),
-            // TODO: The rest
             value => unimplemented!("{} can not be pre-encoded", value),
         }
         state.end
@@ -417,7 +410,6 @@ impl Message {
             Self::Bitfield(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             Self::Extension(ref message) => state.encode(message, buf),
-            // TODO: The rest
             value => unimplemented!("{} can not be encoded", value),
         }
         state.start

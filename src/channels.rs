@@ -132,21 +132,25 @@ impl Channel {
     }
 
     /// Send a status message.
+    #[cfg(feature = "v9")]
     pub async fn status(&mut self, msg: Status) -> Result<()> {
         self.send(Message::Status(msg)).await
     }
 
     /// Send a options message.
+    #[cfg(feature = "v9")]
     pub async fn options(&mut self, msg: Options) -> Result<()> {
         self.send(Message::Options(msg)).await
     }
 
     /// Send a have message.
+    #[cfg(feature = "v9")]
     pub async fn have(&mut self, msg: Have) -> Result<()> {
         self.send(Message::Have(msg)).await
     }
 
     /// Send a unhave message.
+    #[cfg(feature = "v9")]
     pub async fn unhave(&mut self, msg: Unhave) -> Result<()> {
         self.send(Message::Unhave(msg)).await
     }

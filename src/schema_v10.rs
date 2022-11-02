@@ -498,38 +498,3 @@ impl CompactEncoding<Extension> for State {
         Extension { name, message }
     }
 }
-
-/// TODO: Remove this legacy stuff below
-
-/// type=1, overall feed options. can be sent multiple times
-#[derive(Debug, Clone, PartialEq)]
-pub struct Options {
-    /// Should be sorted lexicographically
-    pub extensions: ::std::vec::Vec<std::string::String>,
-    /// Should all blocks be explicitly acknowledged?
-    pub ack: ::std::option::Option<bool>,
-}
-/// type=2, message indicating state changes etc.
-/// initial state for uploading/downloading is true
-#[derive(Debug, Clone, PartialEq)]
-pub struct Status {
-    pub uploading: ::std::option::Option<bool>,
-    pub downloading: ::std::option::Option<bool>,
-}
-/// type=3, what do we have?
-#[derive(Debug, Clone, PartialEq)]
-pub struct Have {
-    pub start: u64,
-    /// defaults to 1
-    pub length: ::std::option::Option<u64>,
-    pub bitfield: ::std::option::Option<std::vec::Vec<u8>>,
-    /// when true, this Have message is an acknowledgement
-    pub ack: ::std::option::Option<bool>,
-}
-/// type=4, what did we lose?
-#[derive(Debug, Clone, PartialEq)]
-pub struct Unhave {
-    pub start: u64,
-    /// defaults to 1
-    pub length: ::std::option::Option<u64>,
-}
