@@ -582,6 +582,106 @@ impl Encoder for ChannelMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hypercore::{
+        DataBlock, DataHash, DataSeek, DataUpgrade, Node, RequestBlock, RequestSeek, RequestUpgrade,
+    };
 
-    // TODO
+    macro_rules! message_enc_dec {
+        ($( $msg:expr ),*) => {
+            $(
+                let channel = rand::random::<u8>() as u64;
+                let mut channel_message = ChannelMessage::new(channel, $msg);
+                let encoded_len = channel_message.encoded_len();
+                let mut buf = vec![0u8; encoded_len];
+                let n = channel_message.encode(&mut buf[..]).expect("Failed to encode message");
+                let decoded = ChannelMessage::decode(&buf[..n], channel).expect("Failed to decode message").0.into_split();
+                assert_eq!(channel, decoded.0);
+                assert_eq!($msg, decoded.1);
+            )*
+        }
+    }
+
+    #[test]
+    fn message_encode_decode() {
+        message_enc_dec! {
+            Message::Synchronize(Synchronize{
+                fork: 0,
+                can_upgrade: true,
+                downloading: true,
+                uploading: true,
+                length: 5,
+                remote_length: 0,
+            }),
+            Message::Request(Request {
+                id: 1,
+                fork: 1,
+                block: Some(RequestBlock {
+                    index: 5,
+                    nodes: 10,
+                }),
+                hash: Some(RequestBlock {
+                    index: 20,
+                    nodes: 0
+                }),
+                seek: Some(RequestSeek {
+                    bytes: 10
+                }),
+                upgrade: Some(RequestUpgrade {
+                    start: 0,
+                    length: 10
+                })
+            }),
+            Message::Cancel(Cancel {
+                request: 1,
+            }),
+            Message::Data(Data{
+                request: 1,
+                fork: 5,
+                block: Some(DataBlock {
+                    index: 5,
+                    nodes: vec![Node::new(1, vec![0x01; 32], 100)],
+                    value: vec![0xFF; 10]
+                }),
+                hash: Some(DataHash {
+                    index: 20,
+                    nodes: vec![Node::new(2, vec![0x02; 32], 200)],
+                }),
+                seek: Some(DataSeek {
+                    bytes: 10,
+                    nodes: vec![Node::new(3, vec![0x03; 32], 300)],
+                }),
+                upgrade: Some(DataUpgrade {
+                    start: 0,
+                    length: 10,
+                    nodes: vec![Node::new(4, vec![0x04; 32], 400)],
+                    additional_nodes: vec![Node::new(5, vec![0x05; 32], 500)],
+                    signature: vec![0xAB; 32]
+                })
+            }),
+            Message::NoData(NoData {
+                request: 2,
+            }),
+            Message::Want(Want {
+                start: 0,
+                length: 100,
+            }),
+            Message::Unwant(Unwant {
+                start: 10,
+                length: 2,
+            }),
+            Message::Bitfield(Bitfield {
+                start: 20,
+                bitfield: vec![0x89ABCDEF, 0x00, 0xFFFFFFFF],
+            }),
+            Message::Range(Range {
+                drop: true,
+                start: 12345,
+                length: 100000
+            }),
+            Message::Extension(Extension {
+                name: "custom_extension/v1/open".to_string(),
+                message: vec![0x44, 20]
+            })
+        };
+    }
 }
