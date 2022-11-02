@@ -89,6 +89,7 @@ mod builder;
 mod channels;
 mod constants;
 mod duplex;
+#[cfg(feature = "v9")]
 mod extension;
 mod message;
 #[cfg(feature = "v10")]
@@ -111,12 +112,12 @@ pub mod schema {
 #[cfg(feature = "v10")]
 pub mod schema {
     include!("schema_v10.rs");
-    pub use crate::message_v10::ExtensionMessage;
 }
 
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 pub use duplex::Duplex;
+#[cfg(feature = "v9")]
 pub use extension::Extension;
 #[cfg(feature = "v10")]
 pub use hypercore; // Re-export hypercore

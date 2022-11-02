@@ -1,3 +1,4 @@
+#[cfg(feature = "v9")]
 use crate::extension::{Extension, Extensions};
 #[cfg(feature = "v10")]
 use crate::message_v10::ChannelMessage;
@@ -30,6 +31,7 @@ pub struct Channel {
     key: Key,
     discovery_key: DiscoveryKey,
     local_id: usize,
+    #[cfg(feature = "v9")]
     extensions: Extensions,
     closed: Arc<AtomicBool>,
 }
@@ -116,6 +118,7 @@ impl Channel {
     }
 
     /// Register a protocol extension.
+    #[cfg(feature = "v9")]
     pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
         self.extensions.register(name.to_string()).await
     }
@@ -202,9 +205,11 @@ impl Stream for Channel {
                 Some(ref mut inbound_rx) => {
                     let message = ready!(Pin::new(inbound_rx).poll_next(cx));
                     match message {
+                        #[cfg(feature = "v9")]
                         Some(Message::Extension(msg)) => {
                             this.extensions.on_message(msg);
                         }
+                        #[cfg(feature = "v9")]
                         Some(Message::Options(ref msg)) => {
                             this.extensions.on_remote_update(msg.extensions.clone());
                             return Poll::Ready(message);
@@ -335,11 +340,10 @@ impl ChannelHandle {
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
-            outbound_tx: outbound_tx.clone(),
+            outbound_tx,
             discovery_key: self.discovery_key,
             key: local_state.key,
             local_id: local_state.local_id,
-            extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
             closed: self.closed.clone(),
         };
         self.inbound_tx = Some(inbound_tx);

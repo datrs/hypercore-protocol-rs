@@ -1,8 +1,5 @@
 use crate::constants::MAX_MESSAGE_SIZE;
-#[cfg(feature = "v10")]
-use crate::message_v10::{ChannelMessage, ExtensionMessage, Message};
-#[cfg(feature = "v9")]
-use crate::message_v9::{ChannelMessage, ExtensionMessage, Message};
+use crate::message::{ChannelMessage, ExtensionMessage, Message};
 use crate::schema::*;
 use async_channel::{Receiver, Sender};
 use futures_lite::{ready, AsyncRead, AsyncWrite, FutureExt, Stream};
@@ -20,26 +17,11 @@ pub struct Extensions {
     channel: u64,
     local_ids: Vec<String>,
     remote_ids: Vec<String>,
-    #[cfg(feature = "v9")]
     outbound_tx: Sender<ChannelMessage>,
-    #[cfg(feature = "v10")]
-    outbound_tx: Sender<Vec<ChannelMessage>>,
 }
 
 impl Extensions {
-    #[cfg(feature = "v9")]
     pub fn new(outbound_tx: Sender<ChannelMessage>, channel: u64) -> Self {
-        Self {
-            channel,
-            extensions: HashMap::new(),
-            local_ids: vec![],
-            remote_ids: vec![],
-            outbound_tx,
-        }
-    }
-
-    #[cfg(feature = "v10")]
-    pub fn new(outbound_tx: Sender<Vec<ChannelMessage>>, channel: u64) -> Self {
         Self {
             channel,
             extensions: HashMap::new(),
@@ -81,11 +63,7 @@ impl Extensions {
             ack: None,
         };
         let message = ChannelMessage::new(self.channel, Message::Options(message));
-
-        #[cfg(feature = "v9")]
         self.outbound_tx.send(message).await.unwrap();
-        #[cfg(feature = "v10")]
-        self.outbound_tx.send(vec![message]).await.unwrap();
 
         extension
     }
@@ -142,10 +120,7 @@ pub struct Extension {
     name: String,
     channel: u64,
     local_id: u64,
-    #[cfg(feature = "v9")]
     outbound_tx: Sender<ChannelMessage>,
-    #[cfg(feature = "v10")]
-    outbound_tx: Sender<Vec<ChannelMessage>>,
     inbound_rx: Receiver<Vec<u8>>,
     write_state: WriteState,
     read_state: Option<Vec<u8>>,
@@ -185,19 +160,10 @@ impl std::fmt::Debug for WriteState {
 
 impl Extension {
     /// Send a message
-    #[cfg(feature = "v9")]
     pub async fn send(&self, message: Vec<u8>) {
         let message = ExtensionMessage::new(self.local_id, message);
         let message = ChannelMessage::new(self.channel, Message::Extension(message));
         self.outbound_tx.send(message).await.unwrap()
-    }
-
-    /// Send a message
-    #[cfg(feature = "v10")]
-    pub async fn send(&self, message: Vec<u8>) {
-        let message = ExtensionMessage::new(self.local_id, message);
-        let message = ChannelMessage::new(self.channel, Message::Extension(message));
-        self.outbound_tx.send(vec![message]).await.unwrap()
     }
 
     fn send_pinned(&self, message: Vec<u8>) -> SendFuture {
@@ -209,24 +175,12 @@ impl Extension {
     }
 }
 
-#[cfg(feature = "v9")]
 pub async fn send_message(
     sender: Sender<ChannelMessage>,
     message: ChannelMessage,
 ) -> io::Result<()> {
     sender
         .send(message)
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Interrupted, format!("Channel error: {}", e)))
-}
-
-#[cfg(feature = "v10")]
-pub async fn send_message(
-    sender: Sender<Vec<ChannelMessage>>,
-    message: ChannelMessage,
-) -> io::Result<()> {
-    sender
-        .send(vec![message])
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::Interrupted, format!("Channel error: {}", e)))
 }

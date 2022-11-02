@@ -1,3 +1,4 @@
+#![cfg(feature = "v9")]
 #![allow(dead_code, unused_imports)]
 
 use async_std::net::TcpStream;

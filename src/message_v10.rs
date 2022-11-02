@@ -334,13 +334,13 @@ pub enum Message {
     Unwant(Unwant),
     Bitfield(Bitfield),
     Range(Range),
+    Extension(Extension),
 
     // TODO: Convert this legacy stuff:
     Options(Options),
     Status(Status),
     Have(Have),
     Unhave(Unhave),
-    Extension(ExtensionMessage),
 }
 
 impl Message {
@@ -356,6 +356,7 @@ impl Message {
             Self::Unwant(_) => 6,
             Self::Bitfield(_) => 7,
             Self::Range(_) => 8,
+            Self::Extension(_) => 9,
             value => unimplemented!("{} does not have a type", value),
         }
     }
@@ -373,6 +374,7 @@ impl Message {
             6 => Ok(Self::Unwant(state.decode(buf))),
             7 => Ok(Self::Bitfield(state.decode(buf))),
             8 => Ok(Self::Range(state.decode(buf))),
+            9 => Ok(Self::Extension(state.decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Invalid message type: {}", typ),
@@ -394,6 +396,7 @@ impl Message {
             Self::Unwant(ref message) => state.preencode(message),
             Self::Bitfield(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
+            Self::Extension(ref message) => state.preencode(message),
             // TODO: The rest
             value => unimplemented!("{} can not be pre-encoded", value),
         }
@@ -413,6 +416,7 @@ impl Message {
             Self::Unwant(ref message) => state.encode(message, buf),
             Self::Bitfield(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
+            Self::Extension(ref message) => state.encode(message, buf),
             // TODO: The rest
             value => unimplemented!("{} can not be encoded", value),
         }
@@ -579,63 +583,6 @@ impl Encoder for ChannelMessage {
             self.message.encode(state, buf);
             state.start
         };
-        Ok(len)
-    }
-}
-
-/// A extension message.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExtensionMessage {
-    /// ID of this extension
-    pub id: u64,
-    /// Message content
-    pub message: Vec<u8>,
-}
-
-impl ExtensionMessage {
-    /// Create a new extension message.
-    pub fn new(id: u64, message: Vec<u8>) -> Self {
-        Self { id, message }
-    }
-
-    /// Decode an extension message from a buffer.
-    fn decode(buf: &[u8]) -> io::Result<Self> {
-        if buf.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Extension message may not be empty",
-            ));
-        }
-        let mut id: u64 = 0;
-        // TODO:
-        let id_len = 0;
-        // let id_len = varinteger::decode(&buf, &mut id);
-        Ok(Self {
-            id,
-            message: buf[id_len..].to_vec(),
-        })
-    }
-}
-
-impl Encoder for ExtensionMessage {
-    fn encoded_len(&mut self) -> usize {
-        // TODO
-        // let id_len = varinteger::length(self.id);
-        let id_len = 0;
-        id_len + self.message.len()
-    }
-
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        // TODO:
-        let id_len = 0;
-        // let id_len = varinteger::length(self.id);
-        let len = self.message.len() + id_len;
-        if buf.len() < len {
-            return Err(EncodeError::new(len));
-        }
-        // TODO:
-        // varinteger::encode(self.id, &mut buf[..id_len]);
-        buf[id_len..len].copy_from_slice(&self.message[..]);
         Ok(len)
     }
 }

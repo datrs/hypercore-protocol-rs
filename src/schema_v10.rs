@@ -475,6 +475,30 @@ impl CompactEncoding<Range> for State {
     }
 }
 
+/// Type 9 Extension
+#[derive(Debug, Clone, PartialEq)]
+pub struct Extension {
+    pub name: String,
+    pub message: Vec<u8>,
+}
+impl CompactEncoding<Extension> for State {
+    fn preencode(&mut self, value: &Extension) {
+        self.preencode(&value.name);
+        self.preencode_raw_buffer(&value.message);
+    }
+
+    fn encode(&mut self, value: &Extension, buffer: &mut [u8]) {
+        self.encode(&value.name, buffer);
+        self.encode_raw_buffer(&value.message, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Extension {
+        let name: String = self.decode(buffer);
+        let message: Vec<u8> = self.decode_raw_buffer(buffer);
+        Extension { name, message }
+    }
+}
+
 /// TODO: Remove this legacy stuff below
 
 /// type=1, overall feed options. can be sent multiple times

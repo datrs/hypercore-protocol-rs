@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
+#[cfg(feature = "v9")]
 use crate::extension::{Extension, Extensions};
 use crate::message::{EncodeError, FrameType};
 #[cfg(feature = "v10")]
@@ -132,6 +133,7 @@ pub struct Protocol<IO> {
     outbound_tx: Sender<Vec<ChannelMessage>>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
+    #[cfg(feature = "v9")]
     extensions: Extensions,
 }
 
@@ -178,7 +180,6 @@ where
             state: State::NotInitialized,
             channels: ChannelMap::new(),
             handshake: None,
-            extensions: Extensions::new(outbound_tx.clone(), 0),
             command_rx,
             command_tx: CommandTx(command_tx),
             outbound_tx,
@@ -235,6 +236,7 @@ where
     }
 
     /// Register a protocol extension on the stream.
+    #[cfg(feature = "v9")]
     pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
         self.extensions.register(name.to_string()).await
     }
