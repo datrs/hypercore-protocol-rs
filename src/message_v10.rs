@@ -330,6 +330,7 @@ pub enum Message {
     Cancel(Cancel),
     Data(Data),
     NoData(NoData),
+    Want(Want),
     Range(Range),
 
     // TODO: Convert this legacy stuff:
@@ -337,7 +338,6 @@ pub enum Message {
     Status(Status),
     Have(Have),
     Unhave(Unhave),
-    Want(Want),
     Unwant(Unwant),
     Extension(ExtensionMessage),
 }
@@ -351,6 +351,7 @@ impl Message {
             Self::Cancel(_) => 2,
             Self::Data(_) => 3,
             Self::NoData(_) => 4,
+            Self::Want(_) => 5,
             Self::Range(_) => 8,
             value => unimplemented!("{} does not have a type", value),
         }
@@ -365,6 +366,7 @@ impl Message {
             2 => Ok(Self::Cancel(state.decode(buf))),
             3 => Ok(Self::Data(state.decode(buf))),
             4 => Ok(Self::NoData(state.decode(buf))),
+            5 => Ok(Self::Want(state.decode(buf))),
             8 => Ok(Self::Range(state.decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -383,6 +385,7 @@ impl Message {
             Self::Cancel(ref message) => state.preencode(message),
             Self::Data(ref message) => state.preencode(message),
             Self::NoData(ref message) => state.preencode(message),
+            Self::Want(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             // TODO: The rest
             value => unimplemented!("{} can not be pre-encoded", value),
@@ -399,6 +402,7 @@ impl Message {
             Self::Cancel(ref message) => state.encode(message, buf),
             Self::Data(ref message) => state.encode(message, buf),
             Self::NoData(ref message) => state.encode(message, buf),
+            Self::Want(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             // TODO: The rest
             value => unimplemented!("{} can not be encoded", value),

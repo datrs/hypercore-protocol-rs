@@ -51,41 +51,19 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     assert_eq!(channel_a.discovery_key(), channel_b.discovery_key());
 
-    channel_a
-        .want(Want {
-            start: 0,
-            length: Some(10),
-        })
-        .await?;
+    channel_a.want(want(0, 10)).await?;
 
-    channel_b
-        .want(Want {
-            start: 10,
-            length: Some(5),
-        })
-        .await?;
+    channel_b.want(want(10, 5)).await?;
 
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
 
     let channel_event_b = channel_b.next().await;
-    assert_eq!(
-        channel_event_b,
-        Some(Message::Want(Want {
-            start: 0,
-            length: Some(10)
-        }))
-    );
+    assert_eq!(channel_event_b, Some(Message::Want(want(0, 10))));
     // eprintln!("channel_event_b: {:?}", channel_event_b);
 
     let channel_event_a = channel_a.next().await;
-    assert_eq!(
-        channel_event_a,
-        Some(Message::Want(Want {
-            start: 10,
-            length: Some(5)
-        }))
-    );
+    assert_eq!(channel_event_a, Some(Message::Want(want(10, 5))));
 
     channel_a.close().await?;
     channel_b.close().await?;
@@ -153,17 +131,17 @@ async fn open_close_channels() -> anyhow::Result<()> {
     assert_eq!(channels_a.len(), 1);
     assert_eq!(channels_b.len(), 1);
 
-    let res = channel_a1.want(want(1)).await;
+    let res = channel_a1.want(want(0, 1)).await;
     assert!(matches!(res, Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted));
 
-    let res = channel_b1.want(want(2)).await;
+    let res = channel_b1.want(want(0, 2)).await;
     assert!(matches!(res, Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted));
 
     // Test that channel 2 still works
-    let res = channel_a2.want(want(10)).await;
+    let res = channel_a2.want(want(0, 10)).await;
     assert!(matches!(res, Ok(())));
 
-    let res = channel_b2.want(want(20)).await;
+    let res = channel_b2.want(want(0, 20)).await;
     assert!(matches!(res, Ok(())));
 
     // Check that the message arrives.
@@ -181,17 +159,23 @@ async fn open_close_channels() -> anyhow::Result<()> {
     let msg_a = channel_a2.next().await;
     let msg_b = channel_b2.next().await;
 
-    assert_eq!(msg_a, Some(Message::Want(want(20))));
-    assert_eq!(msg_b, Some(Message::Want(want(10))));
+    assert_eq!(msg_a, Some(Message::Want(want(0, 20))));
+    assert_eq!(msg_b, Some(Message::Want(want(0, 10))));
 
     eprintln!("all good!");
 
     Ok(())
 }
 
-fn want(len: u64) -> Want {
+#[cfg(feature = "v9")]
+fn want(start: u64, len: u64) -> Want {
     Want {
-        start: 0,
+        start,
         length: Some(len),
     }
+}
+
+#[cfg(feature = "v10")]
+fn want(start: u64, length: u64) -> Want {
+    Want { start, length }
 }

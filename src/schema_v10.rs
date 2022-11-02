@@ -359,35 +359,26 @@ impl CompactEncoding<NoData> for State {
     }
 }
 
-/// Type=5, Want
+/// Type 5, Want
 #[derive(Debug, Clone, PartialEq)]
 pub struct Want {
     pub start: u64,
-    pub length: Option<u64>,
+    pub length: u64,
 }
 impl CompactEncoding<Want> for State {
     fn preencode(&mut self, value: &Want) {
         self.preencode(&value.start);
-        if let Some(length) = &value.length {
-            self.preencode(length);
-        }
+        self.preencode(&value.length);
     }
 
     fn encode(&mut self, value: &Want, buffer: &mut [u8]) {
         self.encode(&value.start, buffer);
-        if let Some(length) = &value.length {
-            self.encode(length, buffer);
-        }
+        self.encode(&value.length, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Want {
         let start: u64 = self.decode(buffer);
-        let length: Option<u64> = if self.start < self.end {
-            let length: u64 = self.decode(buffer);
-            Some(length)
-        } else {
-            None
-        };
+        let length: u64 = self.decode(buffer);
         Want { start, length }
     }
 }
