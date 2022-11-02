@@ -407,6 +407,31 @@ impl CompactEncoding<Unwant> for State {
     }
 }
 
+/// Type 7  Bitfield
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bitfield {
+    pub start: u64,
+    pub bitfield: Vec<u32>,
+}
+impl CompactEncoding<Bitfield> for State {
+    fn preencode(&mut self, value: &Bitfield) {
+        self.preencode(&value.start);
+        self.preencode(&value.bitfield);
+    }
+
+    fn encode(&mut self, value: &Bitfield, buffer: &mut [u8]) {
+        self.encode(&value.start, buffer);
+        self.encode(&value.bitfield, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Bitfield {
+        let start: u64 = self.decode(buffer);
+        let bitfield: Vec<u32> = self.decode(buffer);
+        Bitfield { start, bitfield }
+    }
+}
+
+/// Type 8 Range
 #[derive(Debug, Clone, PartialEq)]
 pub struct Range {
     pub drop: bool,

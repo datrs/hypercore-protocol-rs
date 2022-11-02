@@ -332,6 +332,7 @@ pub enum Message {
     NoData(NoData),
     Want(Want),
     Unwant(Unwant),
+    Bitfield(Bitfield),
     Range(Range),
 
     // TODO: Convert this legacy stuff:
@@ -353,6 +354,7 @@ impl Message {
             Self::NoData(_) => 4,
             Self::Want(_) => 5,
             Self::Unwant(_) => 6,
+            Self::Bitfield(_) => 7,
             Self::Range(_) => 8,
             value => unimplemented!("{} does not have a type", value),
         }
@@ -369,6 +371,7 @@ impl Message {
             4 => Ok(Self::NoData(state.decode(buf))),
             5 => Ok(Self::Want(state.decode(buf))),
             6 => Ok(Self::Unwant(state.decode(buf))),
+            7 => Ok(Self::Bitfield(state.decode(buf))),
             8 => Ok(Self::Range(state.decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -389,6 +392,7 @@ impl Message {
             Self::NoData(ref message) => state.preencode(message),
             Self::Want(ref message) => state.preencode(message),
             Self::Unwant(ref message) => state.preencode(message),
+            Self::Bitfield(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             // TODO: The rest
             value => unimplemented!("{} can not be pre-encoded", value),
@@ -407,6 +411,7 @@ impl Message {
             Self::NoData(ref message) => state.encode(message, buf),
             Self::Want(ref message) => state.encode(message, buf),
             Self::Unwant(ref message) => state.encode(message, buf),
+            Self::Bitfield(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             // TODO: The rest
             value => unimplemented!("{} can not be encoded", value),
