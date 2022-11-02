@@ -383,6 +383,30 @@ impl CompactEncoding<Want> for State {
     }
 }
 
+/// Type 6 un-want
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unwant {
+    pub start: u64,
+    pub length: u64,
+}
+impl CompactEncoding<Unwant> for State {
+    fn preencode(&mut self, value: &Unwant) {
+        self.preencode(&value.start);
+        self.preencode(&value.length);
+    }
+
+    fn encode(&mut self, value: &Unwant, buffer: &mut [u8]) {
+        self.encode(&value.start, buffer);
+        self.encode(&value.length, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Unwant {
+        let start: u64 = self.decode(buffer);
+        let length: u64 = self.decode(buffer);
+        Unwant { start, length }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Range {
     pub drop: bool,
@@ -458,13 +482,5 @@ pub struct Have {
 pub struct Unhave {
     pub start: u64,
     /// defaults to 1
-    pub length: ::std::option::Option<u64>,
-}
-
-/// type=6, what don't we want anymore?
-#[derive(Debug, Clone, PartialEq)]
-pub struct Unwant {
-    pub start: u64,
-    /// defaults to Infinity or feed.length (if not live)
     pub length: ::std::option::Option<u64>,
 }
