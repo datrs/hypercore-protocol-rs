@@ -7,8 +7,8 @@ use hypercore::{
 pub struct Open {
     pub channel: u64,
     pub protocol: String,
-    pub discovery_key: std::vec::Vec<u8>,
-    pub capability: ::std::option::Option<std::vec::Vec<u8>>,
+    pub discovery_key: Vec<u8>,
+    pub capability: Option<Vec<u8>>,
 }
 
 impl CompactEncoding<Open> for State {
@@ -213,6 +213,27 @@ impl CompactEncoding<Request> for State {
             seek,
             upgrade,
         }
+    }
+}
+
+/// Type 2, Cancel a request based on its id
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cancel {
+    pub request: u64,
+}
+
+impl CompactEncoding<Cancel> for State {
+    fn preencode(&mut self, value: &Cancel) {
+        self.preencode(&value.request);
+    }
+
+    fn encode(&mut self, value: &Cancel, buffer: &mut [u8]) {
+        self.encode(&value.request, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Cancel {
+        let request: u64 = self.decode(buffer);
+        Cancel { request }
     }
 }
 
@@ -434,12 +455,4 @@ pub struct Unwant {
     pub start: u64,
     /// defaults to Infinity or feed.length (if not live)
     pub length: ::std::option::Option<u64>,
-}
-
-/// type=8, cancel a request
-#[derive(Debug, Clone, PartialEq)]
-pub struct Cancel {
-    pub index: u64,
-    pub bytes: ::std::option::Option<u64>,
-    pub hash: ::std::option::Option<bool>,
 }

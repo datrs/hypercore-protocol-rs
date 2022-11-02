@@ -327,6 +327,7 @@ pub enum Message {
     Close(Close),
     Synchronize(Synchronize),
     Request(Request),
+    Cancel(Cancel),
     Data(Data),
     Range(Range),
 
@@ -337,7 +338,6 @@ pub enum Message {
     Unhave(Unhave),
     Want(Want),
     Unwant(Unwant),
-    Cancel(Cancel),
     Extension(ExtensionMessage),
 }
 
@@ -347,6 +347,7 @@ impl Message {
         match self {
             Self::Synchronize(_) => 0,
             Self::Request(_) => 1,
+            Self::Cancel(_) => 2,
             Self::Data(_) => 3,
             Self::Range(_) => 8,
             value => unimplemented!("{} does not have a type", value),
@@ -359,6 +360,7 @@ impl Message {
         let message = match typ {
             0 => Ok(Self::Synchronize(state.decode(buf))),
             1 => Ok(Self::Request(state.decode(buf))),
+            2 => Ok(Self::Cancel(state.decode(buf))),
             3 => Ok(Self::Data(state.decode(buf))),
             8 => Ok(Self::Range(state.decode(buf))),
             _ => Err(io::Error::new(
@@ -375,6 +377,7 @@ impl Message {
             Self::Open(ref message) => state.preencode(message),
             Self::Synchronize(ref message) => state.preencode(message),
             Self::Request(ref message) => state.preencode(message),
+            Self::Cancel(ref message) => state.preencode(message),
             Self::Data(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             // TODO: The rest
@@ -389,6 +392,7 @@ impl Message {
             Self::Open(ref message) => state.encode(message, buf),
             Self::Synchronize(ref message) => state.encode(message, buf),
             Self::Request(ref message) => state.encode(message, buf),
+            Self::Cancel(ref message) => state.encode(message, buf),
             Self::Data(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             // TODO: The rest
