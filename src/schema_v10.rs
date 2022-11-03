@@ -54,29 +54,21 @@ impl CompactEncoding<Open> for State {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Close {
-    pub discovery_key: Option<Vec<u8>>,
+    pub channel: u64,
 }
 
 impl CompactEncoding<Close> for State {
     fn preencode(&mut self, value: &Close) {
-        if let Some(discovery_key) = value.discovery_key.as_ref() {
-            self.preencode(discovery_key);
-        }
+        self.preencode(&value.channel);
     }
 
     fn encode(&mut self, value: &Close, buffer: &mut [u8]) {
-        if let Some(discovery_key) = value.discovery_key.as_ref() {
-            self.encode(discovery_key, buffer);
-        }
+        self.encode(&value.channel, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Close {
-        let discovery_key: Option<Vec<u8>> = if buffer.len() > 0 {
-            Some(self.decode(buffer))
-        } else {
-            None
-        };
-        Close { discovery_key }
+        let channel: u64 = self.decode(buffer);
+        Close { channel }
     }
 }
 

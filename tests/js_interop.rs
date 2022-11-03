@@ -717,6 +717,8 @@ where
                     hypercore.info()
                 };
                 if message.start == 0 && message.length == info.contiguous_length {
+                    // Let's sleep here for a while so that close messages can pass
+                    async_std::task::sleep(Duration::from_millis(100)).await;
                     return Ok(true);
                 }
             }

@@ -203,7 +203,7 @@ impl Channel {
             return Ok(());
         }
         let close = Close {
-            discovery_key: None,
+            channel: self.local_id as u64,
         };
         self.send(Message::Close(close)).await?;
         self.closed.store(true, Ordering::SeqCst);

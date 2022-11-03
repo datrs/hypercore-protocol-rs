@@ -348,7 +348,7 @@ where
         }
     }
 
-    fn on_outbound_message(&mut self, message: &ChannelMessage) -> bool {
+    fn on_outbound_message(&mut self, message: &ChannelMessage) {
         // If message is close, close the local channel.
         if let ChannelMessage {
             channel,
@@ -357,9 +357,6 @@ where
         } = message
         {
             self.close_local(*channel);
-            false
-        } else {
-            true
         }
     }
 
@@ -397,10 +394,9 @@ where
                 #[cfg(feature = "v10")]
                 Poll::Ready(Some(messages)) => {
                     if !messages.is_empty() {
-                        let messages: Vec<ChannelMessage> = messages
-                            .into_iter()
-                            .filter(|message| self.on_outbound_message(&message))
-                            .collect();
+                        messages
+                            .iter()
+                            .for_each(|message| self.on_outbound_message(&message));
                         let frame = Frame::MessageBatch(messages);
                         self.write_state.park_frame(frame);
                     }
@@ -435,6 +431,7 @@ where
                                     // here post-hoc.
                                     let buf = self.read_state.decrypt_buf(&buf)?;
                                     let frame = Frame::decode(&buf, &FrameType::Message)?;
+                                    self.on_inbound_frame(frame)?;
                                     continue;
                                 }
                             }

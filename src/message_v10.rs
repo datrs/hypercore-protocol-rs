@@ -152,7 +152,7 @@ impl Frame {
     }
 
     fn decode_message(buf: &[u8]) -> Result<(Self, usize), io::Error> {
-        if buf.len() >= 5 && buf[0] == 0x00 {
+        if buf.len() >= 3 && buf[0] == 0x00 {
             if buf[1] == 0x00 {
                 // Batch of messages
                 let mut messages: Vec<ChannelMessage> = vec![];
@@ -194,6 +194,10 @@ impl Frame {
                 // Open message
                 let (channel_message, length) = ChannelMessage::decode_open_message(&buf[2..])?;
                 Ok((Frame::MessageBatch(vec![channel_message]), length))
+            } else if buf[1] == 0x03 {
+                // Close message
+                let (channel_message, length) = ChannelMessage::decode_close_message(&buf[2..])?;
+                Ok((Frame::MessageBatch(vec![channel_message]), length))
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -228,6 +232,9 @@ impl Frame {
                 if messages.len() == 1 {
                     if let Message::Open(_) = &messages[0].message {
                         // This is a special case with 0x00, 0x01 intro bytes
+                        state.end += 2 + &messages[0].encoded_len();
+                    } else if let Message::Close(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x03 intro bytes
                         state.end += 2 + &messages[0].encoded_len();
                     } else {
                         state.preencode(&messages[0].channel);
@@ -288,6 +295,11 @@ impl Encoder for Frame {
                         // This is a special case with 0x00, 0x01 intro bytes
                         state.encode(&(0 as u8), buf);
                         state.encode(&(1 as u8), buf);
+                        state.start += messages[0].encode(&mut buf[state.start..])?;
+                    } else if let Message::Close(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x03 intro bytes
+                        state.encode(&(0 as u8), buf);
+                        state.encode(&(3 as u8), buf);
                         state.start += messages[0].encode(&mut buf[state.start..])?;
                     } else {
                         state.encode(&messages[0].channel, buf);
@@ -381,6 +393,7 @@ impl Message {
     pub fn preencode(&mut self, state: &mut State) -> usize {
         match self {
             Self::Open(ref message) => state.preencode(message),
+            Self::Close(ref message) => state.preencode(message),
             Self::Synchronize(ref message) => state.preencode(message),
             Self::Request(ref message) => state.preencode(message),
             Self::Cancel(ref message) => state.preencode(message),
@@ -391,7 +404,6 @@ impl Message {
             Self::Bitfield(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             Self::Extension(ref message) => state.preencode(message),
-            value => unimplemented!("{} can not be pre-encoded", value),
         }
         state.end
     }
@@ -400,6 +412,7 @@ impl Message {
     pub fn encode(&mut self, state: &mut State, buf: &mut [u8]) -> usize {
         match self {
             Self::Open(ref message) => state.encode(message, buf),
+            Self::Close(ref message) => state.encode(message, buf),
             Self::Synchronize(ref message) => state.encode(message, buf),
             Self::Request(ref message) => state.encode(message, buf),
             Self::Cancel(ref message) => state.encode(message, buf),
@@ -410,7 +423,6 @@ impl Message {
             Self::Bitfield(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             Self::Extension(ref message) => state.encode(message, buf),
-            value => unimplemented!("{} can not be encoded", value),
         }
         state.start
     }
@@ -499,6 +511,29 @@ impl ChannelMessage {
         ))
     }
 
+    /// Decodes a close message for a channel message from a buffer.
+    ///
+    /// Note: `buf` has to have a valid length, and without the 3 LE
+    /// bytes in it
+    pub fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
+        if buf.len() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "received too short Close message",
+            ));
+        }
+        let mut state = State::new_with_start_and_end(0, buf.len());
+        let close_msg: Close = state.decode(buf);
+        Ok((
+            Self {
+                channel: close_msg.channel,
+                message: Message::Close(close_msg),
+                state: None,
+            },
+            state.start,
+        ))
+    }
+
     /// Decode a normal channel message from a buffer.
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
@@ -535,8 +570,11 @@ impl ChannelMessage {
                 self.message.preencode(&mut state);
                 state
             } else if let Message::Close(_) = self.message {
-                // Close message isn't sent
-                State::new()
+                // Close message doesn't have a type
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L162
+                let mut state = State::new();
+                self.message.preencode(&mut state);
+                state
             } else {
                 // The header is the channel id uint followed by message type uint
                 // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
@@ -567,7 +605,8 @@ impl Encoder for ChannelMessage {
             self.message.encode(state, buf);
             state.start
         } else if let Message::Close(_) = self.message {
-            // Close message isn't sent
+            // Close message is different in that the type byte is missing
+            self.message.encode(state, buf);
             state.start
         } else {
             let typ = self.message.typ();
