@@ -1,5 +1,5 @@
 use crate::constants::MAX_MESSAGE_SIZE;
-use crate::message::{ChannelMessage, ExtensionMessage, Message};
+use crate::message_v9::{ChannelMessage, ExtensionMessage, Message};
 use crate::schema::*;
 use async_channel::{Receiver, Sender};
 use futures_lite::{ready, AsyncRead, AsyncWrite, FutureExt, Stream};

@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
-use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
+use crate::constants::DEFAULT_KEEPALIVE;
+#[cfg(feature = "v10")]
+use crate::constants::PROTOCOL_NAME;
 #[cfg(feature = "v9")]
 use crate::extension::{Extension, Extensions};
 use crate::message::{EncodeError, FrameType};
@@ -104,6 +106,7 @@ impl fmt::Debug for State {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
+            #[cfg(feature = "v10")]
             State::SecretStream(_) => write!(f, "SecretStream"),
             State::Established => write!(f, "Established"),
         }
@@ -410,11 +413,16 @@ where
 
     fn on_inbound_frame(&mut self, frame: Frame) -> Result<()> {
         match frame {
+            #[cfg(feature = "v9")]
+            Frame::Raw(buf) => match self.state {
+                State::Handshake(_) => self.on_handshake_message(buf),
+                _ => unreachable!("May not receive raw frames outside of handshake state"),
+            },
+            #[cfg(feature = "v10")]
             Frame::RawBatch(raw_batch) => {
                 for buf in raw_batch {
                     match self.state {
                         State::Handshake(_) => self.on_handshake_message(buf)?,
-                        #[cfg(feature = "v10")]
                         State::SecretStream(_) => self.on_secret_stream_message(buf)?,
                         _ => unreachable!(
                             "May not receive raw frames outside of handshake state, was {:?}",

@@ -16,6 +16,7 @@ use crate::message::FrameType;
 use crate::message_v10::Frame;
 #[cfg(feature = "v9")]
 use crate::message_v9::Frame;
+#[cfg(feature = "v10")]
 use crate::util::stat_uint24_le;
 use std::time::Duration;
 
@@ -65,6 +66,7 @@ enum Step {
         body_len: usize,
     },
     /// Multiple messages one after another
+    #[cfg(feature = "v10")]
     Batch,
 }
 
@@ -249,6 +251,7 @@ impl ReadState {
                         return Some(frame);
                     }
                 }
+                #[cfg(feature = "v10")]
                 Step::Batch => {
                     println!(
                         "reader.rs::process::Step::Batch total_len={}, self.start={}, self.end={}",

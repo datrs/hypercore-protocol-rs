@@ -74,6 +74,23 @@ impl Channel {
     }
 
     /// Send a message over the channel.
+    #[cfg(feature = "v9")]
+    pub async fn send(&mut self, message: Message) -> Result<()> {
+        if self.closed() {
+            return Err(Error::new(
+                ErrorKind::ConnectionAborted,
+                "Channel is closed",
+            ));
+        }
+        let message = ChannelMessage::new(self.local_id as u64, message);
+        self.outbound_tx
+            .send(message)
+            .await
+            .map_err(map_channel_err)
+    }
+
+    /// Send a message over the channel.
+    #[cfg(feature = "v10")]
     pub async fn send(&mut self, message: Message) -> Result<()> {
         if self.closed() {
             return Err(Error::new(

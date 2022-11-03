@@ -1,15 +1,21 @@
 // use async_std::io::{BufReader, BufWriter};
+#[cfg(feature = "v9")]
 use crate::constants::CAP_NS_BUF;
+#[cfg(feature = "v10")]
 use crate::noise::curve::CurveResolver;
+#[cfg(feature = "v9")]
+use crate::schema::NoisePayload;
+#[cfg(feature = "v10")]
 use crate::util::wrap_uint24_le;
 use blake2_rfc::blake2b::Blake2b;
 #[cfg(feature = "v9")]
 use prost::Message;
+#[cfg(feature = "v9")]
+use rand::Rng;
+#[cfg(feature = "v10")]
+use snow::resolvers::{DefaultResolver, FallbackResolver};
 pub use snow::Keypair;
-use snow::{
-    resolvers::{DefaultResolver, FallbackResolver},
-    Builder, Error as SnowError, HandshakeState,
-};
+use snow::{Builder, Error as SnowError, HandshakeState};
 use std::io::{Error, ErrorKind, Result};
 
 const CIPHERKEYLEN: usize = 32;

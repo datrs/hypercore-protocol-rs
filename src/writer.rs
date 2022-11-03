@@ -86,7 +86,7 @@ impl WriteState {
             return Ok(false);
         }
         let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len, len)?;
+        self.advance(len)?;
         Ok(true)
     }
 
