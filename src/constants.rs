@@ -14,4 +14,5 @@ pub const DEFAULT_KEEPALIVE: u32 = 10;
 pub const MAX_MESSAGE_SIZE: u64 = 1024 * 1024 * 4;
 
 /// v10: Protocol name
+#[cfg(feature = "v10")]
 pub const PROTOCOL_NAME: &str = "hypercore/alpha";

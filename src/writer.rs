@@ -227,6 +227,7 @@ impl WriteState {
         }
     }
 
+    #[cfg(feature = "v10")]
     fn safe_encrypted_len(&self, encoded_len: usize) -> usize {
         if let Some(cipher) = &self.cipher {
             #[cfg(feature = "v9")]

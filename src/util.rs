@@ -25,9 +25,11 @@ pub fn map_channel_err<T>(err: async_channel::SendError<T>) -> Error {
     )
 }
 
+#[cfg(feature = "v10")]
 pub const UINT_24_LENGTH: usize = 3;
 
 #[inline]
+#[cfg(feature = "v10")]
 pub fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
     let mut buf: Vec<u8> = vec![0; 3];
     let n = data.len();
@@ -37,6 +39,7 @@ pub fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
 }
 
 #[inline]
+#[cfg(feature = "v10")]
 pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
     buf[0] = (n & 255) as u8;
     buf[1] = ((n >> 8) & 255) as u8;
@@ -44,6 +47,7 @@ pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
 }
 
 #[inline]
+#[cfg(feature = "v10")]
 pub fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
     // FIXME: when to return None!
     let len =
