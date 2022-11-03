@@ -96,6 +96,34 @@ impl ReadState {
     where
         R: AsyncRead + Unpin,
     {
+        #[cfg(feature = "v9")]
+        loop {
+            if let Some(result) = self.process() {
+                return Poll::Ready(result);
+            }
+
+            let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
+                Poll::Ready(Ok(n)) if n > 0 => n,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                // If the reader is pending, poll the timeout.
+                Poll::Pending | Poll::Ready(Ok(_)) => {
+                    // Return Pending if the timeout is pending, or an error if the
+                    // timeout expired (i.e. returned Poll::Ready).
+                    return Pin::new(&mut self.timeout)
+                        .poll(cx)
+                        .map(|()| Err(Error::new(ErrorKind::TimedOut, "Remote timed out")));
+                }
+            };
+
+            let end = self.end + n;
+            if let Some(ref mut cipher) = self.cipher {
+                cipher.apply(&mut self.buf[self.end..end]);
+            }
+            self.end = end;
+            self.timeout.reset(TIMEOUT);
+        }
+
+        #[cfg(feature = "v10")]
         loop {
             println!("reader.rs: poll_reader loop self.end={}", self.end);
             if let Some(result) = self.process() {
@@ -125,27 +153,19 @@ impl ReadState {
                 &self.buf[self.end..end]
             );
             if let Some(ref mut cipher) = self.cipher {
-                #[cfg(feature = "v9")]
-                {
-                    cipher.apply(&mut self.buf[self.end..end]);
-                    self.end = end;
+                let mut dec_end = self.end;
+                let mut enc_end = self.end;
+                // Go through the whole section, encrypt all sections if there are many
+                while enc_end < end {
+                    let (de, ee) = cipher.decrypt(&mut self.buf[enc_end..end])?;
+                    dec_end = enc_end + de;
+                    enc_end += ee;
                 }
-                #[cfg(feature = "v10")]
-                {
-                    let mut dec_end = self.end;
-                    let mut enc_end = self.end;
-                    // Go through the whole section, encrypt all sections if there are many
-                    while enc_end < end {
-                        let (de, ee) = cipher.decrypt(&mut self.buf[enc_end..end])?;
-                        dec_end = enc_end + de;
-                        enc_end += ee;
-                    }
-                    self.end = dec_end;
-                    println!(
+                self.end = dec_end;
+                println!(
                         "reader.rs: chunk ends at {}, encrypted portion ends at {}, decrypted ends at {}",
                         end, enc_end, dec_end
                     );
-                }
             } else {
                 self.end = end;
             }

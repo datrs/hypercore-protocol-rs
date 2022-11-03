@@ -86,7 +86,7 @@ impl WriteState {
             return Ok(false);
         }
         let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len)?;
+        self.advance(len);
         Ok(true)
     }
 
@@ -131,32 +131,34 @@ impl WriteState {
         }
     }
 
+    #[cfg(feature = "v10")]
     fn advance(&mut self, n: usize) -> std::result::Result<(), EncodeError> {
         let end = self.end + n;
 
         let encrypted_end = if let Some(ref mut cipher) = self.cipher {
-            #[cfg(feature = "v9")]
-            {
-                cipher.apply(&mut self.buf[self.end..end]);
-                end
-            }
-            #[cfg(feature = "v10")]
-            {
-                println!(
-                    "Writer::advance: encrypting buf range {}..{}({}): {:02X?}",
-                    self.end,
-                    end,
-                    end - self.end,
-                    &self.buf[self.end..end]
-                );
-                self.end + cipher.encrypt(&mut self.buf[self.end..end])?
-            }
+            println!(
+                "Writer::advance: encrypting buf range {}..{}({}): {:02X?}",
+                self.end,
+                end,
+                end - self.end,
+                &self.buf[self.end..end]
+            );
+            self.end + cipher.encrypt(&mut self.buf[self.end..end])?
         } else {
             end
         };
 
         self.end = encrypted_end;
         Ok(())
+    }
+
+    #[cfg(feature = "v9")]
+    fn advance(&mut self, n: usize) {
+        let end = self.end + n;
+        if let Some(ref mut cipher) = self.cipher {
+            cipher.apply(&mut self.buf[self.end..end]);
+        }
+        self.end = end;
     }
 
     #[cfg(feature = "v9")]
