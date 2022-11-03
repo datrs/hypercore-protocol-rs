@@ -70,21 +70,17 @@ impl DecryptCipher {
     pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<(usize, usize), EncodeError> {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
-            let mut to_decrypt = buf[header_len..header_len + body_len as usize].to_vec();
-            let tag = &self
-                .pull_stream
-                .pull(&mut to_decrypt, &[])
-                .map_err(|err| println!("pull_stream err, {}", err.to_string()))
-                .unwrap();
-            let decryptd_len = to_decrypt.len();
+            let (to_decrypt, tag) =
+                self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
+            let decrypted_len = to_decrypt.len();
             println!(
                 "DecryptCipher::decrypt: {} bytes decrypted into tag {:?} and message({}) {:02X?}",
                 buf.len(),
                 tag,
-                decryptd_len,
+                decrypted_len,
                 to_decrypt
             );
-            write_uint24_le(decryptd_len, buf);
+            write_uint24_le(decrypted_len, buf);
             let decrypted_end = 3 + to_decrypt.len();
             buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
             // Set extra bytes in the buffer to 0
@@ -94,6 +90,16 @@ impl DecryptCipher {
         } else {
             Err(EncodeError::new(buf.len()))
         }
+    }
+
+    pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<(Vec<u8>, Tag), EncodeError> {
+        let mut to_decrypt = buf.to_vec();
+        let tag = &self
+            .pull_stream
+            .pull(&mut to_decrypt, &[])
+            .map_err(|err| println!("pull_stream err, {}", err.to_string()))
+            .unwrap();
+        Ok((to_decrypt, *tag))
     }
 }
 

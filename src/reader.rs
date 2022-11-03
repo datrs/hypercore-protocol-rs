@@ -84,6 +84,19 @@ impl ReadState {
         self.cipher = Some(decrypt_cipher);
     }
 
+    /// Decrypts a given buf with stored cipher, if present. Used to correct
+    /// the rare mistake that more than two messages came in where the first
+    /// one created the cipher, and the next one should have been decrypted
+    /// but wasn't.
+    #[cfg(feature = "v10")]
+    pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+        if let Some(cipher) = self.cipher.as_mut() {
+            Ok(cipher.decrypt_buf(&buf)?.0)
+        } else {
+            Ok(buf.to_vec())
+        }
+    }
+
     pub fn set_frame_type(&mut self, frame_type: FrameType) {
         self.frame_type = frame_type;
     }

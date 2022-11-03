@@ -420,15 +420,36 @@ where
             },
             #[cfg(feature = "v10")]
             Frame::RawBatch(raw_batch) => {
+                let mut processed_state: Option<String> = None;
                 for buf in raw_batch {
+                    let state_name: String = format!("{:?}", self.state);
                     match self.state {
                         State::Handshake(_) => self.on_handshake_message(buf)?,
                         State::SecretStream(_) => self.on_secret_stream_message(buf)?,
+                        State::Established => {
+                            if let Some(processed_state) = processed_state.as_ref() {
+                                if processed_state == &format!("{:?}", State::SecretStream(None)) {
+                                    // This is the unlucky case where the batch had two or more messages where
+                                    // the first one was correctly identified as Raw but everything
+                                    // after that should have been decrypted and a MessageBatch. Correct the mistake
+                                    // here post-hoc.
+                                    let buf = self.read_state.decrypt_buf(&buf)?;
+                                    let frame = Frame::decode(&buf, &FrameType::Message)?;
+                                    continue;
+                                }
+                            }
+                            unreachable!(
+                                "May not receive raw frames in Established state"
+                            )
+                        }
                         _ => unreachable!(
-                            "May not receive raw frames outside of handshake state, was {:?}",
+                            "May not receive raw frames outside of handshake or secretstream state, was {:?}",
                             self.state
                         ),
                     };
+                    if processed_state.is_none() {
+                        processed_state = Some(state_name)
+                    }
                 }
                 Ok(())
             }
