@@ -81,7 +81,6 @@
 //!                         eprintln!("{} received message: {:?}", name, message);
 //!                     }
 //!                 });
-
 //!             },
 //!             _ => {}
 //!         }
