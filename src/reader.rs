@@ -138,12 +138,9 @@ impl ReadState {
 
         #[cfg(feature = "v10")]
         loop {
-            println!("reader.rs: poll_reader loop self.end={}", self.end);
             if let Some(result) = self.process() {
-                println!("reader.rs: returning Poll:Ready");
                 return Poll::Ready(result);
             }
-            println!("reader.rs: poll_reader, getting n");
             let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
                 Poll::Ready(Ok(n)) if n > 0 => n,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
@@ -158,13 +155,6 @@ impl ReadState {
             };
 
             let end = self.end + n;
-            println!(
-                "reader.rs: got n={}, start={}, end={}, data={:02X?}",
-                n,
-                self.end,
-                end,
-                &self.buf[self.end..end]
-            );
             if let Some(ref mut cipher) = self.cipher {
                 let mut dec_end = self.end;
                 let mut enc_end = self.end;
@@ -175,10 +165,6 @@ impl ReadState {
                     enc_end += ee;
                 }
                 self.end = dec_end;
-                println!(
-                        "reader.rs: chunk ends at {}, encrypted portion ends at {}, decrypted ends at {}",
-                        end, enc_end, dec_end
-                    );
             } else {
                 self.end = end;
             }
@@ -199,7 +185,6 @@ impl ReadState {
     }
 
     fn process(&mut self) -> Option<Result<Frame>> {
-        println!("reader.rs::process start={}, end={}", self.start, self.end);
         if self.start == self.end {
             return None;
         }
@@ -227,10 +212,6 @@ impl ReadState {
                 }
                 #[cfg(feature = "v10")]
                 Step::Header => {
-                    println!(
-                        "reader.rs::process::Step::Header self.start={}, self.end={}",
-                        self.start, self.end
-                    );
                     let stat = stat_uint24_le(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = stat {
                         if (self.start + header_len + body_len as usize) < self.end {
@@ -264,11 +245,6 @@ impl ReadState {
                     header_len,
                     body_len,
                 } => {
-                    println!(
-                        "reader.rs::process::Step::Body header_len={}, body_len={}, self.start={}, self.end={}",
-                        header_len, body_len, self.start, self.end
-                    );
-
                     let message_len = header_len + body_len;
                     if message_len > self.buf.len() {
                         self.buf.resize(message_len, 0u8);
@@ -286,12 +262,6 @@ impl ReadState {
                 }
                 #[cfg(feature = "v10")]
                 Step::Batch => {
-                    println!(
-                        "reader.rs::process::Step::Batch total_len={}, self.start={}, self.end={}",
-                        self.end - self.start,
-                        self.start,
-                        self.end
-                    );
                     let frame =
                         Frame::decode_multiple(&self.buf[self.start..self.end], &self.frame_type);
                     self.start = self.end;

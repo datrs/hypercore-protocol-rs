@@ -568,10 +568,6 @@ where
     fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
         // let channel_message = ChannelMessage::decode(buf)?;
         let (remote_id, message) = channel_message.into_split();
-        println!(
-            "protocol.rs::on_inbound_message, remote_id={}, message={:?}",
-            remote_id, message
-        );
         match message {
             Message::Open(msg) => self.on_open(remote_id, msg)?,
             Message::Close(msg) => self.on_close(remote_id, msg)?,

@@ -111,14 +111,12 @@ impl Frame {
                         let (frame, length) = Self::decode_message(
                             &buf[index + header_len..index + header_len + body_len as usize],
                         )?;
-                        println!(
-                            "Frame::decode_multiple, index={},len={}, frame_length={}, ",
-                            index,
-                            buf.len(),
-                            length
-                        );
                         if length != body_len as usize {
-                            println!("WARNING: Did not know what to do with all the bytes, got {} but decoded {}", body_len, length);
+                            log::warn!(
+                                "Did not know what to do with all the bytes, got {} but decoded {}",
+                                body_len,
+                                length
+                            );
                         }
                         if let Frame::MessageBatch(messages) = frame {
                             for message in messages {
@@ -163,10 +161,6 @@ impl Frame {
                 while state.start < state.end {
                     // Length of the message is inbetween here
                     let channel_message_length: usize = state.decode(&buf);
-                    println!(
-                        "CHL={}, CC={}, s={:?}",
-                        channel_message_length, current_channel, state
-                    );
                     if state.start + channel_message_length > state.end {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -539,7 +533,6 @@ impl ChannelMessage {
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
     pub fn decode(buf: &[u8], channel: u64) -> io::Result<(Self, usize)> {
-        println!("ChannelMessage::decode buf({}): {:02X?}", buf.len(), buf);
         if buf.len() <= 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -596,10 +589,8 @@ impl Encoder for ChannelMessage {
     }
 
     fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        println!("ChannelMessage::encode, {:02X?}", self.message);
         self.prepare_state();
         let state = self.state.as_mut().unwrap();
-        println!("ChannelMessage::encode, state found at {:?}", state);
         let len: usize = if let Message::Open(_) = self.message {
             // Open message is different in that the type byte is missing
             self.message.encode(state, buf);

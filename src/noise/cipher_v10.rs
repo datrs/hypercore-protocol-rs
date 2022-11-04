@@ -11,14 +11,10 @@ const KEY_LENGTH: usize = 32;
 const HEADER_MSG_LEN: usize = UINT_24_LENGTH + STREAM_ID_LENGTH + Header::BYTES;
 
 pub struct DecryptCipher {
-    is_initiator: bool,
-    handshake_hash: Vec<u8>,
     pull_stream: PullStream,
 }
 
 pub struct EncryptCipher {
-    is_initiator: bool,
-    handshake_hash: Vec<u8>,
     push_stream: PushStream,
 }
 
@@ -60,11 +56,7 @@ impl DecryptCipher {
             .try_into()
             .expect("header slice with incorrect length");
         let pull_stream = PullStream::init(Header::from(header), &key);
-        Ok(Self {
-            is_initiator,
-            handshake_hash,
-            pull_stream,
-        })
+        Ok(Self { pull_stream })
     }
 
     pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<(usize, usize), EncodeError> {
@@ -73,13 +65,6 @@ impl DecryptCipher {
             let (to_decrypt, tag) =
                 self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
             let decrypted_len = to_decrypt.len();
-            println!(
-                "DecryptCipher::decrypt: {} bytes decrypted into tag {:?} and message({}) {:02X?}",
-                buf.len(),
-                tag,
-                decrypted_len,
-                to_decrypt
-            );
             write_uint24_le(decrypted_len, buf);
             let decrypted_end = 3 + to_decrypt.len();
             buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
@@ -97,8 +82,8 @@ impl DecryptCipher {
         let tag = &self
             .pull_stream
             .pull(&mut to_decrypt, &[])
-            .map_err(|err| println!("pull_stream err, {}", err.to_string()))
-            .unwrap();
+            .map_err(|err| eprintln!("pull_stream err, {}", err.to_string()))
+            .unwrap(); // FIXME: This should return a more specific error than EncodeError
         Ok((to_decrypt, *tag))
     }
 }
@@ -124,14 +109,7 @@ impl EncryptCipher {
         let header = header.as_ref();
         header_message[UINT_24_LENGTH + STREAM_ID_LENGTH..].copy_from_slice(header);
         let msg = header_message.to_vec();
-        Ok((
-            Self {
-                is_initiator: handshake_result.is_initiator,
-                handshake_hash: handshake_result.handshake_hash.clone(),
-                push_stream,
-            },
-            msg,
-        ))
+        Ok((Self { push_stream }, msg))
     }
 
     /// Get the length needed for encryption, that includes padding.
@@ -148,22 +126,11 @@ impl EncryptCipher {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
             let mut to_encrypt = buf[header_len..header_len + body_len as usize].to_vec();
-            println!(
-                "EncryptCipher::encrypt: about to encrypt({})={:02X?}, header_len={}, body_len={}",
-                to_encrypt.len(),
-                to_encrypt,
-                header_len,
-                body_len,
-            );
             self.push_stream
                 .push(&mut to_encrypt, &[], Tag::Message)
-                .map_err(|err| println!("push_stream err, {}", err.to_string()))
-                .unwrap();
+                .map_err(|err| eprintln!("push_stream err, {}", err.to_string()))
+                .unwrap(); // FIXME: This should return a more specific error than EncodeError
             let encrypted_len = to_encrypt.len();
-            println!(
-                "EncryptCipher::encrypt: result({})={:02X?}",
-                encrypted_len, to_encrypt
-            );
             write_uint24_le(encrypted_len, buf);
             buf[header_len..header_len + encrypted_len].copy_from_slice(to_encrypt.as_slice());
             Ok(3 + encrypted_len)

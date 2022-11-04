@@ -317,9 +317,7 @@ impl Handshake {
             return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
         }
 
-        println!("handshake::read: msg({}): {:02X?}", msg.len(), msg);
-        let rx_len = self.recv(&msg)?;
-        println!("handshake::read: recv rx_len {}", rx_len);
+        let _rx_len = self.recv(&msg)?;
 
         if !self.is_initiator() && !self.did_receive {
             self.did_receive = true;
@@ -330,17 +328,7 @@ impl Handshake {
 
         let tx_buf = if self.is_initiator() {
             let tx_len = self.send()?;
-            println!(
-                "handshake::read: send tx_len {}: {:02X?}",
-                tx_len,
-                &self.tx_buf[..tx_len]
-            );
             let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
-            println!(
-                "handshake::read: send wrapped({}): {:02X?}",
-                wrapped.len(),
-                wrapped
-            );
             Some(wrapped)
         } else {
             None
@@ -360,11 +348,6 @@ impl Handshake {
             .expect("Could not read remote static key after handshake")
             .to_vec();
         self.result.handshake_hash = self.state.get_handshake_hash().to_vec();
-        println!(
-            "handshake::read: got handshake_hash({}): {:02X?}",
-            self.result.handshake_hash.len(),
-            self.result.handshake_hash
-        );
         self.complete = true;
         Ok(tx_buf)
     }
@@ -418,23 +401,11 @@ pub fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8
         REPLICATE_RESPONDER
     };
 
-    println!("handshake.rs: capability from seed: {:02X?}", seed);
-
     let mut hasher = Blake2b::with_key(32, handshake_hash);
     hasher.update(&seed);
     hasher.update(&key);
     let hash = hasher.finalize();
     let capability = hash.as_bytes().to_vec();
-    println!(
-        "handshake.rs: Created capability({}): {:02X?} from is_initator={}, key={:02X?}, handshake_hash({})={:02X?}",
-        capability.len(),
-        capability,
-        is_initiator,
-        key,
-        handshake_hash.len(),
-        handshake_hash
-    );
-
     capability
 }
 

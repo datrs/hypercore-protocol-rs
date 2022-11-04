@@ -97,10 +97,6 @@ impl WriteState {
     ) -> std::result::Result<bool, EncodeError> {
         let promised_len = frame.encoded_len();
         let padded_promised_len = self.safe_encrypted_len(promised_len);
-        println!(
-            "Writer::try_queue_direct, promised={}, with_padding={}",
-            promised_len, padded_promised_len
-        );
         if self.buf.len() < padded_promised_len {
             self.buf.resize(padded_promised_len, 0u8);
         }
@@ -136,13 +132,6 @@ impl WriteState {
         let end = self.end + n;
 
         let encrypted_end = if let Some(ref mut cipher) = self.cipher {
-            println!(
-                "Writer::advance: encrypting buf range {}..{}({}): {:02X?}",
-                self.end,
-                end,
-                end - self.end,
-                &self.buf[self.end..end]
-            );
             self.end + cipher.encrypt(&mut self.buf[self.end..end])?
         } else {
             end

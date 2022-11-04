@@ -35,11 +35,11 @@ const resultFile = `work/${testSet}/result.txt`;
 
 if (process.argv[2] === 'server') {
     runServer(isWriter, itemCount, itemSize, itemChar, testSet).then(_ => {
-        console.log("NODE: Server created");
+        // console.log("NODE: Server created");
     });
 } else if (process.argv[2] === 'client') {
     runClient(isWriter, itemCount, itemSize, itemChar, testSet).then(_ => {
-        console.log("NODE: client run");
+        // console.log("NODE: client run");
     });
 } else {
     console.error(`Invalid mode {}, only server/client supported`, process.argv[2]);
@@ -52,7 +52,7 @@ async function runServer(isWriter, itemCount, itemSize, itemChar, testSet) {
     const server = net.createServer(async socket => onconnection({ isInitiator, hypercore, socket, itemCount }))
     try {
       server.listen(port, hostname, async () => { const { address, port } = server.address()
-        console.error(`NODE: server listening on ${address}:${port}`)
+        // console.log(`NODE: server listening on ${address}:${port}`)
       });
     } catch (error) {
       console.error(`NODE: ${isInitiator} server listen got error`, error);
@@ -111,35 +111,35 @@ async function onconnection (opts) {
   const { isInitiator, hypercore, socket, itemCount } = opts
   const { remoteAddress, remotePort } = socket
   if (!isInitiator) {
-    console.error(`NODE: new connection from ${remoteAddress}:${remotePort}`)
+    // console.log(`NODE: new connection from ${remoteAddress}:${remotePort}`)
   }
   socket.on('close', () => {
     if (!isInitiator) {
-      console.error(`NODE: connection closed from ${remoteAddress}:${remotePort}`)
+      // console.log(`NODE: connection closed from ${remoteAddress}:${remotePort}`)
     } else {
-      console.error('NODE: connection closed from server')
+      // console.log('NODE: connection closed from server')
     }
   })
 
   hypercore.on('append', async _ => {
       await mutex.lock()
-      console.error(`NODE: ${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, count match=${hypercore.length === itemCount}`)
+      // console.log(`NODE: ${isInitiator} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, count match=${hypercore.length === itemCount}`)
       if (hypercore.length === itemCount) {
           let fileContent = "";
           for (let i = 0; i < hypercore.length; i++) {
-              console.error(`${isInitiator} Getting value for index ${i}`);
+              // console.log(`${isInitiator} Getting value for index ${i}`);
               let value = await hypercore.get(i);
               fileContent += `${i} ${value}\n`;
           }
           try {
-              console.error(`NODE: ${isInitiator} Writing file`);
+              // console.log(`NODE: ${isInitiator} Writing file`);
               await fs.writeFile(resultFile, fileContent);
           } catch (error) {
-              console.error(`NODE: ${isInitiator} got error`, error);
+              // console.log(`NODE: ${isInitiator} got error`, error);
               process.exit(3);
           }
 
-          console.error(`NODE: ${isInitiator} Wrote content exiting`);
+          // console.log(`NODE: ${isInitiator} Wrote content exiting`);
           process.exit(0);
       }
       mutex.unlock()
