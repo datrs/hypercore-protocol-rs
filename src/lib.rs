@@ -65,6 +65,7 @@
 //!             // A Channel event is emitted for each established channel.
 //!             Event::Channel(mut channel) => {
 //!                 // A Channel can be sent to other tasks.
+//!                 #[cfg(feature = "v9")]
 //!                 async_std::task::spawn(async move {
 //!                     // A Channel can both send messages and is a stream of incoming messages.
 //!                     channel.want(Want { start: 0, length: None }).await;
@@ -72,6 +73,15 @@
 //!                         eprintln!("{} received message: {:?}", name, message);
 //!                     }
 //!                 });
+//!                 #[cfg(feature = "v10")]
+//!                 async_std::task::spawn(async move {
+//!                     // A Channel can both send messages and is a stream of incoming messages.
+//!                     channel.want(Want { start: 0, length: 1 }).await;
+//!                     while let Some(message) = channel.next().await {
+//!                         eprintln!("{} received message: {:?}", name, message);
+//!                     }
+//!                 });
+
 //!             },
 //!             _ => {}
 //!         }
