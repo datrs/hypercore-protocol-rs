@@ -392,22 +392,50 @@ where
         }
         Message::Data(message) => {
             println!("Got Data message {:?}", message);
-            let (old_info, applied, new_info) = {
-                 let mut hypercore = hypercore.lock().await;
-                 let old_info = hypercore.info();
-                 let proof = message.clone().into_proof();
-                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
-                 let new_info = hypercore.info();
+            let (old_info, applied, new_info, request_block) = {
+                let mut hypercore = hypercore.lock().await;
+                let old_info = hypercore.info();
+                let proof = message.clone().into_proof();
+                let applied = hypercore.verify_and_apply_proof(&proof).await?;
+                let new_info = hypercore.info();
+                let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
+                    // When getting the initial upgrade, send a request for the first missing block
+                    if old_info.length < upgrade.length {
+                        let request_index = old_info.length;
+                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else if let Some(block) = &message.block {
+                    // When receiving a block, ask for the next, if there are still some missing
+                    if block.index < peer_state.remote_length - 1 {
+                        let request_index = block.index + 1;
+                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
-                 // If all have been replicated, print the result
-                 if new_info.contiguous_length == new_info.length {
-                     for i in 0..new_info.contiguous_length {
-                         println!("replicated index {}: {}", i, String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap());
-                     }
-                 }
-
-                 (old_info, applied, new_info)
+                // If all have been replicated, print the result
+                if new_info.contiguous_length == new_info.length {
+                    for i in 0..new_info.contiguous_length {
+                        println!("replicated index {}: {}", i, String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap());
+                    }
+                }
+                (old_info, applied, new_info, request_block)
             };
+
+            let mut messages: Vec<Message> = vec![];
             if let Some(upgrade) = &message.upgrade {
                 let new_length = upgrade.length;
 
@@ -420,7 +448,7 @@ where
                 // 04 <- length
                 // 04 <- remote_length
                 //
-                // followed immeadiately with 4 Requests:
+                // followed with 4 Requests:
                 // 01 <- channel
                 // 01 <- type=Request
                 // 01 <- flags => evaluates to RequestBlock
@@ -428,12 +456,8 @@ where
                 // 00 <- fork
                 // 00 <- start, increments to 3
                 // 02 <- nodes, 2 != 1 has to do with MerkleTree using double values, see missingNodes()
-                //
-                // Let's just send a batch
-                let mut messages: Vec<Message> = vec![];
 
                 let remote_length = if new_info.fork == peer_state.remote_fork { peer_state.remote_length } else { 0 };
-
                 messages.push(Message::Synchronize(Synchronize {
                     fork: new_info.fork,
                     length: new_length,
@@ -442,22 +466,18 @@ where
                     uploading: true,
                     downloading: true,
                 }));
-
-                for i in old_info.length..new_length {
-                    messages.push(Message::Request(Request {
-                        id: i+1,
-                        fork: new_info.fork,
-                        hash: None,
-                        block: Some(RequestBlock {
-                            index: i,
-                            nodes: 2 // TODO: here should be missingNodes() thingy
-                        }),
-                        seek: None,
-                        upgrade: None
-                    }));
-                }
-                channel.send_batch(&messages).await.unwrap();
             }
+            if let Some(request_block) = request_block {
+                messages.push(Message::Request(Request {
+                    id: request_block.index + 1,
+                    fork: new_info.fork,
+                    hash: None,
+                    block: Some(request_block),
+                    seek: None,
+                    upgrade: None,
+                }));
+            }
+            channel.send_batch(&messages).await.unwrap();
         }
         // TODO
         _ => {}
