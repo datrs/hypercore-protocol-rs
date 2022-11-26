@@ -375,7 +375,7 @@ impl ChannelHandle {
         if let Some(inbound_tx) = self.inbound_tx.as_mut() {
             inbound_tx
                 .try_send(message)
-                .map_err(|_e| error("Channel is full"))
+                .map_err(|e| error(format!("Sending to channel failed: {}", e).as_str()))
         } else {
             Err(error("Channel is not open"))
         }
@@ -531,6 +531,7 @@ impl ChannelMap {
         Ok(())
     }
 
+    #[cfg(feature = "v9")]
     fn alloc_local(&mut self) -> usize {
         let empty_id = self.local_id.iter().skip(1).position(|x| x.is_none());
         match empty_id {
@@ -540,6 +541,24 @@ impl ChannelMap {
                 self.local_id.len() - 1
             }
         }
+    }
+
+    #[cfg(feature = "v10")]
+    fn alloc_local(&mut self) -> usize {
+        let empty_id = self
+            .local_id
+            .iter()
+            .skip(1)
+            .position(|x| x.is_none())
+            .map(|position| position + 1);
+        let local_id = match empty_id {
+            Some(empty_id) => empty_id,
+            None => {
+                self.local_id.push(None);
+                self.local_id.len() - 1
+            }
+        };
+        return local_id;
     }
 
     fn alloc_remote(&mut self, id: usize) {

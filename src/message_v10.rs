@@ -195,7 +195,7 @@ impl Frame {
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "received too short special message",
+                    "received invalid special message",
                 ))
             }
         } else if buf.len() >= 2 {
