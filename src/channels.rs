@@ -199,18 +199,11 @@ impl Channel {
 
     /// Send a close message and close this channel.
     pub async fn close(&mut self) -> Result<()> {
-        self.close_with_data(vec![]).await
-    }
-
-    /// Send a close message and close this channel, and include user data that
-    /// will be forwarded to the Close event.
-    pub async fn close_with_data(&mut self, user_data: Vec<u8>) -> Result<()> {
         if self.closed() {
             return Ok(());
         }
         let close = Close {
             channel: self.local_id as u64,
-            user_data,
         };
         self.send(Message::Close(close)).await?;
         self.closed.store(true, Ordering::SeqCst);

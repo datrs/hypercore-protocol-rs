@@ -62,10 +62,7 @@ pub enum Event {
     /// Emitted when a channel is established.
     Channel(Channel),
     /// Emitted when a channel is closed.
-    #[cfg(feature = "v9")]
     Close(DiscoveryKey),
-    #[cfg(feature = "v10")]
-    Close((DiscoveryKey, Vec<u8>)),
 }
 
 /// A protocol command.
@@ -87,7 +84,7 @@ impl fmt::Debug for Event {
             Event::Channel(channel) => {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
-            Event::Close((discovery_key, _)) => write!(f, "Close({})", &pretty_hash(discovery_key)),
+            Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
         }
     }
 }
@@ -351,7 +348,6 @@ where
         }
     }
 
-    #[cfg(feature = "v9")]
     fn on_outbound_message(&mut self, message: &ChannelMessage) {
         // If message is close, close the local channel.
         if let ChannelMessage {
@@ -361,19 +357,6 @@ where
         } = message
         {
             self.close_local(*channel);
-        }
-    }
-
-    #[cfg(feature = "v10")]
-    fn on_outbound_message(&mut self, message: &ChannelMessage) {
-        // If message is close, close the local channel.
-        if let ChannelMessage {
-            channel,
-            message: Message::Close(close_message),
-            ..
-        } = message
-        {
-            self.close_local(*channel, close_message);
         }
     }
 
@@ -699,7 +682,6 @@ where
         Ok(())
     }
 
-    #[cfg(feature = "v9")]
     fn close_local(&mut self, local_id: u64) {
         if let Some(channel) = self.channels.get_local(local_id as usize) {
             let discovery_key = *channel.discovery_key();
@@ -708,16 +690,6 @@ where
         }
     }
 
-    #[cfg(feature = "v10")]
-    fn close_local(&mut self, local_id: u64, msg: &Close) {
-        if let Some(channel) = self.channels.get_local(local_id as usize) {
-            let discovery_key = *channel.discovery_key();
-            self.channels.remove(&discovery_key);
-            self.queue_event(Event::Close((discovery_key, msg.user_data.clone())));
-        }
-    }
-
-    #[cfg(feature = "v9")]
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = *channel_handle.discovery_key();
@@ -725,18 +697,6 @@ where
                 .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
-    fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
-        if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
-            let discovery_key = *channel_handle.discovery_key();
-            self.channels
-                .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
-            self.channels.remove(&discovery_key);
-            self.queue_event(Event::Close((discovery_key, vec![])));
         }
         Ok(())
     }

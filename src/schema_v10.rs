@@ -55,8 +55,6 @@ impl CompactEncoding<Open> for State {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Close {
     pub channel: u64,
-    /// User data for internal communication, not sent over the wire
-    pub user_data: Vec<u8>,
 }
 
 impl CompactEncoding<Close> for State {
@@ -70,10 +68,7 @@ impl CompactEncoding<Close> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Close {
         let channel: u64 = self.decode(buffer);
-        Close {
-            channel,
-            user_data: vec![],
-        }
+        Close { channel }
     }
 }
 
