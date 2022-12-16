@@ -690,11 +690,26 @@ where
         }
     }
 
+    #[cfg(feature = "v9")]
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = *channel_handle.discovery_key();
             self.channels
                 .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
+            self.channels.remove(&discovery_key);
+            self.queue_event(Event::Close(discovery_key));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "v10")]
+    fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
+        if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
+            let discovery_key = *channel_handle.discovery_key();
+            // There is a possibility both sides will close at the same time, so
+            // the channel could be closed already, let's tolerate that.
+            self.channels
+                .forward_inbound_message_tolerate_closed(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
         }

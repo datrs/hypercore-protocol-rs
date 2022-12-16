@@ -8,7 +8,7 @@ use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
 use crate::{discovery_key, DiscoveryKey, Key};
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, TrySendError};
 use futures_lite::ready;
 use futures_lite::stream::Stream;
 use std::collections::HashMap;
@@ -371,6 +371,18 @@ impl ChannelHandle {
         channel
     }
 
+    #[cfg(feature = "v9")]
+    pub fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
+        if let Some(inbound_tx) = self.inbound_tx.as_mut() {
+            inbound_tx
+                .try_send(message)
+                .map_err(|_e| error("Channel is full"))
+        } else {
+            Err(error("Channel is not open"))
+        }
+    }
+
+    #[cfg(feature = "v10")]
     pub fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
         if let Some(inbound_tx) = self.inbound_tx.as_mut() {
             inbound_tx
@@ -379,6 +391,20 @@ impl ChannelHandle {
         } else {
             Err(error("Channel is not open"))
         }
+    }
+
+    pub fn try_send_inbound_tolerate_closed(&mut self, message: Message) -> std::io::Result<()> {
+        if let Some(inbound_tx) = self.inbound_tx.as_mut() {
+            if let Err(err) = inbound_tx.try_send(message) {
+                match err {
+                    TrySendError::Full(e) => {
+                        return Err(error(format!("Sending to channel failed: {}", e).as_str()))
+                    }
+                    TrySendError::Closed(_) => {}
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -527,6 +553,17 @@ impl ChannelMap {
     pub fn forward_inbound_message(&mut self, remote_id: usize, message: Message) -> Result<()> {
         if let Some(channel_handle) = self.get_remote_mut(remote_id) {
             channel_handle.try_send_inbound(message)?;
+        }
+        Ok(())
+    }
+
+    pub fn forward_inbound_message_tolerate_closed(
+        &mut self,
+        remote_id: usize,
+        message: Message,
+    ) -> Result<()> {
+        if let Some(channel_handle) = self.get_remote_mut(remote_id) {
+            channel_handle.try_send_inbound_tolerate_closed(message)?;
         }
         Ok(())
     }
