@@ -174,11 +174,10 @@ impl Frame {
                     )?;
                     messages.push(channel_message);
                     state.start += channel_message_length;
-
                     // After that, if there is an extra 0x00, that means the channel
                     // changed. This works because of LE encoding, and channels starting
                     // from the index 1.
-                    if state.start < state.end && buf[state.start + 1] == 0x00 {
+                    if state.start < state.end && buf[state.start] == 0x00 {
                         state.start += 1;
                         current_channel = state.decode(&buf);
                     }
