@@ -63,6 +63,10 @@ pub enum Event {
     Channel(Channel),
     /// Emitted when a channel is closed.
     Close(DiscoveryKey),
+    #[cfg(feature = "v10")]
+    /// Convenience event to make it possible to signal the protocol from a channel.
+    /// See channel.signal_local().
+    LocalSignal((String, Vec<u8>)),
 }
 
 /// A protocol command.
@@ -85,6 +89,10 @@ impl fmt::Debug for Event {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
+            #[cfg(feature = "v10")]
+            Event::LocalSignal((name, data)) => {
+                write!(f, "LocalSignal(name={},len={})", name, data.len())
+            }
         }
     }
 }
@@ -348,6 +356,7 @@ where
         }
     }
 
+    #[cfg(feature = "v9")]
     fn on_outbound_message(&mut self, message: &ChannelMessage) {
         // If message is close, close the local channel.
         if let ChannelMessage {
@@ -358,6 +367,29 @@ where
         {
             self.close_local(*channel);
         }
+    }
+
+    #[cfg(feature = "v10")]
+    fn on_outbound_message(&mut self, message: &ChannelMessage) -> bool {
+        // If message is close, close the local channel.
+        if let ChannelMessage {
+            channel,
+            message: Message::Close(_),
+            ..
+        } = message
+        {
+            self.close_local(*channel);
+        // If message is a LocalSignal, emit an event and return false to indicate
+        // this message should be filtered out.
+        } else if let ChannelMessage {
+            message: Message::LocalSignal((name, data)),
+            ..
+        } = message
+        {
+            self.queue_event(Event::LocalSignal((name.to_string(), data.to_vec())));
+            return false;
+        }
+        true
     }
 
     /// Poll for inbound messages and processs them.
@@ -392,13 +424,13 @@ where
                     self.write_state.park_frame(frame);
                 }
                 #[cfg(feature = "v10")]
-                Poll::Ready(Some(messages)) => {
+                Poll::Ready(Some(mut messages)) => {
                     if !messages.is_empty() {
-                        messages
-                            .iter()
-                            .for_each(|message| self.on_outbound_message(&message));
-                        let frame = Frame::MessageBatch(messages);
-                        self.write_state.park_frame(frame);
+                        messages.retain(|message| self.on_outbound_message(&message));
+                        if !messages.is_empty() {
+                            let frame = Frame::MessageBatch(messages);
+                            self.write_state.park_frame(frame);
+                        }
                     }
                 }
                 Poll::Ready(None) => unreachable!("Channel closed before end"),

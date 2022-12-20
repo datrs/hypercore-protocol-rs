@@ -1,6 +1,6 @@
 use crate::message::{EncodeError, FrameType};
-use crate::schema::*;
 use crate::util::{stat_uint24_le, write_uint24_le};
+use crate::{schema::*, DiscoveryKey};
 use hypercore::compact_encoding::{CompactEncoding, State};
 use pretty_hash::fmt as pretty_fmt;
 use std::fmt;
@@ -340,6 +340,8 @@ pub enum Message {
     Bitfield(Bitfield),
     Range(Range),
     Extension(Extension),
+    /// A local signalling message never sent over the wire
+    LocalSignal((String, Vec<u8>)),
 }
 
 impl Message {
@@ -376,7 +378,7 @@ impl Message {
             9 => Ok(Self::Extension(state.decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid message type: {}", typ),
+                format!("Invalid message type to decode: {}", typ),
             )),
         }?;
         Ok((message, state.start))
@@ -397,6 +399,7 @@ impl Message {
             Self::Bitfield(ref message) => state.preencode(message),
             Self::Range(ref message) => state.preencode(message),
             Self::Extension(ref message) => state.preencode(message),
+            Self::LocalSignal(_) => {}
         }
         state.end
     }
@@ -416,6 +419,7 @@ impl Message {
             Self::Bitfield(ref message) => state.encode(message, buf),
             Self::Range(ref message) => state.encode(message, buf),
             Self::Extension(ref message) => state.encode(message, buf),
+            Self::LocalSignal(_) => {}
         }
         state.start
     }

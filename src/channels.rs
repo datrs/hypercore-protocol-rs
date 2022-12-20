@@ -209,6 +209,14 @@ impl Channel {
         self.closed.store(true, Ordering::SeqCst);
         Ok(())
     }
+
+    #[cfg(feature = "v10")]
+    /// Signal the protocol to produce Event::LocalSignal.
+    pub async fn signal_local(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
+        self.send(Message::LocalSignal((name.to_string(), data)))
+            .await?;
+        Ok(())
+    }
 }
 
 impl Stream for Channel {
