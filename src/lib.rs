@@ -124,7 +124,11 @@ pub mod schema {
 }
 
 pub use builder::{Builder as ProtocolBuilder, Options};
+
 pub use channels::Channel;
+// Export the needed types for Channel::take_receiver, and Channel::local_sender()
+#[cfg(feature = "v10")]
+pub use async_channel::{Receiver as ChannelReceiver, Sender as ChannelSender};
 pub use duplex::Duplex;
 #[cfg(feature = "v9")]
 pub use extension::Extension;

@@ -24,6 +24,8 @@ use std::task::Poll;
 /// This is the handle that can be sent to other threads.
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
+    #[cfg(feature = "v10")]
+    direct_inbound_tx: Sender<Message>,
     #[cfg(feature = "v9")]
     outbound_tx: Sender<ChannelMessage>,
     #[cfg(feature = "v10")]
@@ -146,6 +148,14 @@ impl Channel {
     /// polled as a stream. The returned receiver will.
     pub fn take_receiver(&mut self) -> Option<Receiver<Message>> {
         self.inbound_rx.take()
+    }
+
+    #[cfg(feature = "v10")]
+    /// Clone the local sending part of the channel receiver. Useful
+    /// for direct local communication to the channel listener, especially
+    /// via Extension messages not sent over the wire.
+    pub fn local_sender(&mut self) -> Sender<Message> {
+        self.direct_inbound_tx.clone()
     }
 
     /// Send a status message.
@@ -369,6 +379,7 @@ impl ChannelHandle {
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
         let channel = Channel {
             inbound_rx: Some(inbound_rx),
+            direct_inbound_tx: inbound_tx.clone(),
             outbound_tx,
             discovery_key: self.discovery_key,
             key: local_state.key,
