@@ -152,8 +152,10 @@ impl Channel {
 
     #[cfg(feature = "v10")]
     /// Clone the local sending part of the channel receiver. Useful
-    /// for direct local communication to the channel listener, especially
-    /// via Extension messages not sent over the wire.
+    /// for direct local communication to the channel listener. Typically
+    /// you will only want to send a LocalSignal message with this sender to make
+    /// it clear what event came from the remote peer and what was local
+    /// signaling.
     pub fn local_sender(&mut self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
     }
@@ -221,8 +223,9 @@ impl Channel {
     }
 
     #[cfg(feature = "v10")]
-    /// Signal the protocol to produce Event::LocalSignal.
-    pub async fn signal_local(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
+    /// Signal the protocol to produce Event::LocalSignal. If you want to send a message
+    /// to the channel level, see take_receiver() and local_sender().
+    pub async fn signal_local_protocol(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
         self.send(Message::LocalSignal((name.to_string(), data)))
             .await?;
         Ok(())
