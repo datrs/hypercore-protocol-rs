@@ -1,4 +1,5 @@
 /// Seed for the capability hash
+#[cfg(feature = "v9")]
 pub const CAP_NS_BUF: &[u8] = b"hypercore capability";
 
 /// Seed for the discovery key hash

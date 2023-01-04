@@ -1,8 +1,7 @@
-#[cfg(feature = "v9")]
-use crate::noise::Cipher;
 #[cfg(feature = "v10")]
-use crate::noise::DecryptCipher;
-use crate::noise::{segment_for_decrypt, HandshakeResult};
+use crate::noise::{segment_for_decrypt, DecryptCipher};
+#[cfg(feature = "v9")]
+use crate::noise::{Cipher, HandshakeResult};
 use futures_lite::io::AsyncRead;
 use futures_timer::Delay;
 use std::future::Future;
@@ -281,13 +280,14 @@ impl ReadState {
                 Step::Header => {
                     let stat = stat_uint24_le(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = stat {
-                        if (self.start + header_len + body_len as usize) < self.end {
+                        if body_len == 0 {
+                            // This is a keepalive message, just remain in Step::Header
+                            self.start += header_len;
+                            return None;
+                        } else if (self.start + header_len + body_len as usize) < self.end {
                             // There are more than one message here, create a batch from all of
                             // then
                             self.step = Step::Batch;
-                        } else if body_len == 0 {
-                            // This is a keepalive message, just remain in Step::Header
-                            return None;
                         } else {
                             let body_len = body_len as usize;
                             if body_len > MAX_MESSAGE_SIZE as usize {
