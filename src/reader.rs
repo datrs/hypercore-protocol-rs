@@ -2,7 +2,7 @@
 use crate::noise::Cipher;
 #[cfg(feature = "v10")]
 use crate::noise::DecryptCipher;
-use crate::noise::HandshakeResult;
+use crate::noise::{segment_for_decrypt, HandshakeResult};
 use futures_lite::io::AsyncRead;
 use futures_timer::Delay;
 use std::future::Future;
@@ -101,6 +101,7 @@ impl ReadState {
         self.frame_type = frame_type;
     }
 
+    #[cfg(feature = "v9")]
     pub fn poll_reader<R>(
         &mut self,
         cx: &mut Context<'_>,
@@ -109,7 +110,6 @@ impl ReadState {
     where
         R: AsyncRead + Unpin,
     {
-        #[cfg(feature = "v9")]
         loop {
             if let Some(result) = self.process() {
                 return Poll::Ready(result);
@@ -135,11 +135,25 @@ impl ReadState {
             self.end = end;
             self.timeout.reset(TIMEOUT);
         }
+    }
 
-        #[cfg(feature = "v10")]
+    #[cfg(feature = "v10")]
+    pub fn poll_reader<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        mut reader: &mut R,
+    ) -> Poll<Result<Frame>>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let mut incomplete = true;
         loop {
-            if let Some(result) = self.process() {
-                return Poll::Ready(result);
+            if !incomplete {
+                if let Some(result) = self.process() {
+                    return Poll::Ready(result);
+                }
+            } else {
+                incomplete = false;
             }
             let n = match Pin::new(&mut reader).poll_read(cx, &mut self.buf[self.end..]) {
                 Poll::Ready(Ok(n)) if n > 0 => n,
@@ -156,15 +170,26 @@ impl ReadState {
 
             let end = self.end + n;
             if let Some(ref mut cipher) = self.cipher {
-                let mut dec_end = self.end;
-                let mut enc_end = self.end;
-                // Go through the whole section, encrypt all sections if there are many
-                while enc_end < end {
-                    let (de, ee) = cipher.decrypt(&mut self.buf[enc_end..end])?;
-                    dec_end = enc_end + de;
-                    enc_end += ee;
+                let (success, segments) = segment_for_decrypt(&self.buf[self.start..end]);
+                if success {
+                    let mut dec_end = self.start;
+                    for (index, header_len, body_len) in segments {
+                        let de = cipher.decrypt(
+                            &mut self.buf[self.start + index..end],
+                            header_len,
+                            body_len,
+                        )?;
+                        dec_end = self.start + index + de;
+                    }
+                    self.end = dec_end;
+                } else {
+                    // Could not segment due to buffer being full, need to cycle the buffer
+                    // and possibly resize it too if the message is too big.
+                    self.cycle_buf_and_resize_if_needed(segments[segments.len() - 1]);
+
+                    // Set incomplete flag to skip processing and instead poll more data
+                    incomplete = true;
                 }
-                self.end = dec_end;
             } else {
                 self.end = end;
             }
@@ -173,6 +198,7 @@ impl ReadState {
         }
     }
 
+    #[cfg(feature = "v9")]
     fn cycle_buf_if_needed(&mut self) {
         // TODO: It would be great if we wouldn't have to allocate here.
         if self.end == self.buf.len() {
@@ -184,13 +210,28 @@ impl ReadState {
         }
     }
 
+    #[cfg(feature = "v10")]
+    fn cycle_buf_and_resize_if_needed(&mut self, last_segment: (usize, usize, usize)) {
+        let (last_index, last_header_len, last_body_len) = last_segment;
+        let total_incoming_length = last_index + last_header_len + last_body_len;
+        if self.buf.len() < total_incoming_length {
+            // The incoming segments will not fit into the buffer, need to resize it
+            self.buf.resize(total_incoming_length, 0u8);
+        }
+        let temp = self.buf[self.start..].to_vec();
+        let len = temp.len();
+        self.buf[..len].copy_from_slice(&temp[..]);
+        self.end = len;
+        self.start = 0;
+    }
+
+    #[cfg(feature = "v9")]
     fn process(&mut self) -> Option<Result<Frame>> {
         if self.start == self.end {
             return None;
         }
         loop {
             match self.step {
-                #[cfg(feature = "v9")]
                 Step::Header => {
                     let varint = varint_decode(&self.buf[self.start..self.end]);
                     if let Some((header_len, body_len)) = varint {
@@ -210,37 +251,6 @@ impl ReadState {
                         return None;
                     }
                 }
-                #[cfg(feature = "v10")]
-                Step::Header => {
-                    let stat = stat_uint24_le(&self.buf[self.start..self.end]);
-                    if let Some((header_len, body_len)) = stat {
-                        if (self.start + header_len + body_len as usize) < self.end {
-                            // There are more than one message here, create a batch from all of
-                            // then
-                            self.step = Step::Batch;
-                        } else if body_len == 0 {
-                            // This is a keepalive message, just remain in Step::Header
-                            self.cycle_buf_if_needed();
-                            return None;
-                        } else {
-                            let body_len = body_len as usize;
-                            if body_len > MAX_MESSAGE_SIZE as usize {
-                                return Some(Err(Error::new(
-                                    ErrorKind::InvalidData,
-                                    "Message length above max allowed size",
-                                )));
-                            }
-                            self.step = Step::Body {
-                                header_len,
-                                body_len,
-                            };
-                        }
-                    } else {
-                        self.cycle_buf_if_needed();
-                        return None;
-                    }
-                }
-
                 Step::Body {
                     header_len,
                     body_len,
@@ -260,7 +270,54 @@ impl ReadState {
                         return Some(frame);
                     }
                 }
-                #[cfg(feature = "v10")]
+            }
+        }
+    }
+
+    #[cfg(feature = "v10")]
+    fn process(&mut self) -> Option<Result<Frame>> {
+        loop {
+            match self.step {
+                Step::Header => {
+                    let stat = stat_uint24_le(&self.buf[self.start..self.end]);
+                    if let Some((header_len, body_len)) = stat {
+                        if (self.start + header_len + body_len as usize) < self.end {
+                            // There are more than one message here, create a batch from all of
+                            // then
+                            self.step = Step::Batch;
+                        } else if body_len == 0 {
+                            // This is a keepalive message, just remain in Step::Header
+                            return None;
+                        } else {
+                            let body_len = body_len as usize;
+                            if body_len > MAX_MESSAGE_SIZE as usize {
+                                return Some(Err(Error::new(
+                                    ErrorKind::InvalidData,
+                                    "Message length above max allowed size",
+                                )));
+                            }
+                            self.step = Step::Body {
+                                header_len,
+                                body_len,
+                            };
+                        }
+                    } else {
+                        // FIXME: proper error handling for invalid header
+                        panic!("Invalid header");
+                    }
+                }
+
+                Step::Body {
+                    header_len,
+                    body_len,
+                } => {
+                    let message_len = header_len + body_len;
+                    let range = self.start + header_len..self.start + message_len;
+                    let frame = Frame::decode(&self.buf[range], &self.frame_type);
+                    self.start += message_len;
+                    self.step = Step::Header;
+                    return Some(frame);
+                }
                 Step::Batch => {
                     let frame =
                         Frame::decode_multiple(&self.buf[self.start..self.end], &self.frame_type);

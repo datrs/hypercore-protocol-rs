@@ -59,22 +59,22 @@ impl DecryptCipher {
         Ok(Self { pull_stream })
     }
 
-    pub fn decrypt(&mut self, buf: &mut [u8]) -> Result<(usize, usize), EncodeError> {
-        let stat = stat_uint24_le(buf);
-        if let Some((header_len, body_len)) = stat {
-            let (to_decrypt, tag) =
-                self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
-            let decrypted_len = to_decrypt.len();
-            write_uint24_le(decrypted_len, buf);
-            let decrypted_end = 3 + to_decrypt.len();
-            buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
-            // Set extra bytes in the buffer to 0
-            let encrypted_end = header_len + body_len as usize;
-            buf[decrypted_end..encrypted_end].fill(0x00);
-            Ok((decrypted_end, encrypted_end))
-        } else {
-            Err(EncodeError::new(buf.len()))
-        }
+    pub fn decrypt(
+        &mut self,
+        buf: &mut [u8],
+        header_len: usize,
+        body_len: usize,
+    ) -> Result<usize, EncodeError> {
+        let (to_decrypt, _tag) =
+            self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
+        let decrypted_len = to_decrypt.len();
+        write_uint24_le(decrypted_len, buf);
+        let decrypted_end = 3 + to_decrypt.len();
+        buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
+        // Set extra bytes in the buffer to 0
+        let encrypted_end = header_len + body_len as usize;
+        buf[decrypted_end..encrypted_end].fill(0x00);
+        Ok(decrypted_end)
     }
 
     pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<(Vec<u8>, Tag), EncodeError> {
@@ -86,6 +86,27 @@ impl DecryptCipher {
             .unwrap(); // FIXME: This should return a more specific error than EncodeError
         Ok((to_decrypt, *tag))
     }
+}
+
+pub fn segment_for_decrypt(buf: &[u8]) -> (bool, Vec<(usize, usize, usize)>) {
+    let mut index: usize = 0;
+    let len = buf.len();
+    let mut segments: Vec<(usize, usize, usize)> = vec![];
+    while index < len {
+        if let Some((header_len, body_len)) = stat_uint24_le(&buf[index..]) {
+            let body_len = body_len as usize;
+            segments.push((index, header_len, body_len));
+            if len < index + header_len + body_len {
+                // The segments will not fit, return false to indicate that more needs to be read
+                return (false, segments);
+            }
+            index += header_len + body_len;
+        } else {
+            // FIXME: Proper error handling
+            panic!("Could not read header while decrypting");
+        }
+    }
+    (true, segments)
 }
 
 impl EncryptCipher {
