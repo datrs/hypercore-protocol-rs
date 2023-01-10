@@ -37,6 +37,9 @@
   </h4>
 </div>
 
+**NOTE**: The master branch currently only works with the old hypercore version 9.
+For ongoing work to support the latest version 10 of hypercore [see the v10 branch](https://github.com/datrs/hypercore-protocol-rs/tree/v10).
+
 This crate provides a low-level streaming API to hypercore-protocol and exposes an interface that should make it easy to implement actual protocol logic on top. This crate targets Hypercore 9 (Dat 2) only.
 
 It uses [async-std](https://async.rs) for async IO, and [snow](https://github.com/mcginty/snow) for the Noise handshake.
