@@ -88,27 +88,6 @@ impl DecryptCipher {
     }
 }
 
-pub fn segment_for_decrypt(buf: &[u8]) -> (bool, Vec<(usize, usize, usize)>) {
-    let mut index: usize = 0;
-    let len = buf.len();
-    let mut segments: Vec<(usize, usize, usize)> = vec![];
-    while index < len {
-        if let Some((header_len, body_len)) = stat_uint24_le(&buf[index..]) {
-            let body_len = body_len as usize;
-            segments.push((index, header_len, body_len));
-            if len < index + header_len + body_len {
-                // The segments will not fit, return false to indicate that more needs to be read
-                return (false, segments);
-            }
-            index += header_len + body_len;
-        } else {
-            // FIXME: Proper error handling
-            panic!("Could not read header while decrypting");
-        }
-    }
-    (true, segments)
-}
-
 impl EncryptCipher {
     pub fn from_handshake_tx(
         handshake_result: &HandshakeResult,

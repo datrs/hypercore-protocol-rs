@@ -456,10 +456,15 @@ where
                         State::SecretStream(_) => self.on_secret_stream_message(buf)?,
                         State::Established => {
                             if let Some(processed_state) = processed_state.as_ref() {
-                                if processed_state == &format!("{:?}", State::SecretStream(None)) {
+                                let previous_state = if self.options.encrypted {
+                                    State::SecretStream(None)
+                                } else {
+                                    State::Handshake(None)
+                                };
+                                if processed_state == &format!("{:?}", previous_state) {
                                     // This is the unlucky case where the batch had two or more messages where
                                     // the first one was correctly identified as Raw but everything
-                                    // after that should have been decrypted and a MessageBatch. Correct the mistake
+                                    // after that should have been (decrypted and) a MessageBatch. Correct the mistake
                                     // here post-hoc.
                                     let buf = self.read_state.decrypt_buf(&buf)?;
                                     let frame = Frame::decode(&buf, &FrameType::Message)?;
@@ -536,12 +541,21 @@ where
         } else {
             let handshake_result = handshake.into_result()?;
 
-            // The cipher will be put to use to the writer only after the peer's answer has come
-            let (cipher, init_msg) = EncryptCipher::from_handshake_tx(&handshake_result)?;
-            self.state = State::SecretStream(Some(cipher));
+            if self.options.encrypted {
+                // The cipher will be put to use to the writer only after the peer's answer has come
+                let (cipher, init_msg) = EncryptCipher::from_handshake_tx(&handshake_result)?;
+                self.state = State::SecretStream(Some(cipher));
 
-            // Send the secret stream init message header to the other side
-            self.queue_frame_direct(init_msg).unwrap();
+                // Send the secret stream init message header to the other side
+                self.queue_frame_direct(init_msg).unwrap();
+            } else {
+                // Skip secret stream and go straight to Established, then notify about
+                // handshake
+                self.read_state.set_frame_type(FrameType::Message);
+                let remote_public_key = parse_key(&handshake_result.remote_pubkey)?;
+                self.queue_event(Event::Handshake(remote_public_key));
+                self.state = State::Established;
+            }
             // Store handshake result
             self.handshake = Some(handshake_result);
         }
@@ -565,7 +579,7 @@ where
         self.write_state.upgrade_with_encrypt_cipher(encrypt_cipher);
         self.read_state.set_frame_type(FrameType::Message);
 
-        // Lastly notify that handshake is ready
+        // Lastly notify that handshake is ready and set state to established
         let remote_public_key = parse_key(&handshake_result.remote_pubkey)?;
         self.queue_event(Event::Handshake(remote_public_key));
         self.state = State::Established;

@@ -1,5 +1,5 @@
 #[cfg(feature = "v10")]
-use crate::noise::{segment_for_decrypt, DecryptCipher};
+use crate::noise::DecryptCipher;
 #[cfg(feature = "v9")]
 use crate::noise::{Cipher, HandshakeResult};
 use futures_lite::io::AsyncRead;
@@ -168,9 +168,9 @@ impl ReadState {
             };
 
             let end = self.end + n;
-            if let Some(ref mut cipher) = self.cipher {
-                let (success, segments) = segment_for_decrypt(&self.buf[self.start..end]);
-                if success {
+            let (success, segments) = create_segments(&self.buf[self.start..end]);
+            if success {
+                if let Some(ref mut cipher) = self.cipher {
                     let mut dec_end = self.start;
                     for (index, header_len, body_len) in segments {
                         let de = cipher.decrypt(
@@ -182,17 +182,16 @@ impl ReadState {
                     }
                     self.end = dec_end;
                 } else {
-                    // Could not segment due to buffer being full, need to cycle the buffer
-                    // and possibly resize it too if the message is too big.
-                    self.cycle_buf_and_resize_if_needed(segments[segments.len() - 1]);
-
-                    // Set incomplete flag to skip processing and instead poll more data
-                    incomplete = true;
+                    self.end = end;
                 }
             } else {
-                self.end = end;
-            }
+                // Could not segment due to buffer being full, need to cycle the buffer
+                // and possibly resize it too if the message is too big.
+                self.cycle_buf_and_resize_if_needed(segments[segments.len() - 1]);
 
+                // Set incomplete flag to skip processing and instead poll more data
+                incomplete = true;
+            }
             self.timeout.reset(TIMEOUT);
         }
     }
@@ -348,4 +347,26 @@ fn varint_decode(buf: &[u8]) -> Option<(usize, u64)> {
         }
     }
     Some((offset, value))
+}
+
+#[cfg(feature = "v10")]
+pub fn create_segments(buf: &[u8]) -> (bool, Vec<(usize, usize, usize)>) {
+    let mut index: usize = 0;
+    let len = buf.len();
+    let mut segments: Vec<(usize, usize, usize)> = vec![];
+    while index < len {
+        if let Some((header_len, body_len)) = stat_uint24_le(&buf[index..]) {
+            let body_len = body_len as usize;
+            segments.push((index, header_len, body_len));
+            if len < index + header_len + body_len {
+                // The segments will not fit, return false to indicate that more needs to be read
+                return (false, segments);
+            }
+            index += header_len + body_len;
+        } else {
+            // FIXME: Proper error handling
+            panic!("Could not read header while decrypting");
+        }
+    }
+    (true, segments)
 }

@@ -209,6 +209,21 @@ impl Channel {
         self.send(Message::Data(msg)).await
     }
 
+    #[cfg(feature = "v9")]
+    /// Send a close message and close this channel.
+    pub async fn close(&mut self) -> Result<()> {
+        if self.closed() {
+            return Ok(());
+        }
+        let close = Close {
+            discovery_key: None,
+        };
+        self.send(Message::Close(close)).await?;
+        self.closed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[cfg(feature = "v10")]
     /// Send a close message and close this channel.
     pub async fn close(&mut self) -> Result<()> {
         if self.closed() {
