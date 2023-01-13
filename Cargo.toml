@@ -40,12 +40,10 @@ getrandom = "0.1"
 futures-lite = "1.11.3"
 hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
 sha2 = "0.10.6"
-# FIXME: This uses a commit from the release/4.0 branch, because is has relaxed the zeroize version range.
-# With this the crate be buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch
-# to that.
-curve25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", rev = "8fa201639aeeb1a3b90f38c561441097a36105e4" }
-# FIXME: There's a WASM 32bit usize problem with 0.1.0
-crypto_secretstream = { git = "https://github.com/RustCrypto/nacl-compat", rev = "8a0176ea42fd0fc5eec239458ff165b34c67182a", optional = true }
+# FIXME: This uses pre-release, because v4 relaxed the zeroize version range. With this the crate be
+# buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch to that.
+curve25519-dalek = "4.0.0-pre.5"
+crypto_secretstream = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
