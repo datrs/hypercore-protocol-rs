@@ -54,7 +54,7 @@ random-access-storage = { git = "https://github.com/ttiurani/random-access-stora
 random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
 anyhow = "1.0.28"
-criterion = "0.3.2"
+criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
