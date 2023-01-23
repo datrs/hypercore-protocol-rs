@@ -2,8 +2,18 @@ use anyhow::Result;
 use std::fs::{create_dir_all, remove_dir_all, remove_file};
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use instant::Duration;
+
+#[cfg(feature = "async-std")]
+use async_std::{
+    process,
+    task::{self, sleep},
+};
+#[cfg(feature = "tokio")]
+use tokio::{
+    task, process,
+    time::sleep,
+};
 
 use crate::_util::wait_for_localhost_port;
 
@@ -43,7 +53,7 @@ pub fn prepare_test_set(test_set: &str) -> (String, String, String) {
 }
 
 pub struct JavascriptServer {
-    handle: Option<async_std::task::JoinHandle<()>>,
+    handle: Option<task::JoinHandle<()>>,
 }
 
 impl JavascriptServer {
@@ -62,12 +72,12 @@ impl JavascriptServer {
         data_char: char,
         test_set: String,
     ) {
-        self.handle = Some(async_std::task::spawn(async move {
+        self.handle = Some(task::spawn(async move {
             // This sometimes fails on OSX immediately with unix signal 4, let's retry a few times
             let mut retries = 3;
             let mut code: Option<i32> = None;
             while code.is_none() && retries > 0 {
-                let status = async_std::process::Command::new("node")
+                let status = process::Command::new("node")
                     .current_dir("tests/js")
                     .args(&[
                         "interop.js",
@@ -85,7 +95,7 @@ impl JavascriptServer {
                     .expect("Unable to execute node");
                 code = status.code();
                 if code.is_none() {
-                    async_std::task::sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(100)).await;
                     retries -= 1;
                 }
             }
@@ -108,6 +118,7 @@ impl JavascriptServer {
 
 impl Drop for JavascriptServer {
     fn drop(&mut self) {
+        #[cfg(feature = "async-std")]
         if let Some(handle) = self.handle.take() {
            async_std::task::block_on(handle.cancel());
         }
@@ -135,7 +146,7 @@ pub async fn js_run_client(
     data_char: char,
     test_set: &str,
 ) {
-    let status = async_std::process::Command::new("node")
+    let status = process::Command::new("node")
         .current_dir("tests/js")
         .args(&[
             "interop.js",

@@ -30,7 +30,7 @@ varinteger = { version = "1.0", optional = true }
 rand = "0.8"
 blake2-rfc = "0.2"
 hex = "0.4"
-async-trait = "0.1"
+async-trait = "0.1.63"
 salsa20 = "0.6"
 log = "0.4"
 pretty-hash = "0.4"
@@ -38,7 +38,7 @@ futures-timer = "3.0"
 instant = "0.1"
 getrandom = "0.1"
 futures-lite = "1.11.3"
-hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10", default-features = false }
+hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "tokio", default-features = false }
 sha2 = "0.10.6"
 # FIXME: This uses pre-release, because v4 relaxed the zeroize version range. With this the crate be
 # buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch to that.
@@ -46,11 +46,13 @@ curve25519-dalek = "4.0.0-pre.5"
 crypto_secretstream = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
-async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
+async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
+async-compat = "0.2.1"
+tokio = { version = "1.24.2", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 env_logger = "0.7.1"
-random-access-storage = { git = "https://github.com/ttiurani/random-access-storage" , branch = "v10"}
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
-random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
+random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "tokio"}
+random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "tokio" }
+random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }
 anyhow = "1.0.28"
 criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"
@@ -63,7 +65,7 @@ cfg-if = "1.0"
 prost-build = { version = "0.6.1", optional = true }
 
 [features]
-default = ["v10"]
+default = ["v10", "tokio"]
 wasm-bindgen = [
   "instant/wasm-bindgen", 
   "getrandom/wasm-bindgen", 
@@ -71,6 +73,8 @@ wasm-bindgen = [
 ]
 v9 = ["prost", "prost-build", "varinteger", "hypercore/v9",]
 v10 = ["hypercore/v10", "crypto_secretstream"]
+tokio = ["hypercore/tokio"]
+async-std = ["hypercore/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
 # cargo test --features js-interop-tests

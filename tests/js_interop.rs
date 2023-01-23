@@ -2,10 +2,6 @@
 
 use _util::wait_for_localhost_port;
 use anyhow::Result;
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
 use futures::Future;
 use futures_lite::stream::StreamExt;
 use hypercore::{
@@ -17,7 +13,29 @@ use random_access_disk::RandomAccessDisk;
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Once;
+
+#[cfg(feature = "tokio")]
+use async_compat::CompatExt;
+#[cfg(feature = "async-std")]
+use async_std::{
+    fs::{metadata, File},
+    io::{prelude::BufReadExt, BufReader, BufWriter, WriteExt},
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+    task::{self, sleep},
+    test as async_test,
+};
+#[cfg(feature = "tokio")]
+use tokio::{
+    fs::{metadata, File},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+    task, test as async_test,
+    time::sleep,
+};
 
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
@@ -43,56 +61,56 @@ const TEST_SET_SERVER_WRITER: &str = "sw";
 const TEST_SET_CLIENT_WRITER: &str = "cw";
 const TEST_SET_SIMPLE: &str = "simple";
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncns_simple_server_writer() -> Result<()> {
     js_interop_ncns_simple(true, 8101).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncns_simple_client_writer() -> Result<()> {
     js_interop_ncns_simple(false, 8102).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcns_simple_server_writer() -> Result<()> {
     js_interop_rcns_simple(true, 8103).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcns_simple_client_writer() -> Result<()> {
     js_interop_rcns_simple(false, 8104).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncrs_simple_server_writer() -> Result<()> {
     js_interop_ncrs_simple(true, 8105).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncrs_simple_client_writer() -> Result<()> {
     js_interop_ncrs_simple(false, 8106).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcrs_simple_server_writer() -> Result<()> {
     js_interop_rcrs_simple(true, 8107).await?;
     Ok(())
 }
 
-#[async_std::test]
+#[async_test]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcrs_simple_client_writer() -> Result<()> {
     js_interop_rcrs_simple(false, 8108).await?;
@@ -290,16 +308,16 @@ async fn assert_result(
     loop {
         let path = Path::new(&result_path);
         if path.exists() {
-            let metadata = async_std::fs::metadata(path).await?;
+            let metadata = metadata(path).await?;
             // There's a index + space + line feed
             if metadata.len() >= (item_count * (3 + item_size)) as u64 {
                 break;
             }
         }
-        async_std::task::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 
-    let mut reader = async_std::io::BufReader::new(async_std::fs::File::open(result_path).await?);
+    let mut reader = BufReader::new(File::open(result_path).await?);
     let mut i: usize = 0;
     let expected_value = data_char.to_string().repeat(item_size);
     let mut line = String::new();
@@ -411,6 +429,7 @@ pub fn get_test_key_pair(include_secret: bool) -> PartialKeypair {
     PartialKeypair { public, secret }
 }
 
+#[cfg(feature = "async-std")]
 async fn on_replication_connection<T: 'static>(
     stream: TcpStream,
     is_initiator: bool,
@@ -420,6 +439,43 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+    while let Some(event) = protocol.next().await {
+        let event = event?;
+        match event {
+            Event::Handshake(_) => {
+                if is_initiator {
+                    protocol.open(hypercore.key().clone()).await?;
+                }
+            }
+            Event::DiscoveryKey(dkey) => {
+                if hypercore.discovery_key == dkey {
+                    protocol.open(hypercore.key().clone()).await?;
+                } else {
+                    panic!("Invalid discovery key");
+                }
+            }
+            Event::Channel(channel) => {
+                hypercore.on_replication_peer(channel);
+            }
+            Event::Close(_dkey) => {
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tokio")]
+async fn on_replication_connection<T: 'static>(
+    stream: TcpStream,
+    is_initiator: bool,
+    hypercore: Arc<HypercoreWrapper<T>>,
+) -> Result<()>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+{
+    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream.compat());
     while let Some(event) = protocol.next().await {
         let event = event?;
         match event {
@@ -715,9 +771,7 @@ where
             let exit = if synced {
                 if let Some(result_path) = result_path.as_ref() {
                     let mut hypercore = hypercore.lock().await;
-                    let mut writer = async_std::io::BufWriter::new(
-                        async_std::fs::File::create(result_path).await?,
-                    );
+                    let mut writer = BufWriter::new(File::create(result_path).await?);
                     for i in 0..new_info.contiguous_length {
                         let value = String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap();
                         let line = format!("{} {}\n", i, value);
@@ -744,7 +798,7 @@ where
                 };
                 if message.start == 0 && message.length == info.contiguous_length {
                     // Let's sleep here for a while so that close messages can pass
-                    async_std::task::sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(100)).await;
                     return Ok(true);
                 }
             }
@@ -783,7 +837,7 @@ impl Default for PeerState {
 }
 
 pub struct RustServer {
-    handle: Option<async_std::task::JoinHandle<()>>,
+    handle: Option<task::JoinHandle<()>>,
 }
 
 impl RustServer {
@@ -792,7 +846,7 @@ impl RustServer {
     }
 
     pub async fn run(&mut self, hypercore: Arc<HypercoreWrapper<RandomAccessDisk>>, port: u32) {
-        self.handle = Some(async_std::task::spawn(async move {
+        self.handle = Some(task::spawn(async move {
             tcp_server(port, on_replication_connection, hypercore)
                 .await
                 .expect("Server return ok");
@@ -803,12 +857,14 @@ impl RustServer {
 
 impl Drop for RustServer {
     fn drop(&mut self) {
+        #[cfg(feature = "async-std")]
         if let Some(handle) = self.handle.take() {
-            async_std::task::block_on(handle.cancel());
+            task::block_on(handle.cancel());
         }
     }
 }
 
+#[cfg(feature = "async-std")]
 pub async fn tcp_server<F, C>(
     port: u32,
     onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
@@ -823,6 +879,29 @@ where
     while let Some(Ok(stream)) = incoming.next().await {
         let context = context.clone();
         let _peer_addr = stream.peer_addr().unwrap();
+        task::spawn(async move {
+            onconnection(stream, false, context)
+                .await
+                .expect("Should return ok");
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tokio")]
+pub async fn tcp_server<F, C>(
+    port: u32,
+    onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
+    context: C,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>> + Send,
+    C: Clone + Send + 'static,
+{
+    let listener = TcpListener::bind(&format!("localhost:{}", port)).await?;
+
+    while let Ok((stream, _peer_address)) = listener.accept().await {
+        let context = context.clone();
         task::spawn(async move {
             onconnection(stream, false, context)
                 .await
