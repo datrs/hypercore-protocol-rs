@@ -73,8 +73,8 @@ wasm-bindgen = [
 ]
 v9 = ["prost", "prost-build", "varinteger", "hypercore/v9",]
 v10 = ["hypercore/v10", "crypto_secretstream"]
-tokio = ["hypercore/tokio"]
-async-std = ["hypercore/async-std"]
+tokio = ["hypercore/tokio", "random-access-disk/tokio"]
+async-std = ["hypercore/async-std", "random-access-disk/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
 # cargo test --features js-interop-tests
