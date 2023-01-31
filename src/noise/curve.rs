@@ -63,7 +63,8 @@ impl Dh for Ed25519 {
         // PublicKey is a CompressedEdwardsY in dalek. So we decompress it to get the
         // EdwardsPoint and use variable base multiplication.
         let cey =
-            curve25519_dalek::edwards::CompressedEdwardsY::from_slice(&pubkey[..self.pub_len()]);
+            curve25519_dalek::edwards::CompressedEdwardsY::from_slice(&pubkey[..self.pub_len()])
+                .map_err(|_| snow::Error::Dh)?;
         let pubkey: curve25519_dalek::edwards::EdwardsPoint = match cey.decompress() {
             Some(ep) => Ok(ep),
             None => Err(snow::Error::Dh),
