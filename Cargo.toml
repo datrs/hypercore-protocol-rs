@@ -23,9 +23,7 @@ bench = false
 
 [dependencies]
 async-channel = "1.5"
-# FIXME: Once there is a new version of snow with fix to rc.0 compilation break, switch to it.
-# snow = { version = "0.9.0", features = ["risky-raw-split"] }
-snow = { git = "https://github.com/tarcieri/snow", branch = "curve25519-dalek/v4.0.0-rc.0", features = ["risky-raw-split"] }
+snow = { version = "0.9.1", features = ["risky-raw-split"] }
 prost = { version = "0.7", optional = true }
 bytes = "1.0.1"
 varinteger = { version = "1.0", optional = true }
