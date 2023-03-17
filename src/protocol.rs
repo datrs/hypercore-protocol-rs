@@ -14,12 +14,9 @@ use std::time::Duration;
 
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
-use crate::constants::DEFAULT_KEEPALIVE;
-use crate::constants::PROTOCOL_NAME;
-use crate::message::{EncodeError, FrameType};
-use crate::message_v10::{ChannelMessage, Frame, Message};
-use crate::noise::{DecryptCipher, EncryptCipher};
-use crate::noise::{Handshake, HandshakeResult};
+use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
+use crate::crypto::{DecryptCipher, EncryptCipher, Handshake, HandshakeResult};
+use crate::message::{ChannelMessage, EncodeError, Frame, FrameType, Message};
 use crate::reader::ReadState;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};

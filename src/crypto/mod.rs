@@ -1,5 +1,5 @@
-mod cipher_v10;
+mod cipher;
 mod curve;
 mod handshake;
-pub use cipher_v10::{DecryptCipher, EncryptCipher};
+pub use cipher::{DecryptCipher, EncryptCipher};
 pub use handshake::{Handshake, HandshakeResult};

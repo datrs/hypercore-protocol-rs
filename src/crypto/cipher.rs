@@ -1,5 +1,5 @@
+use super::HandshakeResult;
 use crate::message::EncodeError;
-use crate::noise::HandshakeResult;
 use crate::util::{stat_uint24_le, write_uint24_le, UINT_24_LENGTH};
 use blake2_rfc::blake2b::Blake2b;
 use crypto_secretstream::{Header, Key, PullStream, PushStream, Tag};

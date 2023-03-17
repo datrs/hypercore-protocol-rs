@@ -1,4 +1,4 @@
-use crate::message_v10::ChannelMessage;
+use crate::message::ChannelMessage;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;

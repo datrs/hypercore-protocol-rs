@@ -1,4 +1,4 @@
-use crate::noise::DecryptCipher;
+use crate::crypto::DecryptCipher;
 use futures_lite::io::AsyncRead;
 use futures_timer::Delay;
 use std::future::Future;
@@ -7,8 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::constants::{DEFAULT_TIMEOUT, MAX_MESSAGE_SIZE};
-use crate::message::FrameType;
-use crate::message_v10::Frame;
+use crate::message::{Frame, FrameType};
 use crate::util::stat_uint24_le;
 use std::time::Duration;
 

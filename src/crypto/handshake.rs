@@ -1,4 +1,4 @@
-use crate::noise::curve::CurveResolver;
+use super::curve::CurveResolver;
 use crate::util::wrap_uint24_le;
 use blake2_rfc::blake2b::Blake2b;
 use snow::resolvers::{DefaultResolver, FallbackResolver};

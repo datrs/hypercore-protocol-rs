@@ -1,8 +1,7 @@
 use crate::message::EncodeError;
 
-use crate::message_v10::{Encoder, Frame};
-use crate::noise::EncryptCipher;
-use crate::noise::HandshakeResult;
+use crate::crypto::EncryptCipher;
+use crate::message::{Encoder, Frame};
 
 use futures_lite::{ready, AsyncWrite};
 use std::collections::VecDeque;
