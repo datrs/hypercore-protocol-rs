@@ -148,17 +148,6 @@ async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
     Ok(len)
 }
 
-#[cfg(feature = "v9")]
-fn msg_data(index: u64, value: Vec<u8>) -> Message {
-    Message::Data(Data {
-        index,
-        value: Some(value),
-        nodes: vec![],
-        signature: None,
-    })
-}
-
-#[cfg(feature = "v10")]
 fn msg_data(index: u64, value: Vec<u8>) -> Message {
     use hypercore::DataBlock;
 
@@ -176,32 +165,14 @@ fn msg_data(index: u64, value: Vec<u8>) -> Message {
     })
 }
 
-#[cfg(feature = "v9")]
-fn index(data: &Data) -> u64 {
-    data.index
-}
-
-#[cfg(feature = "v10")]
 fn index(data: &Data) -> u64 {
     data.request
 }
 
-#[cfg(feature = "v9")]
-fn increment_index(data: &mut Data) {
-    data.index += 1;
-}
-
-#[cfg(feature = "v10")]
 fn increment_index(data: &mut Data) {
     data.request += 1;
 }
 
-#[cfg(feature = "v9")]
-fn value_len(data: &Data) -> u64 {
-    data.value.as_ref().map_or(0, |v| v.len() as u64)
-}
-
-#[cfg(feature = "v10")]
 fn value_len(data: &Data) -> u64 {
     data.block.as_ref().map_or(0, |b| b.value.len() as u64)
 }

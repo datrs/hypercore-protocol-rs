@@ -1,17 +1,15 @@
-use hypercore::PartialKeypair;
-
-cfg_if::cfg_if! { if #[cfg(feature = "v10")] {
 use anyhow::Result;
 use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures_lite::stream::StreamExt;
-use hypercore::{Hypercore, Node, Proof, PublicKey, Signature, Storage, RequestUpgrade, RequestBlock};
+use hypercore::PartialKeypair;
+use hypercore::{Hypercore, PublicKey, RequestBlock, RequestUpgrade, Storage};
 use log::*;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::env;
 use std::fmt::Debug;
 
@@ -46,13 +44,27 @@ fn main() {
         // Create a hypercore.
         let hypercore = if let Some(key) = key {
             let public_key = PublicKey::from_bytes(&key).unwrap();
-            Hypercore::new_with_key_pair(storage, PartialKeypair{public: public_key, secret: None}).await.unwrap()
+            Hypercore::new_with_key_pair(
+                storage,
+                PartialKeypair {
+                    public: public_key,
+                    secret: None,
+                },
+            )
+            .await
+            .unwrap()
         } else {
             let mut hypercore = Hypercore::new(storage).await.unwrap();
-            hypercore.append_batch(&[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"]).await.unwrap();
+            hypercore
+                .append_batch(&[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"])
+                .await
+                .unwrap();
             hypercore
         };
-        println!("KEY={}", hex::encode(hypercore.key_pair().public.as_bytes()));
+        println!(
+            "KEY={}",
+            hex::encode(hypercore.key_pair().public.as_bytes())
+        );
         info!("{} opened hypercore", mode);
         // Wrap it and add to the hypercore store.
         let hypercore_wrapper = HypercoreWrapper::from_memory_hypercore(hypercore);
@@ -117,8 +129,6 @@ where
     Ok(())
 }
 
-
-
 /// A container for hypercores.
 #[derive(Debug)]
 struct HypercoreStore<T>
@@ -181,7 +191,6 @@ where
         let mut peer_state = PeerState::default();
         let mut hypercore = self.hypercore.clone();
         task::spawn(async move {
-
             // The one that has stuff sends:
             // 0000 <- batch
             // 01 <- channel
@@ -210,14 +219,18 @@ where
             //
 
             let info = {
-                 let hypercore = hypercore.lock().await;
-                 hypercore.info()
+                let hypercore = hypercore.lock().await;
+                hypercore.info()
             };
 
             if info.fork != peer_state.remote_fork {
-              peer_state.can_upgrade = false;
+                peer_state.can_upgrade = false;
             }
-            let remote_length = if info.fork == peer_state.remote_fork {peer_state.remote_length} else {0};
+            let remote_length = if info.fork == peer_state.remote_fork {
+                peer_state.remote_length
+            } else {
+                0
+            };
 
             let sync_msg = Synchronize {
                 fork: info.fork,
@@ -234,11 +247,13 @@ where
                     start: 0,
                     length: info.contiguous_length,
                 };
-                channel.send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)]).await.unwrap();
+                channel
+                    .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
+                    .await
+                    .unwrap();
             } else {
                 channel.send(Message::Synchronize(sync_msg)).await.unwrap();
             }
-
 
             // JS: has this:
             // if (this.core.tree.fork !== this.remoteFork) {
@@ -260,7 +275,8 @@ where
             // }
 
             while let Some(message) = channel.next().await {
-                let result = onmessage(&mut hypercore, &mut peer_state, &mut channel, message).await;
+                let result =
+                    onmessage(&mut hypercore, &mut peer_state, &mut channel, message).await;
                 if let Err(e) = result {
                     error!("protocol error: {}", e);
                     break;
@@ -313,8 +329,8 @@ where
             let length_changed = message.length != peer_state.remote_length;
             let first_sync = !peer_state.remote_synced;
             let info = {
-                 let hypercore = hypercore.lock().await;
-                 hypercore.info()
+                let hypercore = hypercore.lock().await;
+                hypercore.info()
             };
             let same_fork = message.fork == info.fork;
 
@@ -342,7 +358,10 @@ where
                 messages.push(Message::Synchronize(msg));
             }
 
-            if peer_state.remote_length > info.length && peer_state.length_acked == info.length && length_changed {
+            if peer_state.remote_length > info.length
+                && peer_state.length_acked == info.length
+                && length_changed
+            {
                 // This is sent by node here
                 // 01 <- channel
                 // 01 <- type=Request
@@ -357,10 +376,10 @@ where
                     hash: None,
                     block: None,
                     seek: None,
-                    upgrade: Some(RequestUpgrade{
+                    upgrade: Some(RequestUpgrade {
                         start: info.length,
-                        length: peer_state.remote_length - info.length
-                    })
+                        length: peer_state.remote_length - info.length,
+                    }),
                 };
                 messages.push(Message::Request(msg));
             }
@@ -369,14 +388,15 @@ where
 
             // TODO: Other requests that should be sent here, now only handles the simple asking
             // for data
-
         }
         Message::Request(message) => {
             println!("Got Request message {:?}", message);
             let (info, proof) = {
-                 let mut hypercore = hypercore.lock().await;
-                 let proof = hypercore.create_proof(message.block, message.hash, message.seek, message.upgrade).await?;
-                 (hypercore.info(), proof)
+                let mut hypercore = hypercore.lock().await;
+                let proof = hypercore
+                    .create_proof(message.block, message.hash, message.seek, message.upgrade)
+                    .await?;
+                (hypercore.info(), proof)
             };
             if let Some(proof) = proof {
                 let msg = Data {
@@ -385,7 +405,7 @@ where
                     hash: proof.hash,
                     block: proof.block,
                     seek: proof.seek,
-                    upgrade: proof.upgrade
+                    upgrade: proof.upgrade,
                 };
                 channel.send(Message::Data(msg)).await?;
             }
@@ -429,7 +449,11 @@ where
                 // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
                     for i in 0..new_info.contiguous_length {
-                        println!("replicated index {}: {}", i, String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap());
+                        println!(
+                            "replicated index {}: {}",
+                            i,
+                            String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap()
+                        );
                     }
                 }
                 (old_info, applied, new_info, request_block)
@@ -457,7 +481,11 @@ where
                 // 00 <- start, increments to 3
                 // 02 <- nodes, 2 != 1 has to do with MerkleTree using double values, see missingNodes()
 
-                let remote_length = if new_info.fork == peer_state.remote_fork { peer_state.remote_length } else { 0 };
+                let remote_length = if new_info.fork == peer_state.remote_fork {
+                    peer_state.remote_length
+                } else {
+                    0
+                };
                 messages.push(Message::Synchronize(Synchronize {
                     fork: new_info.fork,
                     length: new_length,
@@ -484,6 +512,3 @@ where
     };
     Ok(())
 }
-
-// cfg_if
-} else { fn main() {} } }

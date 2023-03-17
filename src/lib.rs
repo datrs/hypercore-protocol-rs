@@ -65,15 +65,6 @@
 //!             // A Channel event is emitted for each established channel.
 //!             Event::Channel(mut channel) => {
 //!                 // A Channel can be sent to other tasks.
-//!                 #[cfg(feature = "v9")]
-//!                 async_std::task::spawn(async move {
-//!                     // A Channel can both send messages and is a stream of incoming messages.
-//!                     channel.want(Want { start: 0, length: None }).await;
-//!                     while let Some(message) = channel.next().await {
-//!                         eprintln!("{} received message: {:?}", name, message);
-//!                     }
-//!                 });
-//!                 #[cfg(feature = "v10")]
 //!                 async_std::task::spawn(async move {
 //!                     // A Channel can both send messages and is a stream of incoming messages.
 //!                     channel.want(Want { start: 0, length: 1 }).await;
@@ -98,13 +89,8 @@ mod builder;
 mod channels;
 mod constants;
 mod duplex;
-#[cfg(feature = "v9")]
-mod extension;
 mod message;
-#[cfg(feature = "v10")]
 mod message_v10;
-#[cfg(feature = "v9")]
-mod message_v9;
 mod noise;
 mod protocol;
 mod reader;
@@ -112,13 +98,6 @@ mod util;
 mod writer;
 
 /// The wire messages used by the protocol.
-#[allow(missing_docs)]
-#[cfg(feature = "v9")]
-pub mod schema {
-    include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
-    pub use crate::message_v9::ExtensionMessage;
-}
-#[cfg(feature = "v10")]
 pub mod schema {
     include!("schema_v10.rs");
 }
@@ -127,16 +106,9 @@ pub use builder::{Builder as ProtocolBuilder, Options};
 
 pub use channels::Channel;
 // Export the needed types for Channel::take_receiver, and Channel::local_sender()
-#[cfg(feature = "v10")]
 pub use async_channel::{Receiver as ChannelReceiver, Sender as ChannelSender};
 pub use duplex::Duplex;
-#[cfg(feature = "v9")]
-pub use extension::Extension;
-#[cfg(feature = "v10")]
 pub use hypercore; // Re-export hypercore
-#[cfg(feature = "v10")]
 pub use message_v10::Message;
-#[cfg(feature = "v9")]
-pub use message_v9::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;

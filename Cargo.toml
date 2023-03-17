@@ -24,9 +24,7 @@ bench = false
 [dependencies]
 async-channel = "1.5"
 snow = { version = "0.9.1", features = ["risky-raw-split"] }
-prost = { version = "0.7", optional = true }
 bytes = "1.0.1"
-varinteger = { version = "1.0", optional = true }
 rand = "0.8"
 blake2-rfc = "0.2"
 hex = "0.4"
@@ -38,12 +36,12 @@ futures-timer = "3.0"
 instant = "0.1"
 getrandom = "0.1"
 futures-lite = "1.11.3"
-hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "tokio", default-features = false }
+hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10_cleanup", default-features = false }
 sha2 = "0.10.6"
 # FIXME: This uses pre-release, because v4 relaxed the zeroize version range. With this the crate be
 # buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch to that.
 curve25519-dalek = "4.0.0-rc.0"
-crypto_secretstream = { version = "0.1.1", optional = true }
+crypto_secretstream = "0.1.1"
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
@@ -59,20 +57,14 @@ pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
-cfg-if = "1.0"
-
-[build-dependencies]
-prost-build = { version = "0.6.1", optional = true }
 
 [features]
-default = ["v10", "async-std"]
+default = ["async-std"]
 wasm-bindgen = [
   "instant/wasm-bindgen", 
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
-v9 = ["prost", "prost-build", "varinteger", "hypercore/v9",]
-v10 = ["hypercore/v10", "crypto_secretstream"]
 tokio = ["hypercore/tokio", "random-access-disk/tokio"]
 async-std = ["hypercore/async-std", "random-access-disk/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore

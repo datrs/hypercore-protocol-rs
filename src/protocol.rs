@@ -15,16 +15,9 @@ use std::time::Duration;
 use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::DEFAULT_KEEPALIVE;
-#[cfg(feature = "v10")]
 use crate::constants::PROTOCOL_NAME;
-#[cfg(feature = "v9")]
-use crate::extension::{Extension, Extensions};
 use crate::message::{EncodeError, FrameType};
-#[cfg(feature = "v10")]
 use crate::message_v10::{ChannelMessage, Frame, Message};
-#[cfg(feature = "v9")]
-use crate::message_v9::{ChannelMessage, Frame, Message};
-#[cfg(feature = "v10")]
 use crate::noise::{DecryptCipher, EncryptCipher};
 use crate::noise::{Handshake, HandshakeResult};
 use crate::reader::ReadState;
@@ -63,7 +56,6 @@ pub enum Event {
     Channel(Channel),
     /// Emitted when a channel is closed.
     Close(DiscoveryKey),
-    #[cfg(feature = "v10")]
     /// Convenience event to make it possible to signal the protocol from a channel.
     /// See channel.signal_local().
     LocalSignal((String, Vec<u8>)),
@@ -89,7 +81,6 @@ impl fmt::Debug for Event {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
-            #[cfg(feature = "v10")]
             Event::LocalSignal((name, data)) => {
                 write!(f, "LocalSignal(name={},len={})", name, data.len())
             }
@@ -104,7 +95,6 @@ pub enum State {
     // The Handshake struct sits behind an option only so that we can .take()
     // it out, it's never actually empty when in State::Handshake.
     Handshake(Option<Handshake>),
-    #[cfg(feature = "v10")]
     SecretStream(Option<EncryptCipher>),
     Established,
 }
@@ -114,7 +104,6 @@ impl fmt::Debug for State {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
-            #[cfg(feature = "v10")]
             State::SecretStream(_) => write!(f, "SecretStream"),
             State::Established => write!(f, "Established"),
         }
@@ -134,18 +123,10 @@ pub struct Protocol<IO> {
     channels: ChannelMap,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
-    #[cfg(feature = "v9")]
-    outbound_rx: Receiver<ChannelMessage>,
-    #[cfg(feature = "v10")]
     outbound_rx: Receiver<Vec<ChannelMessage>>,
-    #[cfg(feature = "v9")]
-    outbound_tx: Sender<ChannelMessage>,
-    #[cfg(feature = "v10")]
     outbound_tx: Sender<Vec<ChannelMessage>>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
-    #[cfg(feature = "v9")]
-    extensions: Extensions,
 }
 
 impl<IO> Protocol<IO>
@@ -153,30 +134,6 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new protocol instance.
-    #[cfg(feature = "v9")]
-    pub fn new(io: IO, options: Options) -> Self {
-        let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
-        let (outbound_tx, outbound_rx) = async_channel::bounded(1);
-        Protocol {
-            io,
-            read_state: ReadState::new(),
-            write_state: WriteState::new(),
-            options,
-            state: State::NotInitialized,
-            channels: ChannelMap::new(),
-            handshake: None,
-            extensions: Extensions::new(outbound_tx.clone(), 0),
-            command_rx,
-            command_tx: CommandTx(command_tx),
-            outbound_tx,
-            outbound_rx,
-            keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
-            queued_events: VecDeque::new(),
-        }
-    }
-
-    /// Create a new protocol instance.
-    #[cfg(feature = "v10")]
     pub fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         let (outbound_tx, outbound_rx): (
@@ -244,12 +201,6 @@ where
     /// Give a command to the protocol.
     pub async fn command(&mut self, command: Command) -> Result<()> {
         self.command_tx.send(command).await
-    }
-
-    /// Register a protocol extension on the stream.
-    #[cfg(feature = "v9")]
-    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
-        self.extensions.register(name.to_string()).await
     }
 
     /// Open a new protocol channel.
@@ -340,12 +291,6 @@ where
 
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
-        #[cfg(feature = "v9")]
-        if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            self.write_state.queue_frame(Frame::Raw(vec![0u8; 0]));
-            self.keepalive.reset(KEEPALIVE_DURATION);
-        }
-        #[cfg(feature = "v10")]
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
             if let State::Established = self.state {
                 // 24 bit header for the empty message, hence the 3
@@ -356,20 +301,6 @@ where
         }
     }
 
-    #[cfg(feature = "v9")]
-    fn on_outbound_message(&mut self, message: &ChannelMessage) {
-        // If message is close, close the local channel.
-        if let ChannelMessage {
-            channel,
-            message: Message::Close(_),
-            ..
-        } = message
-        {
-            self.close_local(*channel);
-        }
-    }
-
-    #[cfg(feature = "v10")]
     fn on_outbound_message(&mut self, message: &ChannelMessage) -> bool {
         // If message is close, close the local channel.
         if let ChannelMessage {
@@ -417,13 +348,6 @@ where
             }
 
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
-                #[cfg(feature = "v9")]
-                Poll::Ready(Some(message)) => {
-                    self.on_outbound_message(&message);
-                    let frame = Frame::Message(message);
-                    self.write_state.park_frame(frame);
-                }
-                #[cfg(feature = "v10")]
                 Poll::Ready(Some(mut messages)) => {
                     if !messages.is_empty() {
                         messages.retain(|message| self.on_outbound_message(&message));
@@ -441,12 +365,6 @@ where
 
     fn on_inbound_frame(&mut self, frame: Frame) -> Result<()> {
         match frame {
-            #[cfg(feature = "v9")]
-            Frame::Raw(buf) => match self.state {
-                State::Handshake(_) => self.on_handshake_message(buf),
-                _ => unreachable!("May not receive raw frames outside of handshake state"),
-            },
-            #[cfg(feature = "v10")]
             Frame::RawBatch(raw_batch) => {
                 let mut processed_state: Option<String> = None;
                 for buf in raw_batch {
@@ -487,12 +405,6 @@ where
                 }
                 Ok(())
             }
-            #[cfg(feature = "v9")]
-            Frame::Message(channel_message) => match self.state {
-                State::Established => self.on_inbound_message(channel_message),
-                _ => unreachable!("May not receive message frames when not established"),
-            },
-            #[cfg(feature = "v10")]
             Frame::MessageBatch(channel_messages) => match self.state {
                 State::Established => {
                     for channel_message in channel_messages {
@@ -515,27 +427,6 @@ where
             self.queue_frame_direct(response_buf.to_vec()).unwrap();
         }
 
-        #[cfg(feature = "v9")]
-        if !handshake.complete() {
-            self.state = State::Handshake(Some(handshake));
-        } else {
-            let result = handshake.into_result()?;
-            if self.options.encrypted {
-                self.read_state.upgrade_with_handshake(&result)?;
-                self.write_state.upgrade_with_handshake(&result)?;
-            }
-            self.read_state.set_frame_type(FrameType::Message);
-            let remote_public_key = parse_key(&result.remote_pubkey)?;
-            log::debug!(
-                "handshake complete, remote_key {}",
-                pretty_hash(&remote_public_key)
-            );
-            self.handshake = Some(result);
-            self.state = State::Established;
-            self.queue_event(Event::Handshake(remote_public_key));
-        }
-
-        #[cfg(feature = "v10")]
         if !handshake.complete() {
             self.state = State::Handshake(Some(handshake));
         } else {
@@ -562,7 +453,6 @@ where
         Ok(())
     }
 
-    #[cfg(feature = "v10")]
     fn on_secret_stream_message(&mut self, buf: Vec<u8>) -> Result<()> {
         let encrypt_cipher = match &mut self.state {
             State::SecretStream(encrypt_cipher) => encrypt_cipher.take().unwrap(),
@@ -586,31 +476,6 @@ where
         Ok(())
     }
 
-    #[cfg(feature = "v9")]
-    fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
-        // let channel_message = ChannelMessage::decode(buf)?;
-        log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
-        let (remote_id, message) = channel_message.into_split();
-        match remote_id {
-            // Id 0 means stream-level, where only extension and options messages are supported.
-            0 => match message {
-                Message::Options(msg) => self.extensions.on_remote_update(msg.extensions),
-                Message::Extension(msg) => self.extensions.on_message(msg),
-                _ => {}
-            },
-            // Any other Id is a regular channel message.
-            _ => match message {
-                Message::Open(msg) => self.on_open(remote_id, msg)?,
-                Message::Close(msg) => self.on_close(remote_id, msg)?,
-                _ => self
-                    .channels
-                    .forward_inbound_message(remote_id as usize, message)?,
-            },
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
     fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
         // let channel_message = ChannelMessage::decode(buf)?;
         let (remote_id, message) = channel_message.into_split();
@@ -631,33 +496,6 @@ where
         }
     }
 
-    #[cfg(feature = "v9")]
-    fn command_open(&mut self, key: Key) -> Result<()> {
-        // Create a new channel.
-        let channel_handle = self.channels.attach_local(key);
-        // Safe because attach_local always puts Some(local_id)
-        let local_id = channel_handle.local_id().unwrap();
-        let discovery_key = *channel_handle.discovery_key();
-
-        // If the channel was already opened from the remote end, verify, and if
-        // verification is ok, push a channel open event.
-        if channel_handle.is_connected() {
-            self.accept_channel(local_id)?;
-        }
-
-        // Tell the remote end about the new channel.
-        let capability = self.capability(&key);
-        let message = Message::Open(Open {
-            discovery_key: discovery_key.to_vec(),
-            capability,
-        });
-        let channel_message = ChannelMessage::new(local_id as u64, message);
-        self.write_state
-            .queue_frame(Frame::Message(channel_message));
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
     fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key);
@@ -707,17 +545,8 @@ where
     }
 
     fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
-        #[cfg(feature = "v9")]
-        {
-            let frame = Frame::Raw(body);
-            self.write_state.try_queue_direct(&frame)
-        }
-
-        #[cfg(feature = "v10")]
-        {
-            let mut frame = Frame::RawBatch(vec![body]);
-            self.write_state.try_queue_direct(&mut frame)
-        }
+        let mut frame = Frame::RawBatch(vec![body]);
+        self.write_state.try_queue_direct(&mut frame)
     }
 
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {
@@ -736,19 +565,6 @@ where
         }
     }
 
-    #[cfg(feature = "v9")]
-    fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
-        if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
-            let discovery_key = *channel_handle.discovery_key();
-            self.channels
-                .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
-            self.channels.remove(&discovery_key);
-            self.queue_event(Event::Close(discovery_key));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = *channel_handle.discovery_key();

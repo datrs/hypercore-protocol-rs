@@ -167,15 +167,6 @@ async fn open_close_channels() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "v9")]
-fn want(start: u64, len: u64) -> Want {
-    Want {
-        start,
-        length: Some(len),
-    }
-}
-
-#[cfg(feature = "v10")]
 fn want(start: u64, length: u64) -> Want {
     Want { start, length }
 }

@@ -1,12 +1,6 @@
 use crate::message::EncodeError;
 
-#[cfg(feature = "v10")]
 use crate::message_v10::{Encoder, Frame};
-#[cfg(feature = "v9")]
-use crate::message_v9::{Encoder, Frame};
-#[cfg(feature = "v9")]
-use crate::noise::Cipher;
-#[cfg(feature = "v10")]
 use crate::noise::EncryptCipher;
 use crate::noise::HandshakeResult;
 
@@ -32,9 +26,6 @@ pub struct WriteState {
     current_frame: Option<Frame>,
     start: usize,
     end: usize,
-    #[cfg(feature = "v9")]
-    cipher: Option<Cipher>,
-    #[cfg(feature = "v10")]
     cipher: Option<EncryptCipher>,
     step: Step,
 }
@@ -73,24 +64,6 @@ impl WriteState {
         self.queue.push_back(frame.into())
     }
 
-    #[cfg(feature = "v9")]
-    pub fn try_queue_direct<T: Encoder>(
-        &mut self,
-        frame: &T,
-    ) -> std::result::Result<bool, EncodeError> {
-        let len = frame.encoded_len();
-        if self.buf.len() < len {
-            self.buf.resize(len, 0u8);
-        }
-        if len > self.remaining() {
-            return Ok(false);
-        }
-        let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len);
-        Ok(true)
-    }
-
-    #[cfg(feature = "v10")]
     pub fn try_queue_direct<T: Encoder>(
         &mut self,
         frame: &mut T,
@@ -127,7 +100,6 @@ impl WriteState {
         }
     }
 
-    #[cfg(feature = "v10")]
     fn advance(&mut self, n: usize) -> std::result::Result<(), EncodeError> {
         let end = self.end + n;
 
@@ -141,23 +113,6 @@ impl WriteState {
         Ok(())
     }
 
-    #[cfg(feature = "v9")]
-    fn advance(&mut self, n: usize) {
-        let end = self.end + n;
-        if let Some(ref mut cipher) = self.cipher {
-            cipher.apply(&mut self.buf[self.end..end]);
-        }
-        self.end = end;
-    }
-
-    #[cfg(feature = "v9")]
-    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        let cipher = Cipher::from_handshake_tx(handshake)?;
-        self.cipher = Some(cipher);
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
     pub fn upgrade_with_encrypt_cipher(&mut self, encrypt_cipher: EncryptCipher) {
         self.cipher = Some(encrypt_cipher);
     }
@@ -181,13 +136,6 @@ impl WriteState {
                         self.current_frame = self.queue.pop_front();
                     }
 
-                    #[cfg(feature = "v9")]
-                    if let Some(frame) = self.current_frame.take() {
-                        if !self.try_queue_direct(&frame)? {
-                            self.current_frame = Some(frame);
-                        }
-                    }
-                    #[cfg(feature = "v10")]
                     if let Some(mut frame) = self.current_frame.take() {
                         if !self.try_queue_direct(&mut frame)? {
                             self.current_frame = Some(frame);
@@ -218,7 +166,6 @@ impl WriteState {
         }
     }
 
-    #[cfg(feature = "v10")]
     fn safe_encrypted_len(&self, encoded_len: usize) -> usize {
         if let Some(cipher) = &self.cipher {
             cipher.safe_encrypted_len(encoded_len)

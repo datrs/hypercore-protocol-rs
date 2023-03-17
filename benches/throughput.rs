@@ -162,17 +162,6 @@ async fn channel_client(channel: &mut Channel) {
     }
 }
 
-#[cfg(feature = "v9")]
-fn msg_data(index: u64, value: Vec<u8>) -> Message {
-    Message::Data(Data {
-        index,
-        value: Some(value),
-        nodes: vec![],
-        signature: None,
-    })
-}
-
-#[cfg(feature = "v10")]
 fn msg_data(index: u64, value: Vec<u8>) -> Message {
     use hypercore::DataBlock;
 
@@ -190,12 +179,6 @@ fn msg_data(index: u64, value: Vec<u8>) -> Message {
     })
 }
 
-#[cfg(feature = "v9")]
-fn index(msg: &Data) -> u64 {
-    msg.index
-}
-
-#[cfg(feature = "v10")]
 fn index(msg: &Data) -> u64 {
     msg.request
 }

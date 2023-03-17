@@ -1,9 +1,4 @@
-#[cfg(feature = "v9")]
-use crate::extension::{Extension, Extensions};
-#[cfg(feature = "v10")]
 use crate::message_v10::ChannelMessage;
-#[cfg(feature = "v9")]
-use crate::message_v9::ChannelMessage;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::Message;
@@ -24,17 +19,11 @@ use std::task::Poll;
 /// This is the handle that can be sent to other threads.
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
-    #[cfg(feature = "v10")]
     direct_inbound_tx: Sender<Message>,
-    #[cfg(feature = "v9")]
-    outbound_tx: Sender<ChannelMessage>,
-    #[cfg(feature = "v10")]
     outbound_tx: Sender<Vec<ChannelMessage>>,
     key: Key,
     discovery_key: DiscoveryKey,
     local_id: usize,
-    #[cfg(feature = "v9")]
-    extensions: Extensions,
     closed: Arc<AtomicBool>,
 }
 
@@ -76,23 +65,6 @@ impl Channel {
     }
 
     /// Send a message over the channel.
-    #[cfg(feature = "v9")]
-    pub async fn send(&mut self, message: Message) -> Result<()> {
-        if self.closed() {
-            return Err(Error::new(
-                ErrorKind::ConnectionAborted,
-                "Channel is closed",
-            ));
-        }
-        let message = ChannelMessage::new(self.local_id as u64, message);
-        self.outbound_tx
-            .send(message)
-            .await
-            .map_err(map_channel_err)
-    }
-
-    /// Send a message over the channel.
-    #[cfg(feature = "v10")]
     pub async fn send(&mut self, message: Message) -> Result<()> {
         if self.closed() {
             return Err(Error::new(
@@ -118,7 +90,6 @@ impl Channel {
     /// https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L359-L380
     ///
     /// Batching messages across channels like protomux is capable of doing is not (yet) implemented.
-    #[cfg(feature = "v10")]
     pub async fn send_batch(&mut self, messages: &[Message]) -> Result<()> {
         if self.closed() {
             return Err(Error::new(
@@ -136,12 +107,6 @@ impl Channel {
             .map_err(map_channel_err)
     }
 
-    /// Register a protocol extension.
-    #[cfg(feature = "v9")]
-    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
-        self.extensions.register(name.to_string()).await
-    }
-
     /// Take the receiving part out of the channel.
     ///
     /// After taking the receiver, this Channel will not emit messages when
@@ -150,7 +115,6 @@ impl Channel {
         self.inbound_rx.take()
     }
 
-    #[cfg(feature = "v10")]
     /// Clone the local sending part of the channel receiver. Useful
     /// for direct local communication to the channel listener. Typically
     /// you will only want to send a LocalSignal message with this sender to make
@@ -158,30 +122,6 @@ impl Channel {
     /// signaling.
     pub fn local_sender(&mut self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
-    }
-
-    /// Send a status message.
-    #[cfg(feature = "v9")]
-    pub async fn status(&mut self, msg: Status) -> Result<()> {
-        self.send(Message::Status(msg)).await
-    }
-
-    /// Send a options message.
-    #[cfg(feature = "v9")]
-    pub async fn options(&mut self, msg: Options) -> Result<()> {
-        self.send(Message::Options(msg)).await
-    }
-
-    /// Send a have message.
-    #[cfg(feature = "v9")]
-    pub async fn have(&mut self, msg: Have) -> Result<()> {
-        self.send(Message::Have(msg)).await
-    }
-
-    /// Send a unhave message.
-    #[cfg(feature = "v9")]
-    pub async fn unhave(&mut self, msg: Unhave) -> Result<()> {
-        self.send(Message::Unhave(msg)).await
     }
 
     /// Send a want message.
@@ -209,21 +149,6 @@ impl Channel {
         self.send(Message::Data(msg)).await
     }
 
-    #[cfg(feature = "v9")]
-    /// Send a close message and close this channel.
-    pub async fn close(&mut self) -> Result<()> {
-        if self.closed() {
-            return Ok(());
-        }
-        let close = Close {
-            discovery_key: None,
-        };
-        self.send(Message::Close(close)).await?;
-        self.closed.store(true, Ordering::SeqCst);
-        Ok(())
-    }
-
-    #[cfg(feature = "v10")]
     /// Send a close message and close this channel.
     pub async fn close(&mut self) -> Result<()> {
         if self.closed() {
@@ -237,7 +162,6 @@ impl Channel {
         Ok(())
     }
 
-    #[cfg(feature = "v10")]
     /// Signal the protocol to produce Event::LocalSignal. If you want to send a message
     /// to the channel level, see take_receiver() and local_sender().
     pub async fn signal_local_protocol(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
@@ -261,18 +185,7 @@ impl Stream for Channel {
                 }
                 Some(ref mut inbound_rx) => {
                     let message = ready!(Pin::new(inbound_rx).poll_next(cx));
-                    match message {
-                        #[cfg(feature = "v9")]
-                        Some(Message::Extension(msg)) => {
-                            this.extensions.on_message(msg);
-                        }
-                        #[cfg(feature = "v9")]
-                        Some(Message::Options(ref msg)) => {
-                            this.extensions.on_remote_update(msg.extensions.clone());
-                            return Poll::Ready(message);
-                        }
-                        _ => return Poll::Ready(message),
-                    }
+                    return Poll::Ready(message);
                 }
             }
         }
@@ -366,28 +279,6 @@ impl ChannelHandle {
         Ok((&local_state.key, remote_state.remote_capability.as_ref()))
     }
 
-    #[cfg(feature = "v9")]
-    pub fn open(&mut self, outbound_tx: Sender<ChannelMessage>) -> Channel {
-        let local_state = self
-            .local_state
-            .as_ref()
-            .expect("May not open channel that is not locally attached");
-
-        let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let channel = Channel {
-            inbound_rx: Some(inbound_rx),
-            outbound_tx: outbound_tx.clone(),
-            discovery_key: self.discovery_key,
-            key: local_state.key,
-            local_id: local_state.local_id,
-            extensions: Extensions::new(outbound_tx, local_state.local_id as u64),
-            closed: self.closed.clone(),
-        };
-        self.inbound_tx = Some(inbound_tx);
-        channel
-    }
-
-    #[cfg(feature = "v10")]
     pub fn open(&mut self, outbound_tx: Sender<Vec<ChannelMessage>>) -> Channel {
         let local_state = self
             .local_state
@@ -408,18 +299,6 @@ impl ChannelHandle {
         channel
     }
 
-    #[cfg(feature = "v9")]
-    pub fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
-        if let Some(inbound_tx) = self.inbound_tx.as_mut() {
-            inbound_tx
-                .try_send(message)
-                .map_err(|_e| error("Channel is full"))
-        } else {
-            Err(error("Channel is not open"))
-        }
-    }
-
-    #[cfg(feature = "v10")]
     pub fn try_send_inbound(&mut self, message: Message) -> std::io::Result<()> {
         if let Some(inbound_tx) = self.inbound_tx.as_mut() {
             inbound_tx
@@ -555,23 +434,6 @@ impl ChannelMap {
         channel_handle.prepare_to_verify()
     }
 
-    #[cfg(feature = "v9")]
-    pub fn accept(
-        &mut self,
-        local_id: usize,
-        outbound_tx: Sender<ChannelMessage>,
-    ) -> Result<Channel> {
-        let channel_handle = self
-            .get_local_mut(local_id)
-            .ok_or_else(|| error("Channel not found"))?;
-        if !channel_handle.is_connected() {
-            return Err(error("Channel is not opened from remote"));
-        }
-        let channel = channel_handle.open(outbound_tx);
-        Ok(channel)
-    }
-
-    #[cfg(feature = "v10")]
     pub fn accept(
         &mut self,
         local_id: usize,
@@ -605,19 +467,6 @@ impl ChannelMap {
         Ok(())
     }
 
-    #[cfg(feature = "v9")]
-    fn alloc_local(&mut self) -> usize {
-        let empty_id = self.local_id.iter().skip(1).position(|x| x.is_none());
-        match empty_id {
-            Some(empty_id) => empty_id,
-            None => {
-                self.local_id.push(None);
-                self.local_id.len() - 1
-            }
-        }
-    }
-
-    #[cfg(feature = "v10")]
     fn alloc_local(&mut self) -> usize {
         let empty_id = self
             .local_id

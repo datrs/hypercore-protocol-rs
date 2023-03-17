@@ -1,5 +1,3 @@
-#![cfg(feature = "v10")]
-
 use _util::wait_for_localhost_port;
 use anyhow::Result;
 use futures::Future;
