@@ -48,9 +48,9 @@ async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
 async-compat = "0.2.1"
 tokio = { version = "1.25.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 env_logger = "0.7.1"
-random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "tokio"}
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "tokio" }
-random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }
+random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "thiserror"}
+random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "thiserror" }
+random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "thiserror" }
 anyhow = "1.0.28"
 criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"

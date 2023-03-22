@@ -1,4 +1,4 @@
-use hypercore::compact_encoding::{CompactEncoding, State};
+use hypercore::encoding::{CompactEncoding, HypercoreState, State};
 use hypercore::{
     DataBlock, DataHash, DataSeek, DataUpgrade, Proof, RequestBlock, RequestSeek, RequestUpgrade,
 };
@@ -132,11 +132,11 @@ pub struct Request {
     pub upgrade: Option<RequestUpgrade>,
 }
 
-impl CompactEncoding<Request> for State {
+impl CompactEncoding<Request> for HypercoreState {
     fn preencode(&mut self, value: &Request) {
         self.end += 1; // flags
-        self.preencode(&value.id);
-        self.preencode(&value.fork);
+        self.0.preencode(&value.id);
+        self.0.preencode(&value.fork);
         if let Some(block) = &value.block {
             self.preencode(block);
         }
@@ -156,9 +156,9 @@ impl CompactEncoding<Request> for State {
         flags = flags | if value.hash.is_some() { 2 } else { 0 };
         flags = flags | if value.seek.is_some() { 4 } else { 0 };
         flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
-        self.encode(&flags, buffer);
-        self.encode(&value.id, buffer);
-        self.encode(&value.fork, buffer);
+        self.0.encode(&flags, buffer);
+        self.0.encode(&value.id, buffer);
+        self.0.encode(&value.fork, buffer);
         if let Some(block) = &value.block {
             self.encode(block, buffer);
         }
@@ -174,9 +174,9 @@ impl CompactEncoding<Request> for State {
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Request {
-        let flags: u8 = self.decode(buffer);
-        let id: u64 = self.decode(buffer);
-        let fork: u64 = self.decode(buffer);
+        let flags: u8 = self.0.decode(buffer);
+        let id: u64 = self.0.decode(buffer);
+        let fork: u64 = self.0.decode(buffer);
         let block: Option<RequestBlock> = if flags & 1 != 0 {
             Some(self.decode(buffer))
         } else {
@@ -241,11 +241,11 @@ pub struct Data {
     pub upgrade: Option<DataUpgrade>,
 }
 
-impl CompactEncoding<Data> for State {
+impl CompactEncoding<Data> for HypercoreState {
     fn preencode(&mut self, value: &Data) {
         self.end += 1; // flags
-        self.preencode(&value.request);
-        self.preencode(&value.fork);
+        self.0.preencode(&value.request);
+        self.0.preencode(&value.fork);
         if let Some(block) = &value.block {
             self.preencode(block);
         }
@@ -265,9 +265,9 @@ impl CompactEncoding<Data> for State {
         flags = flags | if value.hash.is_some() { 2 } else { 0 };
         flags = flags | if value.seek.is_some() { 4 } else { 0 };
         flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
-        self.encode(&flags, buffer);
-        self.encode(&value.request, buffer);
-        self.encode(&value.fork, buffer);
+        self.0.encode(&flags, buffer);
+        self.0.encode(&value.request, buffer);
+        self.0.encode(&value.fork, buffer);
         if let Some(block) = &value.block {
             self.encode(block, buffer);
         }
@@ -283,9 +283,9 @@ impl CompactEncoding<Data> for State {
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Data {
-        let flags: u8 = self.decode(buffer);
-        let request: u64 = self.decode(buffer);
-        let fork: u64 = self.decode(buffer);
+        let flags: u8 = self.0.decode(buffer);
+        let request: u64 = self.0.decode(buffer);
+        let fork: u64 = self.0.decode(buffer);
         let block: Option<DataBlock> = if flags & 1 != 0 {
             Some(self.decode(buffer))
         } else {

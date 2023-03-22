@@ -96,7 +96,7 @@ async fn onconnection<T: 'static>(
     hypercore_store: Arc<HypercoreStore<T>>,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     info!("onconnection, initiator: {}", is_initiator);
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
@@ -133,13 +133,13 @@ where
 #[derive(Debug)]
 struct HypercoreStore<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     hypercores: HashMap<String, Arc<HypercoreWrapper<T>>>,
 }
 impl<T> HypercoreStore<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     pub fn new() -> Self {
         let hypercores = HashMap::new();
@@ -161,7 +161,7 @@ where
 #[derive(Debug, Clone)]
 struct HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     discovery_key: [u8; 32],
     key: [u8; 32],
@@ -181,7 +181,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
 
 impl<T> HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     pub fn key(&self) -> &[u8; 32] {
         &self.key
@@ -321,7 +321,7 @@ async fn onmessage<T>(
     message: Message,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     match message {
         Message::Synchronize(message) => {

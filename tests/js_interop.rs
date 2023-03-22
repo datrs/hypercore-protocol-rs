@@ -434,7 +434,7 @@ async fn on_replication_connection<T: 'static>(
     hypercore: Arc<HypercoreWrapper<T>>,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
     while let Some(event) = protocol.next().await {
@@ -471,7 +471,7 @@ async fn on_replication_connection<T: 'static>(
     hypercore: Arc<HypercoreWrapper<T>>,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream.compat());
     while let Some(event) = protocol.next().await {
@@ -504,7 +504,7 @@ where
 #[derive(Debug, Clone)]
 pub struct HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     discovery_key: [u8; 32],
     key: [u8; 32],
@@ -529,7 +529,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
 
 impl<T> HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     pub fn key(&self) -> &[u8; 32] {
         &self.key
@@ -603,7 +603,7 @@ async fn on_replication_message<T>(
     message: Message,
 ) -> Result<bool>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     match message {
         Message::Synchronize(message) => {

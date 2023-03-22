@@ -1,6 +1,6 @@
 use crate::schema::*;
 use crate::util::{stat_uint24_le, write_uint24_le};
-use hypercore::compact_encoding::{CompactEncoding, State};
+use hypercore::encoding::{CompactEncoding, HypercoreState, State};
 use pretty_hash::fmt as pretty_fmt;
 use std::fmt;
 use std::io;
@@ -260,7 +260,7 @@ impl Frame {
                         // This is a special case with 0x00, 0x03 intro bytes
                         state.end += 2 + &messages[0].encoded_len();
                     } else {
-                        state.preencode(&messages[0].channel);
+                        (*state).preencode(&messages[0].channel);
                         state.end += messages[0].encoded_len();
                     }
                 } else if messages.len() > 1 {
@@ -394,18 +394,18 @@ impl Message {
 
     /// Decode a message from a buffer based on type.
     pub fn decode(buf: &[u8], typ: u64) -> io::Result<(Self, usize)> {
-        let mut state = State::from_buffer(buf);
+        let mut state = HypercoreState::from_buffer(buf);
         let message = match typ {
-            0 => Ok(Self::Synchronize(state.decode(buf))),
+            0 => Ok(Self::Synchronize((*state).decode(buf))),
             1 => Ok(Self::Request(state.decode(buf))),
-            2 => Ok(Self::Cancel(state.decode(buf))),
+            2 => Ok(Self::Cancel((*state).decode(buf))),
             3 => Ok(Self::Data(state.decode(buf))),
-            4 => Ok(Self::NoData(state.decode(buf))),
-            5 => Ok(Self::Want(state.decode(buf))),
-            6 => Ok(Self::Unwant(state.decode(buf))),
-            7 => Ok(Self::Bitfield(state.decode(buf))),
-            8 => Ok(Self::Range(state.decode(buf))),
-            9 => Ok(Self::Extension(state.decode(buf))),
+            4 => Ok(Self::NoData((*state).decode(buf))),
+            5 => Ok(Self::Want((*state).decode(buf))),
+            6 => Ok(Self::Unwant((*state).decode(buf))),
+            7 => Ok(Self::Bitfield((*state).decode(buf))),
+            8 => Ok(Self::Range((*state).decode(buf))),
+            9 => Ok(Self::Extension((*state).decode(buf))),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Invalid message type to decode: {}", typ),
@@ -415,40 +415,40 @@ impl Message {
     }
 
     /// Pre-encodes a message to state, returns length
-    pub fn preencode(&mut self, state: &mut State) -> usize {
+    pub fn preencode(&mut self, state: &mut HypercoreState) -> usize {
         match self {
-            Self::Open(ref message) => state.preencode(message),
-            Self::Close(ref message) => state.preencode(message),
-            Self::Synchronize(ref message) => state.preencode(message),
+            Self::Open(ref message) => state.0.preencode(message),
+            Self::Close(ref message) => state.0.preencode(message),
+            Self::Synchronize(ref message) => state.0.preencode(message),
             Self::Request(ref message) => state.preencode(message),
-            Self::Cancel(ref message) => state.preencode(message),
+            Self::Cancel(ref message) => state.0.preencode(message),
             Self::Data(ref message) => state.preencode(message),
-            Self::NoData(ref message) => state.preencode(message),
-            Self::Want(ref message) => state.preencode(message),
-            Self::Unwant(ref message) => state.preencode(message),
-            Self::Bitfield(ref message) => state.preencode(message),
-            Self::Range(ref message) => state.preencode(message),
-            Self::Extension(ref message) => state.preencode(message),
+            Self::NoData(ref message) => state.0.preencode(message),
+            Self::Want(ref message) => state.0.preencode(message),
+            Self::Unwant(ref message) => state.0.preencode(message),
+            Self::Bitfield(ref message) => state.0.preencode(message),
+            Self::Range(ref message) => state.0.preencode(message),
+            Self::Extension(ref message) => state.0.preencode(message),
             Self::LocalSignal(_) => {}
         }
         state.end
     }
 
     /// Encodes a message to a given buffer, using preencoded state, results size
-    pub fn encode(&mut self, state: &mut State, buf: &mut [u8]) -> usize {
+    pub fn encode(&mut self, state: &mut HypercoreState, buf: &mut [u8]) -> usize {
         match self {
-            Self::Open(ref message) => state.encode(message, buf),
-            Self::Close(ref message) => state.encode(message, buf),
-            Self::Synchronize(ref message) => state.encode(message, buf),
+            Self::Open(ref message) => state.0.encode(message, buf),
+            Self::Close(ref message) => state.0.encode(message, buf),
+            Self::Synchronize(ref message) => state.0.encode(message, buf),
             Self::Request(ref message) => state.encode(message, buf),
-            Self::Cancel(ref message) => state.encode(message, buf),
+            Self::Cancel(ref message) => state.0.encode(message, buf),
             Self::Data(ref message) => state.encode(message, buf),
-            Self::NoData(ref message) => state.encode(message, buf),
-            Self::Want(ref message) => state.encode(message, buf),
-            Self::Unwant(ref message) => state.encode(message, buf),
-            Self::Bitfield(ref message) => state.encode(message, buf),
-            Self::Range(ref message) => state.encode(message, buf),
-            Self::Extension(ref message) => state.encode(message, buf),
+            Self::NoData(ref message) => state.0.encode(message, buf),
+            Self::Want(ref message) => state.0.encode(message, buf),
+            Self::Unwant(ref message) => state.0.encode(message, buf),
+            Self::Bitfield(ref message) => state.0.encode(message, buf),
+            Self::Range(ref message) => state.0.encode(message, buf),
+            Self::Extension(ref message) => state.0.encode(message, buf),
             Self::LocalSignal(_) => {}
         }
         state.start
@@ -484,7 +484,7 @@ impl fmt::Display for Message {
 pub struct ChannelMessage {
     pub channel: u64,
     pub message: Message,
-    state: Option<State>,
+    state: Option<HypercoreState>,
 }
 
 impl PartialEq for ChannelMessage {
@@ -592,21 +592,21 @@ impl ChannelMessage {
             let state = if let Message::Open(_) = self.message {
                 // Open message doesn't have a type
                 // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
-                let mut state = State::new();
+                let mut state = HypercoreState::new();
                 self.message.preencode(&mut state);
                 state
             } else if let Message::Close(_) = self.message {
                 // Close message doesn't have a type
                 // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L162
-                let mut state = State::new();
+                let mut state = HypercoreState::new();
                 self.message.preencode(&mut state);
                 state
             } else {
                 // The header is the channel id uint followed by message type uint
                 // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
-                let mut state = State::new();
+                let mut state = HypercoreState::new();
                 let typ = self.message.typ();
-                state.preencode(&typ);
+                (*state).preencode(&typ);
                 self.message.preencode(&mut state);
                 state
             };
@@ -634,7 +634,7 @@ impl Encoder for ChannelMessage {
             state.start
         } else {
             let typ = self.message.typ();
-            state.encode(&typ, buf);
+            state.0.encode(&typ, buf);
             self.message.encode(state, buf);
             state.start
         };
