@@ -142,7 +142,7 @@ impl Frame {
                             &buf[index + header_len..index + header_len + body_len as usize],
                         )?;
                         if length != body_len as usize {
-                            log::warn!(
+                            tracing::warn!(
                                 "Did not know what to do with all the bytes, got {} but decoded {}",
                                 body_len,
                                 length

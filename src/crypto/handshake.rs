@@ -95,9 +95,10 @@ pub fn build_handshake_state(
     let key_pair = builder.generate_keypair().unwrap();
     let builder = builder.local_private_key(&key_pair.private);
     let handshake_state = if is_initiator {
-        log::info!("building initiator");
+        tracing::debug!("building initiator");
         builder.build_initiator()?
     } else {
+        tracing::debug!("building responder");
         builder.build_responder()?
     };
     Ok((handshake_state, key_pair))

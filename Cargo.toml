@@ -30,7 +30,7 @@ blake2-rfc = "0.2"
 hex = "0.4"
 async-trait = "0.1.63"
 salsa20 = "0.6"
-log = "0.4"
+tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3.0"
 instant = "0.1"
@@ -40,7 +40,7 @@ hypercore = { git = "https://github.com/ttiurani/hypercore", branch = "v10_clean
 sha2 = "0.10.6"
 # FIXME: This uses pre-release, because v4 relaxed the zeroize version range. With this the crate be
 # buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch to that.
-curve25519-dalek = "4.0.0-rc.0"
+curve25519-dalek = "4.0.0-rc.1"
 crypto_secretstream = "0.1.1"
 
 [dev-dependencies]
@@ -57,6 +57,7 @@ pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
+log = "0.4"
 
 [features]
 default = ["async-std"]

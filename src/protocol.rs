@@ -2,7 +2,6 @@ use async_channel::{Receiver, Sender};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::Stream;
 use futures_timer::Delay;
-use log::*;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fmt;
@@ -253,9 +252,10 @@ where
     }
 
     fn init(&mut self) -> Result<()> {
-        debug!(
+        tracing::debug!(
             "protocol init, state {:?}, options {:?}",
-            self.state, self.options
+            self.state,
+            self.options
         );
         match self.state {
             State::NotInitialized => {}
