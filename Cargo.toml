@@ -58,6 +58,8 @@ duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
 log = "0.4"
+test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 
 [features]
 default = ["async-std"]

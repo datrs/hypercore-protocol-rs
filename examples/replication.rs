@@ -3,8 +3,9 @@ use async_std::net::TcpStream;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures_lite::stream::StreamExt;
-use hypercore::PartialKeypair;
-use hypercore::{Hypercore, PublicKey, RequestBlock, RequestUpgrade, Storage};
+use hypercore::{
+    Builder, Hypercore, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, Storage,
+};
 use log::*;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
@@ -44,17 +45,16 @@ fn main() {
         // Create a hypercore.
         let hypercore = if let Some(key) = key {
             let public_key = PublicKey::from_bytes(&key).unwrap();
-            Hypercore::new_with_key_pair(
-                storage,
-                PartialKeypair {
+            Builder::new(storage)
+                .set_key_pair(PartialKeypair {
                     public: public_key,
                     secret: None,
-                },
-            )
-            .await
-            .unwrap()
+                })
+                .build()
+                .await
+                .unwrap()
         } else {
-            let mut hypercore = Hypercore::new(storage).await.unwrap();
+            let mut hypercore = Builder::new(storage).build().await.unwrap();
             hypercore
                 .append_batch(&[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"])
                 .await

@@ -3,8 +3,8 @@ use anyhow::Result;
 use futures::Future;
 use futures_lite::stream::StreamExt;
 use hypercore::{
-    Hypercore, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, SecretKey, Storage,
-    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    Builder, Hypercore, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, SecretKey,
+    Storage, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use instant::Duration;
 use random_access_disk::RandomAccessDisk;
@@ -25,6 +25,7 @@ use async_std::{
     task::{self, sleep},
     test as async_test,
 };
+use test_log::test;
 #[cfg(feature = "tokio")]
 use tokio::{
     fs::{metadata, File},
@@ -59,56 +60,56 @@ const TEST_SET_SERVER_WRITER: &str = "sw";
 const TEST_SET_CLIENT_WRITER: &str = "cw";
 const TEST_SET_SIMPLE: &str = "simple";
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncns_simple_server_writer() -> Result<()> {
     js_interop_ncns_simple(true, 8101).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncns_simple_client_writer() -> Result<()> {
     js_interop_ncns_simple(false, 8102).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcns_simple_server_writer() -> Result<()> {
     js_interop_rcns_simple(true, 8103).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcns_simple_client_writer() -> Result<()> {
     js_interop_rcns_simple(false, 8104).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncrs_simple_server_writer() -> Result<()> {
     js_interop_ncrs_simple(true, 8105).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_ncrs_simple_client_writer() -> Result<()> {
     js_interop_ncrs_simple(false, 8106).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcrs_simple_server_writer() -> Result<()> {
     js_interop_rcrs_simple(true, 8107).await?;
     Ok(())
 }
 
-#[async_test]
+#[test(async_test)]
 #[cfg_attr(not(feature = "js_interop_tests"), ignore)]
 async fn js_interop_rcrs_simple_client_writer() -> Result<()> {
     js_interop_rcrs_simple(false, 8108).await?;
@@ -390,7 +391,7 @@ async fn create_writer_hypercore(
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(true);
     let storage = Storage::new_disk(&path, false).await?;
-    let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair).await?;
+    let mut hypercore = Builder::new(storage).set_key_pair(key_pair).build().await?;
     for _ in 0..data_count {
         let value = vec![data_char as u8; data_size];
         hypercore.append(&value).await?;
@@ -402,7 +403,7 @@ async fn create_reader_hypercore(path: &str) -> Result<Hypercore<RandomAccessDis
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(false);
     let storage = Storage::new_disk(&path, false).await?;
-    Ok(Hypercore::new_with_key_pair(storage, key_pair).await?)
+    Ok(Builder::new(storage).set_key_pair(key_pair).build().await?)
 }
 
 const TEST_PUBLIC_KEY_BYTES: [u8; PUBLIC_KEY_LENGTH] = [

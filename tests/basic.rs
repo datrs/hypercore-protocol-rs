@@ -7,11 +7,12 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 use hypercore_protocol::{schema::*, DiscoveryKey};
 use std::io;
+use test_log::test;
 
 mod _util;
 use _util::*;
 
-#[async_std::test]
+#[test(async_std::test)]
 async fn basic_protocol() -> anyhow::Result<()> {
     // env_logger::init();
     let (proto_a, proto_b) = create_pair_memory().await?;
@@ -76,7 +77,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
     return Ok(());
 }
 
-#[async_std::test]
+#[test(async_std::test)]
 async fn open_close_channels() -> anyhow::Result<()> {
     let (mut proto_a, mut proto_b) = create_pair_memory().await?;
 
