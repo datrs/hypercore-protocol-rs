@@ -45,8 +45,12 @@ pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
 
 #[inline]
 pub fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
-    // FIXME: when to return None!
-    let len =
-        (((buffer[0] as u32) << 0) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;
-    Some((UINT_24_LENGTH, len))
+    if buffer.len() >= 3 {
+        let len = (((buffer[0] as u32) << 0)
+            | ((buffer[1] as u32) << 8)
+            | ((buffer[2] as u32) << 16)) as u64;
+        Some((UINT_24_LENGTH, len))
+    } else {
+        None
+    }
 }

@@ -1,10 +1,10 @@
 use super::HandshakeResult;
-use crate::message::EncodeError;
 use crate::util::{stat_uint24_le, write_uint24_le, UINT_24_LENGTH};
 use blake2_rfc::blake2b::Blake2b;
 use crypto_secretstream::{Header, Key, PullStream, PushStream, Tag};
 use rand::rngs::OsRng;
 use std::convert::TryInto;
+use std::io;
 
 const STREAM_ID_LENGTH: usize = 32;
 const KEY_LENGTH: usize = 32;
@@ -34,7 +34,18 @@ impl DecryptCipher {
     pub fn from_handshake_rx_and_init_msg(
         handshake_result: &HandshakeResult,
         init_msg: &[u8],
-    ) -> Result<Self, EncodeError> {
+    ) -> io::Result<Self> {
+        if init_msg.len() < 32 + 24 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "Received too short init message, {} < {}.",
+                    init_msg.len(),
+                    32 + 24
+                ),
+            ));
+        }
+
         let key: [u8; KEY_LENGTH] = handshake_result.split_rx[..KEY_LENGTH]
             .try_into()
             .expect("split_rx with incorrect length");
@@ -49,7 +60,10 @@ impl DecryptCipher {
             .try_into()
             .expect("stream id slice with incorrect length");
         if expected_stream_id != remote_stream_id {
-            return Err(EncodeError::new(init_msg.len()));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("Received stream id does not match expected",),
+            ));
         }
 
         let header: [u8; 24] = init_msg[32..]
@@ -64,7 +78,7 @@ impl DecryptCipher {
         buf: &mut [u8],
         header_len: usize,
         body_len: usize,
-    ) -> Result<usize, EncodeError> {
+    ) -> io::Result<usize> {
         let (to_decrypt, _tag) =
             self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
         let decrypted_len = to_decrypt.len();
@@ -77,13 +91,11 @@ impl DecryptCipher {
         Ok(decrypted_end)
     }
 
-    pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<(Vec<u8>, Tag), EncodeError> {
+    pub fn decrypt_buf(&mut self, buf: &[u8]) -> io::Result<(Vec<u8>, Tag)> {
         let mut to_decrypt = buf.to_vec();
-        let tag = &self
-            .pull_stream
-            .pull(&mut to_decrypt, &[])
-            .map_err(|err| eprintln!("pull_stream err, {}", err.to_string()))
-            .unwrap(); // FIXME: This should return a more specific error than EncodeError
+        let tag = &self.pull_stream.pull(&mut to_decrypt, &[]).map_err(|err| {
+            io::Error::new(io::ErrorKind::Other, format!("Decrypt failed, err {}", err))
+        })?;
         Ok((to_decrypt, *tag))
     }
 }
@@ -122,20 +134,24 @@ impl EncryptCipher {
 
     /// Encrypts message in the given buffer to the same buffer, returns number of bytes
     /// of total message.
-    pub fn encrypt(&mut self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+    pub fn encrypt(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
             let mut to_encrypt = buf[header_len..header_len + body_len as usize].to_vec();
             self.push_stream
                 .push(&mut to_encrypt, &[], Tag::Message)
-                .map_err(|err| eprintln!("push_stream err, {}", err.to_string()))
-                .unwrap(); // FIXME: This should return a more specific error than EncodeError
+                .map_err(|err| {
+                    io::Error::new(io::ErrorKind::Other, format!("Encrypt failed, err {}", err))
+                })?;
             let encrypted_len = to_encrypt.len();
             write_uint24_le(encrypted_len, buf);
             buf[header_len..header_len + encrypted_len].copy_from_slice(to_encrypt.as_slice());
             Ok(3 + encrypted_len)
         } else {
-            Err(EncodeError::new(buf.len()))
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Could not encrypt invalid data, len: {}", buf.len()),
+            ))
         }
     }
 }

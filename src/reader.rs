@@ -109,7 +109,7 @@ impl ReadState {
             };
 
             let end = self.end + n;
-            let (success, segments) = create_segments(&self.buf[self.start..end]);
+            let (success, segments) = create_segments(&self.buf[self.start..end])?;
             if success {
                 if let Some(ref mut cipher) = self.cipher {
                     let mut dec_end = self.start;
@@ -179,8 +179,7 @@ impl ReadState {
                             };
                         }
                     } else {
-                        // FIXME: proper error handling for invalid header
-                        panic!("Invalid header");
+                        return Some(Err(Error::new(ErrorKind::InvalidData, "Invalid header")));
                     }
                 }
 
@@ -207,7 +206,7 @@ impl ReadState {
     }
 }
 
-pub fn create_segments(buf: &[u8]) -> (bool, Vec<(usize, usize, usize)>) {
+pub fn create_segments(buf: &[u8]) -> Result<(bool, Vec<(usize, usize, usize)>)> {
     let mut index: usize = 0;
     let len = buf.len();
     let mut segments: Vec<(usize, usize, usize)> = vec![];
@@ -217,13 +216,15 @@ pub fn create_segments(buf: &[u8]) -> (bool, Vec<(usize, usize, usize)>) {
             segments.push((index, header_len, body_len));
             if len < index + header_len + body_len {
                 // The segments will not fit, return false to indicate that more needs to be read
-                return (false, segments);
+                return Ok((false, segments));
             }
             index += header_len + body_len;
         } else {
-            // FIXME: Proper error handling
-            panic!("Could not read header while decrypting");
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Could not read header while decrypting",
+            ));
         }
     }
-    (true, segments)
+    Ok((true, segments))
 }

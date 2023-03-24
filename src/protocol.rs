@@ -15,7 +15,7 @@ use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
 use crate::crypto::{DecryptCipher, EncryptCipher, Handshake, HandshakeResult};
-use crate::message::{ChannelMessage, EncodeError, Frame, FrameType, Message};
+use crate::message::{ChannelMessage, Frame, FrameType, Message};
 use crate::reader::ReadState;
 use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
@@ -541,7 +541,7 @@ where
         self.queued_events.push_back(event);
     }
 
-    fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
+    fn queue_frame_direct(&mut self, body: Vec<u8>) -> Result<bool> {
         let mut frame = Frame::RawBatch(vec![body]);
         self.write_state.try_queue_direct(&mut frame)
     }

@@ -1,5 +1,3 @@
-use crate::message::EncodeError;
-
 use crate::crypto::EncryptCipher;
 use crate::message::{Encoder, Frame};
 
@@ -63,10 +61,7 @@ impl WriteState {
         self.queue.push_back(frame.into())
     }
 
-    pub fn try_queue_direct<T: Encoder>(
-        &mut self,
-        frame: &mut T,
-    ) -> std::result::Result<bool, EncodeError> {
+    pub fn try_queue_direct<T: Encoder>(&mut self, frame: &mut T) -> Result<bool> {
         let promised_len = frame.encoded_len();
         let padded_promised_len = self.safe_encrypted_len(promised_len);
         if self.buf.len() < padded_promised_len {
@@ -99,7 +94,7 @@ impl WriteState {
         }
     }
 
-    fn advance(&mut self, n: usize) -> std::result::Result<(), EncodeError> {
+    fn advance(&mut self, n: usize) -> Result<()> {
         let end = self.end + n;
 
         let encrypted_end = if let Some(ref mut cipher) = self.cipher {

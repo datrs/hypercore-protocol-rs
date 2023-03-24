@@ -13,7 +13,11 @@ pub struct EncodeError {
 
 impl fmt::Display for EncodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Cannot encode message: Write buffer is full")
+        write!(
+            f,
+            "Cannot encode message: Write buffer is full (required {})",
+            self.required
+        )
     }
 }
 
