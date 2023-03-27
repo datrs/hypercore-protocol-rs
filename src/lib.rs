@@ -102,7 +102,7 @@ pub mod schema;
 pub use builder::{Builder as ProtocolBuilder, Options};
 pub use channels::Channel;
 // Export the needed types for Channel::take_receiver, and Channel::local_sender()
-pub use async_channel::{Receiver as ChannelReceiver, Sender as ChannelSender};
+pub use async_channel::{Receiver as ChannelReceiver, Sender as ChannelSender, SendError as ChannelSendError};
 pub use duplex::Duplex;
 pub use hypercore; // Re-export hypercore
 pub use message::Message;
