@@ -95,7 +95,7 @@ where
 {
     let key = [0u8; 32];
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .set_encrypted(false)
+        .encrypted(false)
         .connect_rw(reader, writer);
     while let Some(Ok(event)) = protocol.next().await {
         // eprintln!("RECV EVENT [{}] {:?}", protocol.is_initiator(), event);

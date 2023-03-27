@@ -99,10 +99,12 @@ mod writer;
 /// The wire messages used by the protocol.
 pub mod schema;
 
-pub use builder::{Builder as ProtocolBuilder, Options};
+pub use builder::Builder as ProtocolBuilder;
 pub use channels::Channel;
 // Export the needed types for Channel::take_receiver, and Channel::local_sender()
-pub use async_channel::{Receiver as ChannelReceiver, Sender as ChannelSender, SendError as ChannelSendError};
+pub use async_channel::{
+    Receiver as ChannelReceiver, SendError as ChannelSendError, Sender as ChannelSender,
+};
 pub use duplex::Duplex;
 pub use hypercore; // Re-export hypercore
 pub use message::Message;

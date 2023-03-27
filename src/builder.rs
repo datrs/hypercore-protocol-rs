@@ -1,64 +1,26 @@
-use crate::duplex::Duplex;
 use crate::Protocol;
+use crate::{duplex::Duplex, protocol::Options};
 use futures_lite::io::{AsyncRead, AsyncWrite};
-
-/// Options for a Protocol instance.
-#[derive(Debug)]
-pub struct Options {
-    /// Whether this peer initiated the IO connection for this protoccol
-    pub is_initiator: bool,
-    /// Enable or disable the handshake.
-    /// Disabling the handshake will also disable capabilitity verification.
-    /// Don't disable this if you're not 100% sure you want this.
-    pub noise: bool,
-    /// Enable or disable transport encryption.
-    pub encrypted: bool,
-}
-
-impl Options {
-    /// Create with default options.
-    pub fn new(is_initiator: bool) -> Self {
-        Self {
-            is_initiator,
-            noise: true,
-            encrypted: true,
-        }
-    }
-}
 
 /// Build a Protocol instance with options.
 #[derive(Debug)]
 pub struct Builder(Options);
 
 impl Builder {
-    /// Create a protocol builder.
-    pub fn new(is_initiator: bool) -> Self {
-        Self(Options {
-            is_initiator,
-            noise: true,
-            encrypted: true,
-        })
+    /// Create a protocol builder as initiator (true) or responder (false).
+    pub fn new(initiator: bool) -> Self {
+        Self(Options::new(initiator))
     }
 
-    /// Default options for an initiating endpoint.
-    pub fn initiator() -> Self {
-        Self::new(true)
-    }
-
-    /// Default options for a responding endpoint.
-    pub fn responder() -> Self {
-        Self::new(false)
-    }
-
-    /// Set encrypted option.
-    pub fn set_encrypted(mut self, encrypted: bool) -> Self {
+    /// Set encrypted option. Defaults to true.
+    pub fn encrypted(mut self, encrypted: bool) -> Self {
         self.0.encrypted = encrypted;
         self
     }
 
-    /// Set handshake option.
-    pub fn set_noise(mut self, noise: bool) -> Self {
-        self.0.noise = noise;
+    /// Set handshake option. Defaults to true.
+    pub fn handshake(mut self, handshake: bool) -> Self {
+        self.0.noise = handshake;
         self
     }
 

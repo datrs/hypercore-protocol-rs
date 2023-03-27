@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::builder::{Builder, Options};
+use crate::builder::Builder;
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
 use crate::crypto::{DecryptCipher, EncryptCipher, Handshake, HandshakeResult};
@@ -31,6 +31,30 @@ macro_rules! return_error {
 
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
+
+/// Options for a Protocol instance.
+#[derive(Debug)]
+pub(crate) struct Options {
+    /// Whether this peer initiated the IO connection for this protoccol
+    pub is_initiator: bool,
+    /// Enable or disable the handshake.
+    /// Disabling the handshake will also disable capabilitity verification.
+    /// Don't disable this if you're not 100% sure you want this.
+    pub noise: bool,
+    /// Enable or disable transport encryption.
+    pub encrypted: bool,
+}
+
+impl Options {
+    /// Create with default options.
+    pub(crate) fn new(is_initiator: bool) -> Self {
+        Self {
+            is_initiator,
+            noise: true,
+            encrypted: true,
+        }
+    }
+}
 
 /// Remote public key (32 bytes).
 pub type RemotePublicKey = [u8; 32];
@@ -130,7 +154,7 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new protocol instance.
-    pub fn new(io: IO, options: Options) -> Self {
+    pub(crate) fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
         let (outbound_tx, outbound_rx): (
             Sender<Vec<ChannelMessage>>,
@@ -151,17 +175,6 @@ where
             keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
         }
-    }
-
-    /// Create a protocol instance with the default options.
-    pub fn with_defaults(io: IO, is_initiator: bool) -> Self {
-        let options = Options::new(is_initiator);
-        Protocol::new(io, options)
-    }
-
-    /// Create a protocol builder that allows to set additional options.
-    pub fn builder(is_initiator: bool) -> Builder {
-        Builder::new(is_initiator)
     }
 
     /// Whether this protocol stream initiated the underlying IO connection.
