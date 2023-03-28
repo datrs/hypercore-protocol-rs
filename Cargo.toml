@@ -68,6 +68,7 @@ wasm-bindgen = [
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
+cache = ["hypercore/cache"]
 tokio = ["hypercore/tokio", "random-access-disk/tokio"]
 async-std = ["hypercore/async-std", "random-access-disk/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore

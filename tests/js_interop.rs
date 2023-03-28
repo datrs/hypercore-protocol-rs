@@ -3,8 +3,8 @@ use anyhow::Result;
 use futures::Future;
 use futures_lite::stream::StreamExt;
 use hypercore::{
-    Builder, Hypercore, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, SecretKey,
-    Storage, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    Hypercore, HypercoreBuilder, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade,
+    SecretKey, Storage, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use instant::Duration;
 use random_access_disk::RandomAccessDisk;
@@ -391,7 +391,10 @@ async fn create_writer_hypercore(
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(true);
     let storage = Storage::new_disk(&path, false).await?;
-    let mut hypercore = Builder::new(storage).set_key_pair(key_pair).build().await?;
+    let mut hypercore = HypercoreBuilder::new(storage)
+        .key_pair(key_pair)
+        .build()
+        .await?;
     for _ in 0..data_count {
         let value = vec![data_char as u8; data_size];
         hypercore.append(&value).await?;
@@ -403,7 +406,10 @@ async fn create_reader_hypercore(path: &str) -> Result<Hypercore<RandomAccessDis
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(false);
     let storage = Storage::new_disk(&path, false).await?;
-    Ok(Builder::new(storage).set_key_pair(key_pair).build().await?)
+    Ok(HypercoreBuilder::new(storage)
+        .key_pair(key_pair)
+        .build()
+        .await?)
 }
 
 const TEST_PUBLIC_KEY_BYTES: [u8; PUBLIC_KEY_LENGTH] = [
