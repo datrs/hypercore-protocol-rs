@@ -62,7 +62,7 @@ impl WriteState {
     }
 
     pub fn try_queue_direct<T: Encoder>(&mut self, frame: &mut T) -> Result<bool> {
-        let promised_len = frame.encoded_len();
+        let promised_len = frame.encoded_len()?;
         let padded_promised_len = self.safe_encrypted_len(promised_len);
         if self.buf.len() < padded_promised_len {
             self.buf.resize(padded_promised_len, 0u8);

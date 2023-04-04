@@ -1,4 +1,4 @@
-use hypercore::encoding::{CompactEncoding, HypercoreState, State};
+use hypercore::encoding::{CompactEncoding, EncodingError, HypercoreState, State};
 use hypercore::{
     DataBlock, DataHash, DataSeek, DataUpgrade, Proof, RequestBlock, RequestSeek, RequestUpgrade,
 };
@@ -12,43 +12,45 @@ pub struct Open {
 }
 
 impl CompactEncoding<Open> for State {
-    fn preencode(&mut self, value: &Open) {
-        self.preencode(&value.channel);
-        self.preencode(&value.protocol);
-        self.preencode(&value.discovery_key);
+    fn preencode(&mut self, value: &Open) -> Result<usize, EncodingError> {
+        self.preencode(&value.channel)?;
+        self.preencode(&value.protocol)?;
+        self.preencode(&value.discovery_key)?;
         if value.capability.is_some() {
-            self.end += 1; // flags for future use
-            self.preencode_fixed_32();
+            self.add_end(1)?; // flags for future use
+            self.preencode_fixed_32()?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &Open, buffer: &mut [u8]) {
-        self.encode(&value.channel, buffer);
-        self.encode(&value.protocol, buffer);
-        self.encode(&value.discovery_key, buffer);
+    fn encode(&mut self, value: &Open, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.channel, buffer)?;
+        self.encode(&value.protocol, buffer)?;
+        self.encode(&value.discovery_key, buffer)?;
         if let Some(capability) = &value.capability {
-            self.start += 1; // flags for future use
-            self.encode_fixed_32(capability, buffer);
+            self.add_start(1)?; // flags for future use
+            self.encode_fixed_32(capability, buffer)?;
         }
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Open {
-        let channel: u64 = self.decode(buffer);
-        let protocol: String = self.decode(buffer);
-        let discovery_key: Vec<u8> = self.decode(buffer);
-        let capability: Option<Vec<u8>> = if self.start < self.end {
-            self.start += 1; // flags for future use
-            let capability: Vec<u8> = self.decode_fixed_32(buffer).to_vec();
+    fn decode(&mut self, buffer: &[u8]) -> Result<Open, EncodingError> {
+        let channel: u64 = self.decode(buffer)?;
+        let protocol: String = self.decode(buffer)?;
+        let discovery_key: Vec<u8> = self.decode(buffer)?;
+        let capability: Option<Vec<u8>> = if self.start() < self.end() {
+            self.add_start(1)?; // flags for future use
+            let capability: Vec<u8> = self.decode_fixed_32(buffer)?.to_vec();
             Some(capability)
         } else {
             None
         };
-        Open {
+        Ok(Open {
             channel,
             protocol,
             discovery_key,
             capability,
-        }
+        })
     }
 }
 
@@ -58,17 +60,17 @@ pub struct Close {
 }
 
 impl CompactEncoding<Close> for State {
-    fn preencode(&mut self, value: &Close) {
-        self.preencode(&value.channel);
+    fn preencode(&mut self, value: &Close) -> Result<usize, EncodingError> {
+        self.preencode(&value.channel)
     }
 
-    fn encode(&mut self, value: &Close, buffer: &mut [u8]) {
-        self.encode(&value.channel, buffer);
+    fn encode(&mut self, value: &Close, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.channel, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Close {
-        let channel: u64 = self.decode(buffer);
-        Close { channel }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Close, EncodingError> {
+        let channel: u64 = self.decode(buffer)?;
+        Ok(Close { channel })
     }
 }
 
@@ -84,39 +86,39 @@ pub struct Synchronize {
 }
 
 impl CompactEncoding<Synchronize> for State {
-    fn preencode(&mut self, value: &Synchronize) {
-        self.end += 1; // flags
-        self.preencode(&value.fork);
-        self.preencode(&value.length);
-        self.preencode(&value.remote_length);
+    fn preencode(&mut self, value: &Synchronize) -> Result<usize, EncodingError> {
+        self.add_end(1)?; // flags
+        self.preencode(&value.fork)?;
+        self.preencode(&value.length)?;
+        self.preencode(&value.remote_length)
     }
 
-    fn encode(&mut self, value: &Synchronize, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &Synchronize, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.can_upgrade { 1 } else { 0 };
         flags = flags | if value.uploading { 2 } else { 0 };
         flags = flags | if value.downloading { 4 } else { 0 };
-        self.encode(&flags, buffer);
-        self.encode(&value.fork, buffer);
-        self.encode(&value.length, buffer);
-        self.encode(&value.remote_length, buffer);
+        self.encode(&flags, buffer)?;
+        self.encode(&value.fork, buffer)?;
+        self.encode(&value.length, buffer)?;
+        self.encode(&value.remote_length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Synchronize {
-        let flags: u8 = self.decode(buffer);
-        let fork: u64 = self.decode(buffer);
-        let length: u64 = self.decode(buffer);
-        let remote_length: u64 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<Synchronize, EncodingError> {
+        let flags: u8 = self.decode(buffer)?;
+        let fork: u64 = self.decode(buffer)?;
+        let length: u64 = self.decode(buffer)?;
+        let remote_length: u64 = self.decode(buffer)?;
         let can_upgrade = flags & 1 != 0;
         let uploading = flags & 2 != 0;
         let downloading = flags & 4 != 0;
-        Synchronize {
+        Ok(Synchronize {
             fork,
             length,
             remote_length,
             can_upgrade,
             uploading,
             downloading,
-        }
+        })
     }
 }
 
@@ -133,78 +135,80 @@ pub struct Request {
 }
 
 impl CompactEncoding<Request> for HypercoreState {
-    fn preencode(&mut self, value: &Request) {
-        self.end += 1; // flags
-        self.0.preencode(&value.id);
-        self.0.preencode(&value.fork);
+    fn preencode(&mut self, value: &Request) -> Result<usize, EncodingError> {
+        self.add_end(1)?; // flags
+        self.0.preencode(&value.id)?;
+        self.0.preencode(&value.fork)?;
         if let Some(block) = &value.block {
-            self.preencode(block);
+            self.preencode(block)?;
         }
         if let Some(hash) = &value.hash {
-            self.preencode(hash);
+            self.preencode(hash)?;
         }
         if let Some(seek) = &value.seek {
-            self.preencode(seek);
+            self.preencode(seek)?;
         }
         if let Some(upgrade) = &value.upgrade {
-            self.preencode(upgrade);
+            self.preencode(upgrade)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &Request, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &Request, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.block.is_some() { 1 } else { 0 };
         flags = flags | if value.hash.is_some() { 2 } else { 0 };
         flags = flags | if value.seek.is_some() { 4 } else { 0 };
         flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
-        self.0.encode(&flags, buffer);
-        self.0.encode(&value.id, buffer);
-        self.0.encode(&value.fork, buffer);
+        self.0.encode(&flags, buffer)?;
+        self.0.encode(&value.id, buffer)?;
+        self.0.encode(&value.fork, buffer)?;
         if let Some(block) = &value.block {
-            self.encode(block, buffer);
+            self.encode(block, buffer)?;
         }
         if let Some(hash) = &value.hash {
-            self.encode(hash, buffer);
+            self.encode(hash, buffer)?;
         }
         if let Some(seek) = &value.seek {
-            self.encode(seek, buffer);
+            self.encode(seek, buffer)?;
         }
         if let Some(upgrade) = &value.upgrade {
-            self.encode(upgrade, buffer);
+            self.encode(upgrade, buffer)?;
         }
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Request {
-        let flags: u8 = self.0.decode(buffer);
-        let id: u64 = self.0.decode(buffer);
-        let fork: u64 = self.0.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<Request, EncodingError> {
+        let flags: u8 = self.0.decode(buffer)?;
+        let id: u64 = self.0.decode(buffer)?;
+        let fork: u64 = self.0.decode(buffer)?;
         let block: Option<RequestBlock> = if flags & 1 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let hash: Option<RequestBlock> = if flags & 2 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let seek: Option<RequestSeek> = if flags & 4 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let upgrade: Option<RequestUpgrade> = if flags & 8 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
-        Request {
+        Ok(Request {
             id,
             fork,
             block,
             hash,
             seek,
             upgrade,
-        }
+        })
     }
 }
 
@@ -215,17 +219,17 @@ pub struct Cancel {
 }
 
 impl CompactEncoding<Cancel> for State {
-    fn preencode(&mut self, value: &Cancel) {
-        self.preencode(&value.request);
+    fn preencode(&mut self, value: &Cancel) -> Result<usize, EncodingError> {
+        self.preencode(&value.request)
     }
 
-    fn encode(&mut self, value: &Cancel, buffer: &mut [u8]) {
-        self.encode(&value.request, buffer);
+    fn encode(&mut self, value: &Cancel, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.request, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Cancel {
-        let request: u64 = self.decode(buffer);
-        Cancel { request }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Cancel, EncodingError> {
+        let request: u64 = self.decode(buffer)?;
+        Ok(Cancel { request })
     }
 }
 
@@ -242,78 +246,80 @@ pub struct Data {
 }
 
 impl CompactEncoding<Data> for HypercoreState {
-    fn preencode(&mut self, value: &Data) {
-        self.end += 1; // flags
-        self.0.preencode(&value.request);
-        self.0.preencode(&value.fork);
+    fn preencode(&mut self, value: &Data) -> Result<usize, EncodingError> {
+        self.add_end(1)?; // flags
+        self.0.preencode(&value.request)?;
+        self.0.preencode(&value.fork)?;
         if let Some(block) = &value.block {
-            self.preencode(block);
+            self.preencode(block)?;
         }
         if let Some(hash) = &value.hash {
-            self.preencode(hash);
+            self.preencode(hash)?;
         }
         if let Some(seek) = &value.seek {
-            self.preencode(seek);
+            self.preencode(seek)?;
         }
         if let Some(upgrade) = &value.upgrade {
-            self.preencode(upgrade);
+            self.preencode(upgrade)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &Data, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &Data, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.block.is_some() { 1 } else { 0 };
         flags = flags | if value.hash.is_some() { 2 } else { 0 };
         flags = flags | if value.seek.is_some() { 4 } else { 0 };
         flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
-        self.0.encode(&flags, buffer);
-        self.0.encode(&value.request, buffer);
-        self.0.encode(&value.fork, buffer);
+        self.0.encode(&flags, buffer)?;
+        self.0.encode(&value.request, buffer)?;
+        self.0.encode(&value.fork, buffer)?;
         if let Some(block) = &value.block {
-            self.encode(block, buffer);
+            self.encode(block, buffer)?;
         }
         if let Some(hash) = &value.hash {
-            self.encode(hash, buffer);
+            self.encode(hash, buffer)?;
         }
         if let Some(seek) = &value.seek {
-            self.encode(seek, buffer);
+            self.encode(seek, buffer)?;
         }
         if let Some(upgrade) = &value.upgrade {
-            self.encode(upgrade, buffer);
+            self.encode(upgrade, buffer)?;
         }
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Data {
-        let flags: u8 = self.0.decode(buffer);
-        let request: u64 = self.0.decode(buffer);
-        let fork: u64 = self.0.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<Data, EncodingError> {
+        let flags: u8 = self.0.decode(buffer)?;
+        let request: u64 = self.0.decode(buffer)?;
+        let fork: u64 = self.0.decode(buffer)?;
         let block: Option<DataBlock> = if flags & 1 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let hash: Option<DataHash> = if flags & 2 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let seek: Option<DataSeek> = if flags & 4 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
         let upgrade: Option<DataUpgrade> = if flags & 8 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
-        Data {
+        Ok(Data {
             request,
             fork,
             block,
             hash,
             seek,
             upgrade,
-        }
+        })
     }
 }
 
@@ -337,17 +343,17 @@ pub struct NoData {
 }
 
 impl CompactEncoding<NoData> for State {
-    fn preencode(&mut self, value: &NoData) {
-        self.preencode(&value.request);
+    fn preencode(&mut self, value: &NoData) -> Result<usize, EncodingError> {
+        self.preencode(&value.request)
     }
 
-    fn encode(&mut self, value: &NoData, buffer: &mut [u8]) {
-        self.encode(&value.request, buffer);
+    fn encode(&mut self, value: &NoData, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.request, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> NoData {
-        let request: u64 = self.decode(buffer);
-        NoData { request }
+    fn decode(&mut self, buffer: &[u8]) -> Result<NoData, EncodingError> {
+        let request: u64 = self.decode(buffer)?;
+        Ok(NoData { request })
     }
 }
 
@@ -358,20 +364,20 @@ pub struct Want {
     pub length: u64,
 }
 impl CompactEncoding<Want> for State {
-    fn preencode(&mut self, value: &Want) {
-        self.preencode(&value.start);
-        self.preencode(&value.length);
+    fn preencode(&mut self, value: &Want) -> Result<usize, EncodingError> {
+        self.preencode(&value.start)?;
+        self.preencode(&value.length)
     }
 
-    fn encode(&mut self, value: &Want, buffer: &mut [u8]) {
-        self.encode(&value.start, buffer);
-        self.encode(&value.length, buffer);
+    fn encode(&mut self, value: &Want, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.start, buffer)?;
+        self.encode(&value.length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Want {
-        let start: u64 = self.decode(buffer);
-        let length: u64 = self.decode(buffer);
-        Want { start, length }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Want, EncodingError> {
+        let start: u64 = self.decode(buffer)?;
+        let length: u64 = self.decode(buffer)?;
+        Ok(Want { start, length })
     }
 }
 
@@ -382,20 +388,20 @@ pub struct Unwant {
     pub length: u64,
 }
 impl CompactEncoding<Unwant> for State {
-    fn preencode(&mut self, value: &Unwant) {
-        self.preencode(&value.start);
-        self.preencode(&value.length);
+    fn preencode(&mut self, value: &Unwant) -> Result<usize, EncodingError> {
+        self.preencode(&value.start)?;
+        self.preencode(&value.length)
     }
 
-    fn encode(&mut self, value: &Unwant, buffer: &mut [u8]) {
-        self.encode(&value.start, buffer);
-        self.encode(&value.length, buffer);
+    fn encode(&mut self, value: &Unwant, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.start, buffer)?;
+        self.encode(&value.length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Unwant {
-        let start: u64 = self.decode(buffer);
-        let length: u64 = self.decode(buffer);
-        Unwant { start, length }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Unwant, EncodingError> {
+        let start: u64 = self.decode(buffer)?;
+        let length: u64 = self.decode(buffer)?;
+        Ok(Unwant { start, length })
     }
 }
 
@@ -406,20 +412,20 @@ pub struct Bitfield {
     pub bitfield: Vec<u32>,
 }
 impl CompactEncoding<Bitfield> for State {
-    fn preencode(&mut self, value: &Bitfield) {
-        self.preencode(&value.start);
-        self.preencode(&value.bitfield);
+    fn preencode(&mut self, value: &Bitfield) -> Result<usize, EncodingError> {
+        self.preencode(&value.start)?;
+        self.preencode(&value.bitfield)
     }
 
-    fn encode(&mut self, value: &Bitfield, buffer: &mut [u8]) {
-        self.encode(&value.start, buffer);
-        self.encode(&value.bitfield, buffer);
+    fn encode(&mut self, value: &Bitfield, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.start, buffer)?;
+        self.encode(&value.bitfield, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Bitfield {
-        let start: u64 = self.decode(buffer);
-        let bitfield: Vec<u32> = self.decode(buffer);
-        Bitfield { start, bitfield }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Bitfield, EncodingError> {
+        let start: u64 = self.decode(buffer)?;
+        let bitfield: Vec<u32> = self.decode(buffer)?;
+        Ok(Bitfield { start, bitfield })
     }
 }
 
@@ -432,38 +438,40 @@ pub struct Range {
 }
 
 impl CompactEncoding<Range> for State {
-    fn preencode(&mut self, value: &Range) {
-        self.end += 1; // flags
-        self.preencode(&value.start);
+    fn preencode(&mut self, value: &Range) -> Result<usize, EncodingError> {
+        self.add_end(1)?; // flags
+        self.preencode(&value.start)?;
         if value.length != 1 {
-            self.preencode(&value.length);
+            self.preencode(&value.length)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &Range, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &Range, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.drop { 1 } else { 0 };
         flags = flags | if value.length == 1 { 2 } else { 0 };
-        self.encode(&flags, buffer);
-        self.encode(&value.start, buffer);
+        self.encode(&flags, buffer)?;
+        self.encode(&value.start, buffer)?;
         if value.length != 1 {
-            self.encode(&value.length, buffer);
+            self.encode(&value.length, buffer)?;
         }
+        Ok(self.end())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Range {
-        let flags: u8 = self.decode(buffer);
-        let start: u64 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<Range, EncodingError> {
+        let flags: u8 = self.decode(buffer)?;
+        let start: u64 = self.decode(buffer)?;
         let drop = flags & 1 != 0;
         let length: u64 = if flags & 2 != 0 {
             1
         } else {
-            self.decode(buffer)
+            self.decode(buffer)?
         };
-        Range {
+        Ok(Range {
             drop,
             length,
             start,
-        }
+        })
     }
 }
 
@@ -474,19 +482,19 @@ pub struct Extension {
     pub message: Vec<u8>,
 }
 impl CompactEncoding<Extension> for State {
-    fn preencode(&mut self, value: &Extension) {
-        self.preencode(&value.name);
-        self.preencode_raw_buffer(&value.message);
+    fn preencode(&mut self, value: &Extension) -> Result<usize, EncodingError> {
+        self.preencode(&value.name)?;
+        self.preencode_raw_buffer(&value.message)
     }
 
-    fn encode(&mut self, value: &Extension, buffer: &mut [u8]) {
-        self.encode(&value.name, buffer);
-        self.encode_raw_buffer(&value.message, buffer);
+    fn encode(&mut self, value: &Extension, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.name, buffer)?;
+        self.encode_raw_buffer(&value.message, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Extension {
-        let name: String = self.decode(buffer);
-        let message: Vec<u8> = self.decode_raw_buffer(buffer);
-        Extension { name, message }
+    fn decode(&mut self, buffer: &[u8]) -> Result<Extension, EncodingError> {
+        let name: String = self.decode(buffer)?;
+        let message: Vec<u8> = self.decode_raw_buffer(buffer)?;
+        Ok(Extension { name, message })
     }
 }
