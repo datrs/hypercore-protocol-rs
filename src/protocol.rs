@@ -11,7 +11,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::builder::Builder;
 use crate::channels::{Channel, ChannelMap};
 use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
 use crate::crypto::{DecryptCipher, EncryptCipher, Handshake, HandshakeResult};
