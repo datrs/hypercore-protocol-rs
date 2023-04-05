@@ -74,7 +74,7 @@ fn main() {
         let result = match mode.as_ref() {
             "server" => tcp_server(address, onconnection, hypercore_store).await,
             "client" => tcp_client(address, onconnection, hypercore_store).await,
-            _ => panic!(usage()),
+            _ => panic!("{:?}", usage()),
         };
         util::log_if_error(&result);
     });
@@ -412,7 +412,7 @@ where
         }
         Message::Data(message) => {
             println!("Got Data message {:?}", message);
-            let (old_info, applied, new_info, request_block) = {
+            let (_old_info, _applied, new_info, request_block) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
