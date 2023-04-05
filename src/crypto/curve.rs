@@ -71,7 +71,7 @@ impl Dh for Ed25519 {
         }?;
         let result = pubkey * sk;
         let result: [u8; 32] = *result.compress().as_bytes();
-        out[..result.len()].copy_from_slice(&result.as_slice());
+        out[..result.len()].copy_from_slice(result.as_slice());
         Ok(())
     }
 }
@@ -82,7 +82,7 @@ pub struct CurveResolver;
 impl CryptoResolver for CurveResolver {
     fn resolve_dh(&self, choice: &DHChoice) -> Option<Box<dyn Dh>> {
         match *choice {
-            DHChoice::Curve25519 => Some(Box::new(Ed25519::default())),
+            DHChoice::Curve25519 => Some(Box::<Ed25519>::default()),
             _ => None,
         }
     }

@@ -30,7 +30,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     let key = [3u8; 32];
 
-    proto_a.open(key.clone()).await?;
+    proto_a.open(key).await?;
 
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
@@ -39,7 +39,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
     assert!(matches!(event_b, Ok(Event::DiscoveryKey(_))));
     assert_eq!(event_discovery_key(event_b.unwrap()), discovery_key(&key));
 
-    proto_b.open(key.clone()).await?;
+    proto_b.open(key).await?;
 
     let next_b = next_event(proto_b);
     let (proto_b, event_b) = next_b.await;
@@ -74,7 +74,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
-    return Ok(());
+    Ok(())
 }
 
 #[test(async_std::test)]

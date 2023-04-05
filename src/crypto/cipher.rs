@@ -62,7 +62,7 @@ impl DecryptCipher {
         if expected_stream_id != remote_stream_id {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("Received stream id does not match expected",),
+                "Received stream id does not match expected".to_string(),
             ));
         }
 
@@ -79,14 +79,13 @@ impl DecryptCipher {
         header_len: usize,
         body_len: usize,
     ) -> io::Result<usize> {
-        let (to_decrypt, _tag) =
-            self.decrypt_buf(&buf[header_len..header_len + body_len as usize])?;
+        let (to_decrypt, _tag) = self.decrypt_buf(&buf[header_len..header_len + body_len])?;
         let decrypted_len = to_decrypt.len();
         write_uint24_le(decrypted_len, buf);
         let decrypted_end = 3 + to_decrypt.len();
         buf[3..decrypted_end].copy_from_slice(to_decrypt.as_slice());
         // Set extra bytes in the buffer to 0
-        let encrypted_end = header_len + body_len as usize;
+        let encrypted_end = header_len + body_len;
         buf[decrypted_end..encrypted_end].fill(0x00);
         Ok(decrypted_end)
     }
@@ -117,7 +116,7 @@ impl EncryptCipher {
             &mut header_message[UINT_24_LENGTH..UINT_24_LENGTH + STREAM_ID_LENGTH],
         );
 
-        let (header, push_stream) = PushStream::init(&mut OsRng, &key);
+        let (header, push_stream) = PushStream::init(OsRng, &key);
         let header = header.as_ref();
         header_message[UINT_24_LENGTH + STREAM_ID_LENGTH..].copy_from_slice(header);
         let msg = header_message.to_vec();

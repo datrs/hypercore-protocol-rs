@@ -10,7 +10,7 @@ use crate::DiscoveryKey;
 /// The discovery key is a 32 byte namespaced hash of the key.
 pub fn discovery_key(key: &[u8]) -> DiscoveryKey {
     let mut hasher = Blake2b::with_key(32, key);
-    hasher.update(&DISCOVERY_NS_BUF);
+    hasher.update(DISCOVERY_NS_BUF);
     hasher.finalize().as_bytes().try_into().unwrap()
 }
 
@@ -46,9 +46,8 @@ pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
 #[inline]
 pub fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
     if buffer.len() >= 3 {
-        let len = (((buffer[0] as u32) << 0)
-            | ((buffer[1] as u32) << 8)
-            | ((buffer[2] as u32) << 16)) as u64;
+        let len =
+            ((buffer[0] as u32) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;
         Some((UINT_24_LENGTH, len))
     } else {
         None

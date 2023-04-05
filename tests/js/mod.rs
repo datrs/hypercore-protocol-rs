@@ -33,7 +33,7 @@ pub fn cleanup() {
 pub fn install() {
     let status = Command::new("npm")
         .current_dir("tests/js")
-        .args(&["install"])
+        .args(["install"])
         .status()
         .expect("Unable to run npm install");
     assert_eq!(
@@ -79,7 +79,7 @@ impl JavascriptServer {
             while code.is_none() && retries > 0 {
                 let status = process::Command::new("node")
                     .current_dir("tests/js")
-                    .args(&[
+                    .args([
                         "interop.js",
                         "server",
                         if is_writer { "writer" } else { "reader" },
@@ -148,7 +148,7 @@ pub async fn js_run_client(
 ) {
     let status = process::Command::new("node")
         .current_dir("tests/js")
-        .args(&[
+        .args([
             "interop.js",
             "client",
             if is_writer { "writer" } else { "reader" },

@@ -168,10 +168,10 @@ impl Frame {
                 let mut state = State::new_with_start_and_end(2, buf.len());
 
                 // First, there is the original channel
-                let mut current_channel: u64 = state.decode(&buf)?;
+                let mut current_channel: u64 = state.decode(buf)?;
                 while state.start() < state.end() {
                     // Length of the message is inbetween here
-                    let channel_message_length: usize = state.decode(&buf)?;
+                    let channel_message_length: usize = state.decode(buf)?;
                     if state.start() + channel_message_length > state.end() {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -195,7 +195,7 @@ impl Frame {
                     // from the index 1.
                     if state.start() < state.end() && buf[state.start()] == 0x00 {
                         state.add_start(1)?;
-                        current_channel = state.decode(&buf)?;
+                        current_channel = state.decode(buf)?;
                     }
                 }
                 Ok((Frame::MessageBatch(messages), state.start()))
@@ -216,7 +216,7 @@ impl Frame {
         } else if buf.len() >= 2 {
             // Single message
             let mut state = State::from_buffer(buf);
-            let channel: u64 = state.decode(&buf)?;
+            let channel: u64 = state.decode(buf)?;
             let (channel_message, length) = ChannelMessage::decode(&buf[state.start()..], channel)?;
             Ok((
                 Frame::MessageBatch(vec![channel_message]),
@@ -237,6 +237,7 @@ impl Frame {
                     state.add_end(raw.as_slice().encoded_len()?)?;
                 }
             }
+            #[allow(clippy::comparison_chain)]
             Self::MessageBatch(messages) => {
                 if messages.len() == 1 {
                     if let Message::Open(_) = &messages[0].message {
@@ -299,19 +300,20 @@ impl Encoder for Frame {
                     raw.as_slice().encode(buf)?;
                 }
             }
+            #[allow(clippy::comparison_chain)]
             Self::MessageBatch(ref mut messages) => {
                 write_uint24_le(body_len, buf);
                 let buf = buf.get_mut(3..).expect("Buffer should be over 3 bytes");
                 if messages.len() == 1 {
                     if let Message::Open(_) = &messages[0].message {
                         // This is a special case with 0x00, 0x01 intro bytes
-                        state.encode(&(0 as u8), buf)?;
-                        state.encode(&(1 as u8), buf)?;
+                        state.encode(&(0_u8), buf)?;
+                        state.encode(&(1_u8), buf)?;
                         state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
                     } else if let Message::Close(_) = &messages[0].message {
                         // This is a special case with 0x00, 0x03 intro bytes
-                        state.encode(&(0 as u8), buf)?;
-                        state.encode(&(3 as u8), buf)?;
+                        state.encode(&(0_u8), buf)?;
+                        state.encode(&(3_u8), buf)?;
                         state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
                     } else {
                         state.encode(&messages[0].channel, buf)?;
@@ -326,7 +328,7 @@ impl Encoder for Frame {
                         if message.channel != current_channel {
                             // Channel changed, need to add a 0x00 in between and then the new
                             // channel
-                            state.encode(&(0 as u8), buf)?;
+                            state.encode(&(0_u8), buf)?;
                             state.encode(&message.channel, buf)?;
                             current_channel = message.channel;
                         }
@@ -534,7 +536,7 @@ impl ChannelMessage {
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
     pub fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
-        if buf.len() == 0 {
+        if buf.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received too short Close message",
@@ -564,7 +566,7 @@ impl ChannelMessage {
             ));
         }
         let mut state = State::from_buffer(buf);
-        let typ: u64 = state.decode(&buf)?;
+        let typ: u64 = state.decode(buf)?;
         let (message, length) = Message::decode(&buf[state.start()..], typ)?;
         Ok((
             Self {

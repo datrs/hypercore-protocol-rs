@@ -88,8 +88,8 @@ pub fn build_handshake_state(
     let builder: Builder<'_> = Builder::with_resolver(
         noise_params,
         Box::new(FallbackResolver::new(
-            Box::new(CurveResolver::default()),
-            Box::new(DefaultResolver::default()),
+            Box::<CurveResolver>::default(),
+            Box::<DefaultResolver>::default(),
         )),
     );
     let key_pair = builder.generate_keypair().unwrap();
@@ -158,15 +158,13 @@ impl Handshake {
 
     fn recv(&mut self, msg: &[u8]) -> Result<usize> {
         self.state
-            .read_message(&msg, &mut self.rx_buf)
+            .read_message(msg, &mut self.rx_buf)
             .map_err(map_err)
     }
     fn send(&mut self) -> Result<usize> {
-        let result = self
-            .state
+        self.state
             .write_message(&self.payload, &mut self.tx_buf)
-            .map_err(map_err);
-        result
+            .map_err(map_err)
     }
 
     pub fn read(&mut self, msg: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -175,7 +173,7 @@ impl Handshake {
             return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
         }
 
-        let _rx_len = self.recv(&msg)?;
+        let _rx_len = self.recv(msg)?;
 
         if !self.is_initiator() && !self.did_receive {
             self.did_receive = true;
@@ -237,7 +235,7 @@ pub fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8
 
     let mut hasher = Blake2b::with_key(32, handshake_hash);
     hasher.update(&seed);
-    hasher.update(&key);
+    hasher.update(key);
     let hash = hasher.finalize();
     let capability = hash.as_bytes().to_vec();
     capability

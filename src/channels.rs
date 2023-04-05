@@ -178,15 +178,11 @@ impl Stream for Channel {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        loop {
-            match this.inbound_rx.as_mut() {
-                None => {
-                    return Poll::Ready(None);
-                }
-                Some(ref mut inbound_rx) => {
-                    let message = ready!(Pin::new(inbound_rx).poll_next(cx));
-                    return Poll::Ready(message);
-                }
+        match this.inbound_rx.as_mut() {
+            None => Poll::Ready(None),
+            Some(ref mut inbound_rx) => {
+                let message = ready!(Pin::new(inbound_rx).poll_next(cx));
+                Poll::Ready(message)
             }
         }
     }
@@ -351,7 +347,7 @@ impl ChannelMap {
 
     pub fn attach_local(&mut self, key: Key) -> &ChannelHandle {
         let discovery_key = discovery_key(&key);
-        let hdkey = hex::encode(&discovery_key);
+        let hdkey = hex::encode(discovery_key);
         let local_id = self.alloc_local();
 
         self.channels
@@ -369,7 +365,7 @@ impl ChannelMap {
         remote_id: usize,
         remote_capability: Option<Vec<u8>>,
     ) -> &ChannelHandle {
-        let hdkey = hex::encode(&discovery_key);
+        let hdkey = hex::encode(discovery_key);
         self.alloc_remote(remote_id);
         self.channels
             .entry(hdkey.clone())
@@ -474,14 +470,13 @@ impl ChannelMap {
             .skip(1)
             .position(|x| x.is_none())
             .map(|position| position + 1);
-        let local_id = match empty_id {
+        match empty_id {
             Some(empty_id) => empty_id,
             None => {
                 self.local_id.push(None);
                 self.local_id.len() - 1
             }
-        };
-        return local_id;
+        }
     }
 
     fn alloc_remote(&mut self, id: usize) {

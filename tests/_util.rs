@@ -32,12 +32,11 @@ pub fn next_event<IO>(
 where
     IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let task = task::spawn(async move {
+    task::spawn(async move {
         let e1 = proto.next().await;
         let e1 = e1.unwrap();
         (proto, e1)
-    });
-    task
+    })
 }
 
 pub fn event_discovery_key(event: Event) -> DiscoveryKey {
@@ -66,9 +65,8 @@ where
     task::spawn(async move {
         while let Some(event) = proto.next().await {
             let event = event?;
-            match event {
-                Event::Channel(channel) => return Ok((proto, channel)),
-                _ => {}
+            if let Event::Channel(channel) = event {
+                return Ok((proto, channel));
             }
         }
         Err(io::Error::new(

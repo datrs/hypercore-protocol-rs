@@ -108,8 +108,8 @@ impl CompactEncoding<Synchronize> for State {
 
     fn encode(&mut self, value: &Synchronize, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.can_upgrade { 1 } else { 0 };
-        flags = flags | if value.uploading { 2 } else { 0 };
-        flags = flags | if value.downloading { 4 } else { 0 };
+        flags |= if value.uploading { 2 } else { 0 };
+        flags |= if value.downloading { 4 } else { 0 };
         self.encode(&flags, buffer)?;
         self.encode(&value.fork, buffer)?;
         self.encode(&value.length, buffer)?;
@@ -174,9 +174,9 @@ impl CompactEncoding<Request> for HypercoreState {
 
     fn encode(&mut self, value: &Request, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.block.is_some() { 1 } else { 0 };
-        flags = flags | if value.hash.is_some() { 2 } else { 0 };
-        flags = flags | if value.seek.is_some() { 4 } else { 0 };
-        flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
+        flags |= if value.hash.is_some() { 2 } else { 0 };
+        flags |= if value.seek.is_some() { 4 } else { 0 };
+        flags |= if value.upgrade.is_some() { 8 } else { 0 };
         self.0.encode(&flags, buffer)?;
         self.0.encode(&value.id, buffer)?;
         self.0.encode(&value.fork, buffer)?;
@@ -291,9 +291,9 @@ impl CompactEncoding<Data> for HypercoreState {
 
     fn encode(&mut self, value: &Data, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.block.is_some() { 1 } else { 0 };
-        flags = flags | if value.hash.is_some() { 2 } else { 0 };
-        flags = flags | if value.seek.is_some() { 4 } else { 0 };
-        flags = flags | if value.upgrade.is_some() { 8 } else { 0 };
+        flags |= if value.hash.is_some() { 2 } else { 0 };
+        flags |= if value.seek.is_some() { 4 } else { 0 };
+        flags |= if value.upgrade.is_some() { 8 } else { 0 };
         self.0.encode(&flags, buffer)?;
         self.0.encode(&value.request, buffer)?;
         self.0.encode(&value.fork, buffer)?;
@@ -484,7 +484,7 @@ impl CompactEncoding<Range> for State {
 
     fn encode(&mut self, value: &Range, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         let mut flags: u8 = if value.drop { 1 } else { 0 };
-        flags = flags | if value.length == 1 { 2 } else { 0 };
+        flags |= if value.length == 1 { 2 } else { 0 };
         self.encode(&flags, buffer)?;
         self.encode(&value.start, buffer)?;
         if value.length != 1 {

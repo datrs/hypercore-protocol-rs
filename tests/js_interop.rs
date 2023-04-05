@@ -365,9 +365,9 @@ async fn start_server(
     result_path: &str,
 ) -> Result<RustServer> {
     let hypercore = if is_writer {
-        create_writer_hypercore(item_count, item_size, data_char, &data_path).await?
+        create_writer_hypercore(item_count, item_size, data_char, data_path).await?
     } else {
-        create_reader_hypercore(&data_path).await?
+        create_reader_hypercore(data_path).await?
     };
     let hypercore_wrapper = HypercoreWrapper::from_disk_hypercore(
         hypercore,
@@ -449,12 +449,12 @@ where
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
-                    protocol.open(hypercore.key().clone()).await?;
+                    protocol.open(*hypercore.key()).await?;
                 }
             }
             Event::DiscoveryKey(dkey) => {
                 if hypercore.discovery_key == dkey {
-                    protocol.open(hypercore.key().clone()).await?;
+                    protocol.open(*hypercore.key()).await?;
                 } else {
                     panic!("Invalid discovery key");
                 }
@@ -486,12 +486,12 @@ where
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
-                    protocol.open(hypercore.key().clone()).await?;
+                    protocol.open(*hypercore.key()).await?;
                 }
             }
             Event::DiscoveryKey(dkey) => {
                 if hypercore.discovery_key == dkey {
-                    protocol.open(hypercore.key().clone()).await?;
+                    protocol.open(*hypercore.key()).await?;
                 } else {
                     panic!("Invalid discovery key");
                 }
@@ -841,7 +841,7 @@ impl Default for PeerState {
     }
 }
 
-pub struct RustServer {
+pub(crate) struct RustServer {
     handle: Option<task::JoinHandle<()>>,
 }
 

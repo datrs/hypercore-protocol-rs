@@ -359,7 +359,7 @@ where
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
                 Poll::Ready(Some(mut messages)) => {
                     if !messages.is_empty() {
-                        messages.retain(|message| self.on_outbound_message(&message));
+                        messages.retain(|message| self.on_outbound_message(message));
                         if !messages.is_empty() {
                             let frame = Frame::MessageBatch(messages);
                             self.write_state.park_frame(frame);

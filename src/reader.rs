@@ -35,7 +35,7 @@ pub struct ReadState {
 impl ReadState {
     pub fn new() -> ReadState {
         ReadState {
-            buf: vec![0u8; READ_BUF_INITIAL_SIZE as usize],
+            buf: vec![0u8; READ_BUF_INITIAL_SIZE],
             start: 0,
             end: 0,
             step: Step::Header,
@@ -68,7 +68,7 @@ impl ReadState {
     /// but wasn't.
     pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
         if let Some(cipher) = self.cipher.as_mut() {
-            Ok(cipher.decrypt_buf(&buf)?.0)
+            Ok(cipher.decrypt_buf(buf)?.0)
         } else {
             Ok(buf.to_vec())
         }
@@ -206,6 +206,7 @@ impl ReadState {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn create_segments(buf: &[u8]) -> Result<(bool, Vec<(usize, usize, usize)>)> {
     let mut index: usize = 0;
     let len = buf.len();
