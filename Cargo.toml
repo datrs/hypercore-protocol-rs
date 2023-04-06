@@ -62,12 +62,13 @@ test-log = { version = "0.2.11", default-features = false, features = ["trace"] 
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 
 [features]
-default = ["async-std"]
+default = ["async-std", "sparse"]
 wasm-bindgen = [
   "instant/wasm-bindgen", 
   "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
+sparse = ["hypercore/sparse"]
 cache = ["hypercore/cache"]
 tokio = ["hypercore/tokio", "random-access-disk/tokio"]
 async-std = ["hypercore/async-std", "random-access-disk/async-std"]
