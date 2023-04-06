@@ -67,13 +67,14 @@ async fn basic_protocol() -> anyhow::Result<()> {
     assert_eq!(channel_event_a, Some(Message::Want(want(10, 5))));
 
     channel_a.close().await?;
-    channel_b.close().await?;
 
     let (_, event_a) = next_a.await;
     let (_, event_b) = next_b.await;
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
+    assert!(channel_a.closed());
+    assert!(channel_b.closed());
     Ok(())
 }
 
