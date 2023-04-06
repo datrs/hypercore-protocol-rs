@@ -10,11 +10,11 @@ const STREAM_ID_LENGTH: usize = 32;
 const KEY_LENGTH: usize = 32;
 const HEADER_MSG_LEN: usize = UINT_24_LENGTH + STREAM_ID_LENGTH + Header::BYTES;
 
-pub struct DecryptCipher {
+pub(crate) struct DecryptCipher {
     pull_stream: PullStream,
 }
 
-pub struct EncryptCipher {
+pub(crate) struct EncryptCipher {
     push_stream: PushStream,
 }
 
@@ -31,7 +31,7 @@ impl std::fmt::Debug for EncryptCipher {
 }
 
 impl DecryptCipher {
-    pub fn from_handshake_rx_and_init_msg(
+    pub(crate) fn from_handshake_rx_and_init_msg(
         handshake_result: &HandshakeResult,
         init_msg: &[u8],
     ) -> io::Result<Self> {
@@ -73,7 +73,7 @@ impl DecryptCipher {
         Ok(Self { pull_stream })
     }
 
-    pub fn decrypt(
+    pub(crate) fn decrypt(
         &mut self,
         buf: &mut [u8],
         header_len: usize,
@@ -90,7 +90,7 @@ impl DecryptCipher {
         Ok(decrypted_end)
     }
 
-    pub fn decrypt_buf(&mut self, buf: &[u8]) -> io::Result<(Vec<u8>, Tag)> {
+    pub(crate) fn decrypt_buf(&mut self, buf: &[u8]) -> io::Result<(Vec<u8>, Tag)> {
         let mut to_decrypt = buf.to_vec();
         let tag = &self.pull_stream.pull(&mut to_decrypt, &[]).map_err(|err| {
             io::Error::new(io::ErrorKind::Other, format!("Decrypt failed, err {}", err))
@@ -100,7 +100,7 @@ impl DecryptCipher {
 }
 
 impl EncryptCipher {
-    pub fn from_handshake_tx(
+    pub(crate) fn from_handshake_tx(
         handshake_result: &HandshakeResult,
     ) -> std::io::Result<(Self, Vec<u8>)> {
         let key: [u8; KEY_LENGTH] = handshake_result.split_tx[..KEY_LENGTH]
@@ -124,7 +124,7 @@ impl EncryptCipher {
     }
 
     /// Get the length needed for encryption, that includes padding.
-    pub fn safe_encrypted_len(&self, plaintext_len: usize) -> usize {
+    pub(crate) fn safe_encrypted_len(&self, plaintext_len: usize) -> usize {
         // ChaCha20-Poly1305 uses padding in two places, use two 15 bytes as a safe
         // extra room.
         // https://mailarchive.ietf.org/arch/msg/cfrg/u734TEOSDDWyQgE0pmhxjdncwvw/
@@ -133,7 +133,7 @@ impl EncryptCipher {
 
     /// Encrypts message in the given buffer to the same buffer, returns number of bytes
     /// of total message.
-    pub fn encrypt(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    pub(crate) fn encrypt(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let stat = stat_uint24_le(buf);
         if let Some((header_len, body_len)) = stat {
             let mut to_encrypt = buf[header_len..header_len + body_len as usize].to_vec();

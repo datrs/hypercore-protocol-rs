@@ -77,7 +77,7 @@ impl Dh for Ed25519 {
 }
 
 #[derive(Default)]
-pub struct CurveResolver;
+pub(super) struct CurveResolver;
 
 impl CryptoResolver for CurveResolver {
     fn resolve_dh(&self, choice: &DHChoice) -> Option<Box<dyn Dh>> {

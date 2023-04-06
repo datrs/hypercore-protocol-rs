@@ -11,13 +11,13 @@ use std::task::{Context, Poll};
 const BUF_SIZE: usize = 1024 * 64;
 
 #[derive(Debug)]
-pub enum Step {
+pub(crate) enum Step {
     Flushing,
     Writing,
     Processing,
 }
 
-pub struct WriteState {
+pub(crate) struct WriteState {
     queue: VecDeque<Frame>,
     buf: Vec<u8>,
     current_frame: Option<Frame>,
@@ -42,7 +42,7 @@ impl fmt::Debug for WriteState {
 }
 
 impl WriteState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             queue: VecDeque::new(),
             buf: vec![0u8; BUF_SIZE],
@@ -54,14 +54,14 @@ impl WriteState {
         }
     }
 
-    pub fn queue_frame<F>(&mut self, frame: F)
+    pub(crate) fn queue_frame<F>(&mut self, frame: F)
     where
         F: Into<Frame>,
     {
         self.queue.push_back(frame.into())
     }
 
-    pub fn try_queue_direct<T: Encoder>(&mut self, frame: &mut T) -> Result<bool> {
+    pub(crate) fn try_queue_direct<T: Encoder>(&mut self, frame: &mut T) -> Result<bool> {
         let promised_len = frame.encoded_len()?;
         let padded_promised_len = self.safe_encrypted_len(promised_len);
         if self.buf.len() < padded_promised_len {
@@ -81,11 +81,11 @@ impl WriteState {
         Ok(true)
     }
 
-    pub fn can_park_frame(&self) -> bool {
+    pub(crate) fn can_park_frame(&self) -> bool {
         self.current_frame.is_none()
     }
 
-    pub fn park_frame<F>(&mut self, frame: F)
+    pub(crate) fn park_frame<F>(&mut self, frame: F)
     where
         F: Into<Frame>,
     {
@@ -107,7 +107,7 @@ impl WriteState {
         Ok(())
     }
 
-    pub fn upgrade_with_encrypt_cipher(&mut self, encrypt_cipher: EncryptCipher) {
+    pub(crate) fn upgrade_with_encrypt_cipher(&mut self, encrypt_cipher: EncryptCipher) {
         self.cipher = Some(encrypt_cipher);
     }
 
@@ -119,7 +119,11 @@ impl WriteState {
         self.end - self.start
     }
 
-    pub fn poll_send<W>(&mut self, cx: &mut Context<'_>, mut writer: &mut W) -> Poll<Result<()>>
+    pub(crate) fn poll_send<W>(
+        &mut self,
+        cx: &mut Context<'_>,
+        mut writer: &mut W,
+    ) -> Poll<Result<()>>
     where
         W: AsyncWrite + Unpin,
     {

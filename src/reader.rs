@@ -15,7 +15,7 @@ const TIMEOUT: Duration = Duration::from_secs(DEFAULT_TIMEOUT as u64);
 const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 
 #[derive(Debug)]
-pub struct ReadState {
+pub(crate) struct ReadState {
     /// The read buffer.
     buf: Vec<u8>,
     /// The start of the not-yet-processed byte range in the read buffer.
@@ -33,7 +33,7 @@ pub struct ReadState {
 }
 
 impl ReadState {
-    pub fn new() -> ReadState {
+    pub(crate) fn new() -> ReadState {
         ReadState {
             buf: vec![0u8; READ_BUF_INITIAL_SIZE],
             start: 0,
@@ -58,7 +58,7 @@ enum Step {
 }
 
 impl ReadState {
-    pub fn upgrade_with_decrypt_cipher(&mut self, decrypt_cipher: DecryptCipher) {
+    pub(crate) fn upgrade_with_decrypt_cipher(&mut self, decrypt_cipher: DecryptCipher) {
         self.cipher = Some(decrypt_cipher);
     }
 
@@ -66,7 +66,7 @@ impl ReadState {
     /// the rare mistake that more than two messages came in where the first
     /// one created the cipher, and the next one should have been decrypted
     /// but wasn't.
-    pub fn decrypt_buf(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn decrypt_buf(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
         if let Some(cipher) = self.cipher.as_mut() {
             Ok(cipher.decrypt_buf(buf)?.0)
         } else {
@@ -74,11 +74,11 @@ impl ReadState {
         }
     }
 
-    pub fn set_frame_type(&mut self, frame_type: FrameType) {
+    pub(crate) fn set_frame_type(&mut self, frame_type: FrameType) {
         self.frame_type = frame_type;
     }
 
-    pub fn poll_reader<R>(
+    pub(crate) fn poll_reader<R>(
         &mut self,
         cx: &mut Context<'_>,
         mut reader: &mut R,
@@ -207,7 +207,7 @@ impl ReadState {
 }
 
 #[allow(clippy::type_complexity)]
-pub fn create_segments(buf: &[u8]) -> Result<(bool, Vec<(usize, usize, usize)>)> {
+fn create_segments(buf: &[u8]) -> Result<(bool, Vec<(usize, usize, usize)>)> {
     let mut index: usize = 0;
     let len = buf.len();
     let mut segments: Vec<(usize, usize, usize)> = vec![];

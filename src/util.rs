@@ -14,21 +14,21 @@ pub fn discovery_key(key: &[u8]) -> DiscoveryKey {
     hasher.finalize().as_bytes().try_into().unwrap()
 }
 
-pub fn pretty_hash(key: &[u8]) -> String {
+pub(crate) fn pretty_hash(key: &[u8]) -> String {
     pretty_hash::fmt(key).unwrap_or_else(|_| "<invalid>".into())
 }
 
-pub fn map_channel_err<T>(err: async_channel::SendError<T>) -> Error {
+pub(crate) fn map_channel_err<T>(err: async_channel::SendError<T>) -> Error {
     Error::new(
         ErrorKind::BrokenPipe,
         format!("Cannot forward on channel: {}", err),
     )
 }
 
-pub const UINT_24_LENGTH: usize = 3;
+pub(crate) const UINT_24_LENGTH: usize = 3;
 
 #[inline]
-pub fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
+pub(crate) fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
     let mut buf: Vec<u8> = vec![0; 3];
     let n = data.len();
     write_uint24_le(n, &mut buf);
@@ -37,14 +37,14 @@ pub fn wrap_uint24_le(data: &Vec<u8>) -> Vec<u8> {
 }
 
 #[inline]
-pub fn write_uint24_le(n: usize, buf: &mut [u8]) {
+pub(crate) fn write_uint24_le(n: usize, buf: &mut [u8]) {
     buf[0] = (n & 255) as u8;
     buf[1] = ((n >> 8) & 255) as u8;
     buf[2] = ((n >> 16) & 255) as u8;
 }
 
 #[inline]
-pub fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
+pub(crate) fn stat_uint24_le(buffer: &[u8]) -> Option<(usize, u64)> {
     if buffer.len() >= 3 {
         let len =
             ((buffer[0] as u32) | ((buffer[1] as u32) << 8) | ((buffer[2] as u32) << 16)) as u64;

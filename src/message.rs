@@ -9,7 +9,7 @@ use std::io;
 
 /// The type of a data frame.
 #[derive(Debug, Clone, PartialEq)]
-pub enum FrameType {
+pub(crate) enum FrameType {
     Raw,
     Message,
 }
@@ -18,7 +18,7 @@ pub enum FrameType {
 ///
 /// This trait is implemented on data frames and their components
 /// (channel messages, messages, and individual message types through prost).
-pub trait Encoder: Sized + fmt::Debug {
+pub(crate) trait Encoder: Sized + fmt::Debug {
     /// Calculates the length that the encoded message needs.
     fn encoded_len(&mut self) -> Result<usize, EncodingError>;
 
@@ -48,7 +48,7 @@ impl Encoder for &[u8] {
 
 /// A frame of data, either a buffer or a message.
 #[derive(Clone, PartialEq)]
-pub enum Frame {
+pub(crate) enum Frame {
     /// A raw batch binary buffer. Used in the handshaking phase.
     RawBatch(Vec<Vec<u8>>),
     /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
@@ -78,7 +78,7 @@ impl From<Vec<u8>> for Frame {
 
 impl Frame {
     /// Decodes a frame from a buffer containing multiple concurrent messages.
-    pub fn decode_multiple(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
+    pub(crate) fn decode_multiple(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
             FrameType::Raw => {
                 let mut index = 0;
@@ -150,7 +150,7 @@ impl Frame {
     }
 
     /// Decode a frame from a buffer.
-    pub fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
+    pub(crate) fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
             FrameType::Raw => Ok(Frame::RawBatch(vec![buf.to_vec()])),
             FrameType::Message => {
@@ -365,7 +365,7 @@ pub enum Message {
 
 impl Message {
     /// Wire type of this message.
-    pub fn typ(&self) -> u64 {
+    pub(crate) fn typ(&self) -> u64 {
         match self {
             Self::Synchronize(_) => 0,
             Self::Request(_) => 1,
@@ -382,7 +382,7 @@ impl Message {
     }
 
     /// Decode a message from a buffer based on type.
-    pub fn decode(buf: &[u8], typ: u64) -> Result<(Self, usize), EncodingError> {
+    pub(crate) fn decode(buf: &[u8], typ: u64) -> Result<(Self, usize), EncodingError> {
         let mut state = HypercoreState::from_buffer(buf);
         let message = match typ {
             0 => Ok(Self::Synchronize((*state).decode(buf)?)),
@@ -404,7 +404,7 @@ impl Message {
     }
 
     /// Pre-encodes a message to state, returns length
-    pub fn preencode(&mut self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
+    pub(crate) fn preencode(&mut self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
         match self {
             Self::Open(ref message) => state.0.preencode(message)?,
             Self::Close(ref message) => state.0.preencode(message)?,
@@ -424,7 +424,7 @@ impl Message {
     }
 
     /// Encodes a message to a given buffer, using preencoded state, results size
-    pub fn encode(
+    pub(crate) fn encode(
         &mut self,
         state: &mut HypercoreState,
         buf: &mut [u8],
@@ -474,9 +474,9 @@ impl fmt::Display for Message {
 
 /// A message on a channel.
 #[derive(Clone)]
-pub struct ChannelMessage {
-    pub channel: u64,
-    pub message: Message,
+pub(crate) struct ChannelMessage {
+    pub(crate) channel: u64,
+    pub(crate) message: Message,
     state: Option<HypercoreState>,
 }
 
@@ -494,7 +494,7 @@ impl fmt::Debug for ChannelMessage {
 
 impl ChannelMessage {
     /// Create a new message.
-    pub fn new(channel: u64, message: Message) -> Self {
+    pub(crate) fn new(channel: u64, message: Message) -> Self {
         Self {
             channel,
             message,
@@ -503,7 +503,7 @@ impl ChannelMessage {
     }
 
     /// Consume self and return (channel, Message).
-    pub fn into_split(self) -> (u64, Message) {
+    pub(crate) fn into_split(self) -> (u64, Message) {
         (self.channel, self.message)
     }
 
@@ -511,7 +511,7 @@ impl ChannelMessage {
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
-    pub fn decode_open_message(buf: &[u8]) -> io::Result<(Self, usize)> {
+    pub(crate) fn decode_open_message(buf: &[u8]) -> io::Result<(Self, usize)> {
         if buf.len() <= 5 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -535,7 +535,7 @@ impl ChannelMessage {
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
-    pub fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
+    pub(crate) fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
         if buf.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -558,7 +558,7 @@ impl ChannelMessage {
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
-    pub fn decode(buf: &[u8], channel: u64) -> io::Result<(Self, usize)> {
+    pub(crate) fn decode(buf: &[u8], channel: u64) -> io::Result<(Self, usize)> {
         if buf.len() <= 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,

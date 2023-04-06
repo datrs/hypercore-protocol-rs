@@ -35,13 +35,13 @@ const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u6
 #[derive(Debug)]
 pub(crate) struct Options {
     /// Whether this peer initiated the IO connection for this protoccol
-    pub is_initiator: bool,
+    pub(crate) is_initiator: bool,
     /// Enable or disable the handshake.
     /// Disabling the handshake will also disable capabilitity verification.
     /// Don't disable this if you're not 100% sure you want this.
-    pub noise: bool,
+    pub(crate) noise: bool,
     /// Enable or disable transport encryption.
-    pub encrypted: bool,
+    pub(crate) encrypted: bool,
 }
 
 impl Options {
@@ -56,7 +56,7 @@ impl Options {
 }
 
 /// Remote public key (32 bytes).
-pub type RemotePublicKey = [u8; 32];
+pub(crate) type RemotePublicKey = [u8; 32];
 /// Discovery key (32 bytes).
 pub type DiscoveryKey = [u8; 32];
 /// Key (32 bytes).
@@ -109,7 +109,7 @@ impl fmt::Debug for Event {
 
 /// Protocol state
 #[allow(clippy::large_enum_variant)]
-pub enum State {
+pub(crate) enum State {
     NotInitialized,
     // The Handshake struct sits behind an option only so that we can .take()
     // it out, it's never actually empty when in State::Handshake.
