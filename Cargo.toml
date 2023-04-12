@@ -1,6 +1,6 @@
 [package]
 name = "hypercore-protocol"
-version = "0.4.0-alpha.2"
+version = "0.4.0-alpha.3"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
 authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
@@ -46,11 +46,11 @@ crypto_secretstream = "0.1.1"
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
 async-compat = "0.2.1"
-tokio = { version = "1.25.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.27.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 env_logger = "0.7.1"
-random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "thiserror"}
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "thiserror" }
-random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "thiserror" }
+random-access-storage = "5.0.0"
+random-access-disk = "3.0.0"
+random-access-memory = "3.0.0"
 anyhow = "1.0.28"
 criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"
