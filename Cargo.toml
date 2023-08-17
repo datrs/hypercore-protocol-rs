@@ -38,9 +38,7 @@ getrandom = "0.1"
 futures-lite = "1.11.3"
 hypercore = { git = "https://github.com/datrs/hypercore", branch = "v10", default-features = false }
 sha2 = "0.10.6"
-# FIXME: This uses pre-release, because v4 relaxed the zeroize version range. With this the crate be
-# buildable with other crates that use zeroize >=1.5. When 4.0 releases, switch to that.
-curve25519-dalek = "4.0.0-rc.1"
+curve25519-dalek = "4.0.0"
 crypto_secretstream = "0.1.1"
 
 [dev-dependencies]

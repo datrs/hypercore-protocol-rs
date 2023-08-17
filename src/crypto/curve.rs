@@ -1,4 +1,3 @@
-use curve25519_dalek::scalar::Scalar;
 use hypercore::{generate_keypair, PublicKey, SecretKey};
 use sha2::Digest;
 use snow::{
@@ -59,7 +58,6 @@ impl Dh for Ed25519 {
         let sk: [u8; 32] = sha2::Sha512::digest(self.privkey).as_slice()[..32]
             .try_into()
             .unwrap();
-        let sk = clamp_scalar(sk);
         // PublicKey is a CompressedEdwardsY in dalek. So we decompress it to get the
         // EdwardsPoint and use variable base multiplication.
         let cey =
@@ -69,7 +67,7 @@ impl Dh for Ed25519 {
             Some(ep) => Ok(ep),
             None => Err(snow::Error::Dh),
         }?;
-        let result = pubkey * sk;
+        let result = pubkey.mul_clamped(sk);
         let result: [u8; 32] = *result.compress().as_bytes();
         out[..result.len()].copy_from_slice(result.as_slice());
         Ok(())
@@ -98,12 +96,4 @@ impl CryptoResolver for CurveResolver {
     fn resolve_cipher(&self, _choice: &CipherChoice) -> Option<Box<dyn Cipher>> {
         None
     }
-}
-
-fn clamp_scalar(mut scalar: [u8; 32]) -> Scalar {
-    scalar[0] &= 248;
-    scalar[31] &= 127;
-    scalar[31] |= 64;
-
-    Scalar::from_bits(scalar)
 }

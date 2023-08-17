@@ -55,10 +55,8 @@ fn main() {
                 .unwrap()
         } else {
             let mut hypercore = HypercoreBuilder::new(storage).build().await.unwrap();
-            hypercore
-                .append_batch(&[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"])
-                .await
-                .unwrap();
+            let batch: &[&[u8]] = &[b"hi\n", b"ola\n", b"hello\n", b"mundo\n"];
+            hypercore.append_batch(batch).await.unwrap();
             hypercore
         };
         println!(
