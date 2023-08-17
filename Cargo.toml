@@ -1,6 +1,6 @@
 [package]
 name = "hypercore-protocol"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.4"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
 authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
@@ -23,7 +23,7 @@ bench = false
 
 [dependencies]
 async-channel = "1.5"
-snow = { version = "0.9.1", features = ["risky-raw-split"] }
+snow = { version = "0.9.3", features = ["risky-raw-split"] }
 bytes = "1.0.1"
 rand = "0.8"
 blake2-rfc = "0.2"
