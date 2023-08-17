@@ -1,4 +1,4 @@
-use hypercore::{generate_keypair, PublicKey, SecretKey};
+use hypercore::{generate_signing_key, SecretKey, SigningKey, VerifyingKey};
 use sha2::Digest;
 use snow::{
     params::{CipherChoice, DHChoice, HashChoice},
@@ -28,21 +28,23 @@ impl Dh for Ed25519 {
     }
 
     fn set(&mut self, privkey: &[u8]) {
-        let secret: SecretKey =
-            SecretKey::from_bytes(privkey).expect("Can't use given bytes as SecretKey");
-        let public: PublicKey = (&secret).into();
+        let secret: SecretKey = privkey
+            .try_into()
+            .expect("Can't use given bytes as SecretKey");
+        let public: VerifyingKey = SigningKey::from(&secret).verifying_key();
         self.privkey[..privkey.len()].copy_from_slice(privkey);
         let public_key_bytes = public.as_bytes();
         self.pubkey[..public_key_bytes.len()].copy_from_slice(public_key_bytes);
     }
 
     fn generate(&mut self, _: &mut dyn Random) {
-        // NB: Given Random can't be used with eed25519_dalek's Keypair::generate(),
-        // use OS's random here.
-        let key_pair = generate_keypair();
-        let secret_key_bytes = key_pair.secret.as_bytes();
-        self.privkey[..secret_key_bytes.len()].copy_from_slice(secret_key_bytes);
-        let public_key_bytes = key_pair.public.as_bytes();
+        // NB: Given Random can't be used with ed25519_dalek's SigningKey::generate(),
+        // use OS's random here from hypercore.
+        let signing_key = generate_signing_key();
+        let secret_key_bytes = signing_key.to_bytes();
+        self.privkey[..secret_key_bytes.len()].copy_from_slice(&secret_key_bytes);
+        let verifying_key = signing_key.verifying_key();
+        let public_key_bytes = verifying_key.as_bytes();
         self.pubkey[..public_key_bytes.len()].copy_from_slice(public_key_bytes);
     }
 

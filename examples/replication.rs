@@ -4,7 +4,8 @@ use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures_lite::stream::StreamExt;
 use hypercore::{
-    Hypercore, HypercoreBuilder, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade, Storage,
+    Hypercore, HypercoreBuilder, PartialKeypair, RequestBlock, RequestUpgrade, Storage,
+    VerifyingKey,
 };
 use log::*;
 use random_access_memory::RandomAccessMemory;
@@ -44,7 +45,7 @@ fn main() {
         let storage = Storage::new_memory().await.unwrap();
         // Create a hypercore.
         let hypercore = if let Some(key) = key {
-            let public_key = PublicKey::from_bytes(&key).unwrap();
+            let public_key = VerifyingKey::from_bytes(&key).unwrap();
             HypercoreBuilder::new(storage)
                 .key_pair(PartialKeypair {
                     public: public_key,

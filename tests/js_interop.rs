@@ -3,8 +3,8 @@ use anyhow::Result;
 use futures::Future;
 use futures_lite::stream::StreamExt;
 use hypercore::{
-    Hypercore, HypercoreBuilder, PartialKeypair, PublicKey, RequestBlock, RequestUpgrade,
-    SecretKey, Storage, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    Hypercore, HypercoreBuilder, PartialKeypair, RequestBlock, RequestUpgrade, Storage,
+    VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use instant::Duration;
 use random_access_disk::RandomAccessDisk;
@@ -425,9 +425,9 @@ const TEST_SECRET_KEY_BYTES: [u8; SECRET_KEY_LENGTH] = [
 ];
 
 pub fn get_test_key_pair(include_secret: bool) -> PartialKeypair {
-    let public = PublicKey::from_bytes(&TEST_PUBLIC_KEY_BYTES).unwrap();
+    let public = VerifyingKey::from_bytes(&TEST_PUBLIC_KEY_BYTES).unwrap();
     let secret = if include_secret {
-        Some(SecretKey::from_bytes(&TEST_SECRET_KEY_BYTES).unwrap())
+        Some(TEST_SECRET_KEY_BYTES)
     } else {
         None
     };
