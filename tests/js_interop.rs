@@ -2,6 +2,7 @@ use _util::wait_for_localhost_port;
 use anyhow::Result;
 use futures::Future;
 use futures_lite::stream::StreamExt;
+use hypercore::SigningKey;
 use hypercore::{
     Hypercore, HypercoreBuilder, PartialKeypair, RequestBlock, RequestUpgrade, Storage,
     VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
@@ -427,10 +428,16 @@ const TEST_SECRET_KEY_BYTES: [u8; SECRET_KEY_LENGTH] = [
 pub fn get_test_key_pair(include_secret: bool) -> PartialKeypair {
     let public = VerifyingKey::from_bytes(&TEST_PUBLIC_KEY_BYTES).unwrap();
     let secret = if include_secret {
-        Some(TEST_SECRET_KEY_BYTES)
+        let signing_key = SigningKey::from_bytes(&TEST_SECRET_KEY_BYTES);
+        assert_eq!(
+            TEST_PUBLIC_KEY_BYTES,
+            signing_key.verifying_key().to_bytes()
+        );
+        Some(signing_key)
     } else {
         None
     };
+
     PartialKeypair { public, secret }
 }
 
