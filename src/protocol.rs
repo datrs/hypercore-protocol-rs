@@ -388,7 +388,7 @@ where
                                 } else {
                                     State::Handshake(None)
                                 };
-                                if processed_state == &format!("{:?}", previous_state) {
+                                if processed_state == &format!("{previous_state:?}") {
                                     // This is the unlucky case where the batch had two or more messages where
                                     // the first one was correctly identified as Raw but everything
                                     // after that should have been (decrypted and) a MessageBatch. Correct the mistake

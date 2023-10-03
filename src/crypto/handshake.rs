@@ -219,10 +219,7 @@ fn build_handshake_state(
 }
 
 fn map_err(e: SnowError) -> Error {
-    Error::new(
-        ErrorKind::PermissionDenied,
-        format!("handshake error: {}", e),
-    )
+    Error::new(ErrorKind::PermissionDenied, format!("Handshake error: {e}"))
 }
 
 /// Create a hash used to indicate replication capability.

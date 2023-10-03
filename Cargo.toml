@@ -50,7 +50,7 @@ async-compat = "0.2.1"
 tokio = { version = "1.27.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 env_logger = "0.7.1"
 random-access-storage = "5.0.0"
-random-access-disk = "3.0.0"
+random-access-disk = { version = "3.0.0", default-features = false }
 random-access-memory = "3.0.0"
 anyhow = "1.0.28"
 criterion = { version = "0.4", features = ["async_std"] }
@@ -75,7 +75,7 @@ tokio = ["hypercore/tokio", "random-access-disk/tokio"]
 async-std = ["hypercore/async-std", "random-access-disk/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
-# cargo test --features js-interop-tests
+# cargo test --features js_interop_tests
 js_interop_tests = []
 
 [profile.bench]

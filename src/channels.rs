@@ -299,7 +299,7 @@ impl ChannelHandle {
         if let Some(inbound_tx) = self.inbound_tx.as_mut() {
             inbound_tx
                 .try_send(message)
-                .map_err(|e| error(format!("Sending to channel failed: {}", e).as_str()))
+                .map_err(|e| error(format!("Sending to channel failed: {e}").as_str()))
         } else {
             Err(error("Channel is not open"))
         }
@@ -313,7 +313,7 @@ impl ChannelHandle {
             if let Err(err) = inbound_tx.try_send(message) {
                 match err {
                     TrySendError::Full(e) => {
-                        return Err(error(format!("Sending to channel failed: {}", e).as_str()))
+                        return Err(error(format!("Sending to channel failed: {e}").as_str()))
                     }
                     TrySendError::Closed(_) => {}
                 }

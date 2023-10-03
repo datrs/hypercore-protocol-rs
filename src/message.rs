@@ -59,7 +59,7 @@ impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Frame::RawBatch(batch) => write!(f, "Frame(RawBatch <{}>)", batch.len()),
-            Frame::MessageBatch(messages) => write!(f, "Frame({:?})", messages),
+            Frame::MessageBatch(messages) => write!(f, "Frame({messages:?})"),
         }
     }
 }
@@ -225,7 +225,7 @@ impl Frame {
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("received too short message, {:02X?}", buf),
+                format!("received too short message, {buf:02X?}"),
             ))
         }
     }
@@ -397,7 +397,7 @@ impl Message {
             9 => Ok(Self::Extension((*state).decode(buf)?)),
             _ => Err(EncodingError::new(
                 EncodingErrorKind::InvalidData,
-                &format!("Invalid message type to decode: {}", typ),
+                &format!("Invalid message type to decode: {typ}"),
             )),
         }?;
         Ok((message, state.start()))

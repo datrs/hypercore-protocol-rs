@@ -24,7 +24,7 @@ pub(crate) fn pretty_hash(key: &[u8]) -> String {
 pub(crate) fn map_channel_err<T>(err: async_channel::SendError<T>) -> Error {
     Error::new(
         ErrorKind::BrokenPipe,
-        format!("Cannot forward on channel: {}", err),
+        format!("Cannot forward on channel: {err}"),
     )
 }
 
