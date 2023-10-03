@@ -1,6 +1,9 @@
 use super::HandshakeResult;
 use crate::util::{stat_uint24_le, write_uint24_le, UINT_24_LENGTH};
-use blake2_rfc::blake2b::Blake2b;
+use blake2::{
+    digest::{typenum::U32, FixedOutput, Update},
+    Blake2bMac,
+};
 use crypto_secretstream::{Header, Key, PullStream, PushStream, Tag};
 use rand::rngs::OsRng;
 use std::convert::TryInto;
@@ -93,7 +96,7 @@ impl DecryptCipher {
     pub(crate) fn decrypt_buf(&mut self, buf: &[u8]) -> io::Result<(Vec<u8>, Tag)> {
         let mut to_decrypt = buf.to_vec();
         let tag = &self.pull_stream.pull(&mut to_decrypt, &[]).map_err(|err| {
-            io::Error::new(io::ErrorKind::Other, format!("Decrypt failed, err {}", err))
+            io::Error::new(io::ErrorKind::Other, format!("Decrypt failed: {err}"))
         })?;
         Ok((to_decrypt, *tag))
     }
@@ -140,7 +143,7 @@ impl EncryptCipher {
             self.push_stream
                 .push(&mut to_encrypt, &[], Tag::Message)
                 .map_err(|err| {
-                    io::Error::new(io::ErrorKind::Other, format!("Encrypt failed, err {}", err))
+                    io::Error::new(io::ErrorKind::Other, format!("Encrypt failed: {err}"))
                 })?;
             let encrypted_len = to_encrypt.len();
             write_uint24_le(encrypted_len, buf);
@@ -170,13 +173,14 @@ const NS_RESPONDER: [u8; 32] = [
 ];
 
 fn write_stream_id(handshake_hash: &[u8], is_initiator: bool, out: &mut [u8]) {
-    let mut hasher = Blake2b::with_key(32, handshake_hash);
+    let mut hasher =
+        Blake2bMac::<U32>::new_with_salt_and_personal(handshake_hash, &[], &[]).unwrap();
     if is_initiator {
         hasher.update(&NS_INITIATOR);
     } else {
         hasher.update(&NS_RESPONDER);
     }
-    let result = hasher.finalize();
-    let result = result.as_bytes();
+    let result = hasher.finalize_fixed();
+    let result = result.as_slice();
     out.copy_from_slice(result);
 }

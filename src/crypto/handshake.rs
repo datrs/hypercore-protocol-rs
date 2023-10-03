@@ -1,6 +1,9 @@
 use super::curve::CurveResolver;
 use crate::util::wrap_uint24_le;
-use blake2_rfc::blake2b::Blake2b;
+use blake2::{
+    digest::{typenum::U32, FixedOutput, Update},
+    Blake2bMac,
+};
 use snow::resolvers::{DefaultResolver, FallbackResolver};
 use snow::{Builder, Error as SnowError, HandshakeState};
 use std::io::{Error, ErrorKind, Result};
@@ -231,10 +234,11 @@ fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8]) -
         REPLICATE_RESPONDER
     };
 
-    let mut hasher = Blake2b::with_key(32, handshake_hash);
+    let mut hasher =
+        Blake2bMac::<U32>::new_with_salt_and_personal(handshake_hash, &[], &[]).unwrap();
     hasher.update(&seed);
     hasher.update(key);
-    let hash = hasher.finalize();
-    let capability = hash.as_bytes().to_vec();
+    let hash = hasher.finalize_fixed();
+    let capability = hash.as_slice().to_vec();
     capability
 }

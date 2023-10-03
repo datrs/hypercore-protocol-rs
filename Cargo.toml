@@ -1,9 +1,12 @@
 [package]
 name = "hypercore-protocol"
-version = "0.4.0-alpha.5"
+version = "0.4.0-alpha.6"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
-authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
+authors = [
+  "Franz Heinzmann (Frando) <frando@unbiskant.org>",
+  "Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"
+]
 documentation = "https://docs.rs/hypercore-protocol"
 repository = "https://github.com/Frando/hypercore-protocol-rs"
 readme = "README.md"
@@ -26,7 +29,7 @@ async-channel = "1.5"
 snow = { version = "0.9.3", features = ["risky-raw-split"] }
 bytes = "1.0.1"
 rand = "0.8"
-blake2-rfc = "0.2"
+blake2 = "0.10.6"
 hex = "0.4"
 async-trait = "0.1.63"
 salsa20 = "0.6"

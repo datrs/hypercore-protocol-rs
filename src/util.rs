@@ -1,4 +1,7 @@
-use blake2_rfc::blake2b::Blake2b;
+use blake2::{
+    digest::{typenum::U32, FixedOutput, Update},
+    Blake2bMac,
+};
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 
@@ -9,9 +12,9 @@ use crate::DiscoveryKey;
 ///
 /// The discovery key is a 32 byte namespaced hash of the key.
 pub fn discovery_key(key: &[u8]) -> DiscoveryKey {
-    let mut hasher = Blake2b::with_key(32, key);
+    let mut hasher = Blake2bMac::<U32>::new_with_salt_and_personal(key, &[], &[]).unwrap();
     hasher.update(DISCOVERY_NS_BUF);
-    hasher.finalize().as_bytes().try_into().unwrap()
+    hasher.finalize_fixed().as_slice().try_into().unwrap()
 }
 
 pub(crate) fn pretty_hash(key: &[u8]) -> String {
