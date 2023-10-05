@@ -10,7 +10,7 @@ authors = [
 documentation = "https://docs.rs/hypercore-protocol"
 repository = "https://github.com/Frando/hypercore-protocol-rs"
 readme = "README.md"
-edition = "2018"
+edition = "2021"
 keywords = ["dat", "p2p", "replication", "hypercore", "protocol"]
 categories = [
   "asynchronous",
@@ -63,7 +63,6 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 [features]
 default = ["async-std", "sparse"]
 wasm-bindgen = [
-  "instant/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
 sparse = ["hypercore/sparse"]
