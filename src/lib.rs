@@ -4,21 +4,17 @@
 //! handler that implements the [AsyncRead] and [AsyncWrite] traits.
 //!
 //! When opening a Hypercore protocol stream on an IO handler, the protocol will perform a Noise
-//! handshake to setup a secure and authenticated connection. After that, each side can request any
-//! number of channels on the protocol. A channel is opened with a [Key], a 32 byte buffer.
-//! Channels are only opened if both peers opened a channel for the same key. It is automatically
-//! verified that both parties know the key without transmitting the key itself.
+//! handshake followed by libsodium's [crypto_secretstream] to setup a secure and authenticated
+//! connection. After that, each side can request any number of channels on the protocol. A
+//! channel is opened with a [Key], a 32 byte buffer. Channels are only opened if both peers
+//! opened a channel for the same key. It is automatically verified that both parties know the
+//! key without transmitting the key itself.
 //!
-//! On a channel, the predefined messages of the Hypercore protocol can be sent and received.
-//! Additionally, Hypercore protocol supports protocol extensions that can be registered both on an
-//! individual channel and on the main protocol stream. Extensions are registered with a string
-//! name and are only established if both peers register an extension with the same name. Each
-//! extension then can be used as a duplex stream. Note that individual messages on an extension
-//! stream are enrypted but not authenticated.
+//! On a channel, the predefined messages, including a custom Extension message, of the Hypercore
+//! protocol can be sent and received.
 //!
 //! [AsyncRead]: futures_lite::AsyncRead
 //! [AsyncWrite]: futures_lite::AsyncWrite
-//! [TcpStream]: async_std::net::TcpStream
 //!
 //! The following example opens a TCP server on localhost and connects to that server. Both ends
 //! then open a channel with the same key and exchange a message.
@@ -28,7 +24,6 @@
 //! use hypercore_protocol::{ProtocolBuilder, Event, Message};
 //! use hypercore_protocol::schema::*;
 //! use async_std::prelude::*;
-//!
 //! // Start a tcp server.
 //! let listener = async_std::net::TcpListener::bind("localhost:8000").await.unwrap();
 //! async_std::task::spawn(async move {
@@ -55,6 +50,7 @@
 //!     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 //!
 //!     // Iterate over the protocol events. This is required to "drive" the protocol.
+//!
 //!     while let Some(Ok(event)) = protocol.next().await {
 //!         eprintln!("{} received event {:?}", name, event);
 //!         match event {
@@ -67,7 +63,7 @@
 //!                 // A Channel can be sent to other tasks.
 //!                 async_std::task::spawn(async move {
 //!                     // A Channel can both send messages and is a stream of incoming messages.
-//!                     channel.want(Want { start: 0, length: 1 }).await;
+//!                     channel.send(Message::Want(Want { start: 0, length: 1 })).await;
 //!                     while let Some(message) = channel.next().await {
 //!                         eprintln!("{} received message: {:?}", name, message);
 //!                     }

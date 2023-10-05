@@ -80,17 +80,17 @@ impl Channel {
     }
 
     /// Send a batch of messages over the channel.
-    /// NB: In javascript this is cork()/uncork(), e.g.:
-    ///
-    /// https://github.com/hypercore-protocol/hypercore/blob/29d2132de66b198b042a01e48d59fc2b38609ac7/lib/replicator.js#L361-L377
-    ///
-    /// at the protomux level, where there can be messages from multiple channels in a single
-    /// stream write:
-    ///
-    /// https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L359-L380
-    ///
-    /// Batching messages across channels like protomux is capable of doing is not (yet) implemented.
     pub async fn send_batch(&mut self, messages: &[Message]) -> Result<()> {
+        // In javascript this is cork()/uncork(), e.g.:
+        //
+        // https://github.com/holepunchto/hypercore/blob/c338b9aaa4442d35bc9d283d2c242b86a46de6d4/lib/replicator.js#L402-L418
+        //
+        // at the protomux level, where there can be messages from multiple channels in a single
+        // stream write:
+        //
+        // https://github.com/holepunchto/protomux/blob/d3d6f8f55e52c2fbe5cd56f5d067ac43ca13c27d/index.js#L368-L389
+        //
+        // Batching messages across channels like protomux is capable of doing is not (yet) implemented.
         if self.closed() {
             return Err(Error::new(
                 ErrorKind::ConnectionAborted,
@@ -122,31 +122,6 @@ impl Channel {
     /// signaling.
     pub fn local_sender(&mut self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
-    }
-
-    /// Send a want message.
-    pub async fn want(&mut self, msg: Want) -> Result<()> {
-        self.send(Message::Want(msg)).await
-    }
-
-    /// Send a unwant message.
-    pub async fn unwant(&mut self, msg: Unwant) -> Result<()> {
-        self.send(Message::Unwant(msg)).await
-    }
-
-    /// Send a request message.
-    pub async fn request(&mut self, msg: Request) -> Result<()> {
-        self.send(Message::Request(msg)).await
-    }
-
-    /// Send a cancel message.
-    pub async fn cancel(&mut self, msg: Cancel) -> Result<()> {
-        self.send(Message::Cancel(msg)).await
-    }
-
-    /// Send a data message.
-    pub async fn data(&mut self, msg: Data) -> Result<()> {
-        self.send(Message::Data(msg)).await
     }
 
     /// Send a close message and close this channel.
