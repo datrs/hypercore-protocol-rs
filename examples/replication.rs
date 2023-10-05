@@ -421,7 +421,7 @@ where
                     // When getting the initial upgrade, send a request for the first missing block
                     if old_info.length < upgrade.length {
                         let request_index = old_info.length;
-                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        let nodes = hypercore.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,
@@ -433,7 +433,7 @@ where
                     // When receiving a block, ask for the next, if there are still some missing
                     if block.index < peer_state.remote_length - 1 {
                         let request_index = block.index + 1;
-                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        let nodes = hypercore.missing_nodes(request_index).await?;
                         Some(RequestBlock {
                             index: request_index,
                             nodes,
