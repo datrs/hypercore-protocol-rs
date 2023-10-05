@@ -1,4 +1,12 @@
-//! Hypercore protocol is a streaming, message based protocol
+//! ## Introduction
+//!
+//! Hypercore protocol is a streaming, message based protocol. This is a rust port of the wire
+//! protocol implementation in [the original Javascript version][holepunch-hypercore] aiming
+//! for interoperability with LTS version.
+//!
+//! This crate is built on top of the [hypercore] crate, which defines some structs used here.
+//!
+//! ## Design
 //!
 //! This crate does not include any IO related code, it is up to the user to supply a streaming IO
 //! handler that implements the [AsyncRead] and [AsyncWrite] traits.
@@ -13,8 +21,7 @@
 //! On a channel, the predefined messages, including a custom Extension message, of the Hypercore
 //! protocol can be sent and received.
 //!
-//! [AsyncRead]: futures_lite::AsyncRead
-//! [AsyncWrite]: futures_lite::AsyncWrite
+//! ## Example
 //!
 //! The following example opens a TCP server on localhost and connects to that server. Both ends
 //! then open a channel with the same key and exchange a message.
@@ -75,6 +82,14 @@
 //! }
 //! # })
 //! ```
+//!
+//! Find more examples in the [Github repository][examples].
+//!
+//! [holepunch-hypercore]: https://github.com/holepunchto/hypercore
+//! [datrs-hypercore]: https://github.com/datrs/hypercore
+//! [AsyncRead]: futures_lite::AsyncRead
+//! [AsyncWrite]: futures_lite::AsyncWrite
+//! [examples]: https://github.com/datrs/hypercore-protocol-rs#examples
 
 #![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
 #![deny(missing_debug_implementations, nonstandard_style)]

@@ -60,7 +60,7 @@ These examples sync data between Rust and NodeJS hypercore-protocol implementati
 cd examples-nodejs && npm install && cd ..
 ```
 
-### [hypercore.rs](examples/replication.rs)
+### [replication.rs](examples/replication.rs)
 
 Runs the `replication.rs` example by replicating a hypercore between Rust and Node hypercores and printing the result.
 
