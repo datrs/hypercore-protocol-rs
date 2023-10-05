@@ -1,7 +1,9 @@
 use anyhow::Result;
-use async_std::net::TcpStream;
+use async_std::net::{TcpListener, TcpStream};
+use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
+use env_logger::Env;
 use futures_lite::stream::StreamExt;
 use hypercore::{
     Hypercore, HypercoreBuilder, PartialKeypair, RequestBlock, RequestUpgrade, Storage,
@@ -18,26 +20,21 @@ use std::fmt::Debug;
 use hypercore_protocol::schema::*;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
 
-mod util;
-use util::{tcp_client, tcp_server};
-
 fn main() {
-    util::init_logger();
+    init_logger();
     if env::args().count() < 3 {
         usage();
     }
     let mode = env::args().nth(1).unwrap();
     let port = env::args().nth(2).unwrap();
-    let address = format!("127.0.0.1:{}", port);
+    let address = format!("127.0.0.1:{port}");
 
     let key = env::args().nth(3);
-    let key: Option<[u8; 32]> = key.map_or(None, |key| {
-        Some(
-            hex::decode(key)
-                .expect("Key has to be a hex string")
-                .try_into()
-                .expect("Key has to be a 32 byte hex string"),
-        )
+    let key: Option<[u8; 32]> = key.map(|key| {
+        hex::decode(key)
+            .expect("Key has to be a hex string")
+            .try_into()
+            .expect("Key has to be a 32 byte hex string")
     });
 
     task::block_on(async move {
@@ -75,7 +72,7 @@ fn main() {
             "client" => tcp_client(address, onconnection, hypercore_store).await,
             _ => panic!("{:?}", usage()),
         };
-        util::log_if_error(&result);
+        log_if_error(&result);
     });
 }
 
@@ -107,13 +104,13 @@ where
             Event::Handshake(_) => {
                 if is_initiator {
                     for hypercore in hypercore_store.hypercores.values() {
-                        protocol.open(hypercore.key().clone()).await?;
+                        protocol.open(*hypercore.key()).await?;
                     }
                 }
             }
             Event::DiscoveryKey(dkey) => {
                 if let Some(hypercore) = hypercore_store.get(&dkey) {
-                    protocol.open(hypercore.key().clone()).await?;
+                    protocol.open(*hypercore.key()).await?;
                 }
             }
             Event::Channel(channel) => {
@@ -146,7 +143,7 @@ where
     }
 
     pub fn add(&mut self, hypercore: HypercoreWrapper<T>) {
-        let hdkey = hex::encode(&hypercore.discovery_key);
+        let hdkey = hex::encode(hypercore.discovery_key);
         self.hypercores.insert(hdkey, Arc::new(hypercore));
     }
 
@@ -190,33 +187,6 @@ where
         let mut peer_state = PeerState::default();
         let mut hypercore = self.hypercore.clone();
         task::spawn(async move {
-            // The one that has stuff sends:
-            // 0000 <- batch
-            // 01 <- channel
-            // 05 <- msg_len
-            // 00 <- type=Synchronize
-            // 07 <- true/true/true
-            // 00 <- fork
-            // 04 <- length
-            // 00 <- remote_length
-            // 04 <- msg_len
-            // 08 <- type=Range
-            // 00 <- false/false
-            // 00 <- start
-            // 04 <- length
-
-            // The one without stuff sends:
-            // 0000 <- batch
-            // 01 <- channel
-            // 05 <- msg_len
-            // 00 <- type=Syncronize
-            // 07 <- true/true/true
-            // 00 <- fork
-            // 00 <- length
-            // 00 <- remote_length
-            //
-            //
-
             let info = {
                 let hypercore = hypercore.lock().await;
                 hypercore.info()
@@ -253,26 +223,6 @@ where
             } else {
                 channel.send(Message::Synchronize(sync_msg)).await.unwrap();
             }
-
-            // JS: has this:
-            // if (this.core.tree.fork !== this.remoteFork) {
-            //   this.canUpgrade = false
-            // }
-            // this.needsSync = false
-            // this.wireSync.send({
-            //   fork: this.core.tree.fork,
-            //   length: this.core.tree.length,
-            //   remoteLength: this.core.tree.fork === this.remoteFork ? this.remoteLength : 0,
-            //   canUpgrade: this.canUpgrade,
-            //   uploading: true,
-            //   downloading: true
-            // })
-            //
-            // const contig = this.core.header.contiguousLength
-            // if (contig > 0) {
-            //   this.broadcastRange(0, contig, false)
-            // }
-
             while let Some(message) = channel.next().await {
                 let result =
                     onmessage(&mut hypercore, &mut peer_state, &mut channel, message).await;
@@ -324,7 +274,7 @@ where
 {
     match message {
         Message::Synchronize(message) => {
-            println!("Got Synchronize message {:?}", message);
+            println!("Got Synchronize message {message:?}");
             let length_changed = message.length != peer_state.remote_length;
             let first_sync = !peer_state.remote_synced;
             let info = {
@@ -361,14 +311,6 @@ where
                 && peer_state.length_acked == info.length
                 && length_changed
             {
-                // This is sent by node here
-                // 01 <- channel
-                // 01 <- type=Request
-                // 08 <- upgrade JS => (m.block ? 1 : 0) | (m.hash ? 2 : 0) | (m.seek ? 4 : 0) | (m.upgrade ? 8 : 0)
-                // 01 <- id, some kind of InFlight id, maybe to recognize the response of Request response
-                // 00 <- fork
-                // 00 <- upgradeStart
-                // 04 <- upgradeEnd
                 let msg = Request {
                     id: 1, // There should be proper handling for in-flight request ids
                     fork: info.fork,
@@ -382,14 +324,10 @@ where
                 };
                 messages.push(Message::Request(msg));
             }
-
             channel.send_batch(&messages).await?;
-
-            // TODO: Other requests that should be sent here, now only handles the simple asking
-            // for data
         }
         Message::Request(message) => {
-            println!("Got Request message {:?}", message);
+            println!("Got Request message {message:?}");
             let (info, proof) = {
                 let mut hypercore = hypercore.lock().await;
                 let proof = hypercore
@@ -410,7 +348,7 @@ where
             }
         }
         Message::Data(message) => {
-            println!("Got Data message {:?}", message);
+            println!("Got Data message {message:?}");
             let (_old_info, _applied, new_info, request_block) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
@@ -447,13 +385,19 @@ where
 
                 // If all have been replicated, print the result
                 if new_info.contiguous_length == new_info.length {
+                    println!();
+                    println!("### Results");
+                    println!();
+                    println!("Replication succeeded if this prints '0: hi', '1: ola', '2: hello' and '3: mundo':");
+                    println!();
                     for i in 0..new_info.contiguous_length {
                         println!(
-                            "replicated index {}: {}",
+                            "{}: {}",
                             i,
                             String::from_utf8(hypercore.get(i).await?.unwrap()).unwrap()
                         );
                     }
+                    println!("Press Ctrl-C to exit");
                 }
                 (old_info, applied, new_info, request_block)
             };
@@ -461,25 +405,6 @@ where
             let mut messages: Vec<Message> = vec![];
             if let Some(upgrade) = &message.upgrade {
                 let new_length = upgrade.length;
-
-                // Node sends another Synchronize message:
-                //
-                // 01 <- channel
-                // 00 <- type=Synchronize
-                // 06 <- false(can_upgrade)/true(uploading)/true(downloading)
-                // 00 <- fork
-                // 04 <- length
-                // 04 <- remote_length
-                //
-                // followed with 4 Requests:
-                // 01 <- channel
-                // 01 <- type=Request
-                // 01 <- flags => evaluates to RequestBlock
-                // 01 <- id, increments to 4
-                // 00 <- fork
-                // 00 <- start, increments to 3
-                // 02 <- nodes, 2 != 1 has to do with MerkleTree using double values, see missingNodes()
-
                 let remote_length = if new_info.fork == peer_state.remote_fork {
                     peer_state.remote_length
                 } else {
@@ -506,8 +431,61 @@ where
             }
             channel.send_batch(&messages).await.unwrap();
         }
-        // TODO
         _ => {}
     };
     Ok(())
+}
+
+/// Init EnvLogger, logging info, warn and error messages to stdout.
+pub fn init_logger() {
+    env_logger::from_env(Env::default().default_filter_or("info")).init();
+}
+
+/// Log a result if it's an error.
+pub fn log_if_error(result: &Result<()>) {
+    if let Err(err) = result.as_ref() {
+        log::error!("error: {}", err);
+    }
+}
+
+/// A simple async TCP server that calls an async function for each incoming connection.
+pub async fn tcp_server<F, C>(
+    address: String,
+    onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
+    context: C,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>> + Send,
+    C: Clone + Send + 'static,
+{
+    let listener = TcpListener::bind(&address).await?;
+    log::info!("listening on {}", listener.local_addr()?);
+    let mut incoming = listener.incoming();
+    while let Some(Ok(stream)) = incoming.next().await {
+        let context = context.clone();
+        let peer_addr = stream.peer_addr().unwrap();
+        log::info!("new connection from {}", peer_addr);
+        task::spawn(async move {
+            let result = onconnection(stream, false, context).await;
+            log_if_error(&result);
+            log::info!("connection closed from {}", peer_addr);
+        });
+    }
+    Ok(())
+}
+
+/// A simple async TCP client that calls an async function when connected.
+pub async fn tcp_client<F, C>(
+    address: String,
+    onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
+    context: C,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>> + Send,
+    C: Clone + Send + 'static,
+{
+    log::info!("attempting connection to {address}");
+    let stream = TcpStream::connect(&address).await?;
+    log::info!("connected to {address}");
+    onconnection(stream, true, context).await
 }

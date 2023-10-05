@@ -4,19 +4,17 @@ const chalk = require('chalk')
 const split = require('split2')
 
 const PORT = 8000
-const FILE = p.join(__dirname, '..', 'README.md')
 
 const EXAMPLE_NODE = p.join(__dirname, 'replicate.js')
-const EXAMPLE_RUST = process.argv[2]
-if (!EXAMPLE_RUST) {
+const EXAMPLE_RUST = 'replication'
+const MODE = process.argv[2]
+if (!MODE) {
   usage()
 }
-const SERVER = process.argv[3] || 'node'
 
 function startNode (mode, key, color, name) {
   const args = [EXAMPLE_NODE, mode, PORT]
   if (key) args.push(key)
-  else args.push(FILE)
   const node = start({
     bin: 'node',
     args,
@@ -46,12 +44,18 @@ function startRust (mode, key, color, name) {
 }
 
 let client, server
-if (SERVER === 'node') {
+if (MODE === 'nodeServer') {
   server = startNode
   client = startRust
-} else {
+} else if (MODE === 'rustServer') {
   server = startRust
   client = startNode
+} else if (MODE === 'node') {
+  server = startNode
+  client = startNode
+} else if (MODE === 'rust') {
+  server = startRust
+  client = startRust
 }
 
 const procs = []
@@ -89,6 +93,6 @@ function start ({ bin, args, name, color, env = {} }) {
 }
 
 function usage () {
-  console.error('USAGE: node run.js [basic|hypercore]')
+  console.error('USAGE: node run.js [node|rust|nodeServer|rustServer]')
   process.exit(1)
 }

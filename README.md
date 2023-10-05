@@ -1,4 +1,5 @@
-<h1 align="center">hypercore-protocol</h1>
+# Hypercore Protocol
+
 <div align="center">
   <strong>
     Rust implementation of the <a href="https://github.com/mafintosh/hypercore-protocol">Hypercore</a> wire protocol
@@ -56,30 +57,36 @@ Current features are:
 
 These examples sync data between Rust and NodeJS hypercore-protocol implementations. To prepare, run
 ```
-cd examples-nodejs
-npm install
+cd examples-nodejs && npm install && cd ..
 ```
 
-### [hypercore.rs](examples/hypercore.rs)
+### [hypercore.rs](examples/replication.rs)
 
-`node examples-nodejs/run.js hypercore`
+Runs the `replication.rs` example by replicating a hypercore between Rust and Node hypercores and printing the result.
 
-Runs the `hypercore.rs` example with a replication stream from NodeJS hypercore. The `hypercore.rs` example fetches all blocks of a Node.js hypercore and inserts them into a Rust in-memory hypercore.
+* Node Server / Rust Client
 
-### [basic.rs](examples/basic.rs)
+```bash
+node examples-nodejs/run.js nodeServer
+```
 
-Accepts a hypercore-protocol stream and fetches all blocks of the first hypercore.
+* Rust Server / Node Client
 
-`node examples-nodejs/run.js basic`
+```bash
+node examples-nodejs/run.js rustServer
+```
 
-Runs the `basic.rs` example with a replication stream from NodeJS hypercore. The `basic.rs` example fetches all blocks of a hypercore and prints them to STDOUT.
+* Rust Server / Rust Client
 
-* Share a file over a hypercore on a local TCP server. Prints a hypercore key.
-  `node examples-nodejs/replicate.js server 8000 ./README.md`
+```bash
+node examples-nodejs/run.js rust
+```
 
-* Use this key to connect from Rust and pipe the file content to stdout:
-  `cargo run --example basic -- server 8000 KEY`
+* Node Server / Node Client
 
+```bash
+node examples-nodejs/run.js node
+```
 
 ## Contributing
 
