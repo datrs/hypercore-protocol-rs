@@ -1,8 +1,8 @@
 use anyhow::Result;
+use instant::Duration;
 use std::fs::{create_dir_all, remove_dir_all, remove_file};
 use std::path::Path;
 use std::process::Command;
-use instant::Duration;
 
 #[cfg(feature = "async-std")]
 use async_std::{
@@ -10,10 +10,7 @@ use async_std::{
     task::{self, sleep},
 };
 #[cfg(feature = "tokio")]
-use tokio::{
-    task, process,
-    time::sleep,
-};
+use tokio::{process, task, time::sleep};
 
 use crate::_util::wait_for_localhost_port;
 
@@ -58,9 +55,7 @@ pub struct JavascriptServer {
 
 impl JavascriptServer {
     pub fn new() -> JavascriptServer {
-        JavascriptServer {
-            handle: None,
-        }
+        JavascriptServer { handle: None }
     }
 
     pub async fn run(
@@ -120,7 +115,7 @@ impl Drop for JavascriptServer {
     fn drop(&mut self) {
         #[cfg(feature = "async-std")]
         if let Some(handle) = self.handle.take() {
-           async_std::task::block_on(handle.cancel());
+            async_std::task::block_on(handle.cancel());
         }
     }
 }
@@ -134,7 +129,9 @@ pub async fn js_start_server(
     test_set: String,
 ) -> Result<JavascriptServer> {
     let mut server = JavascriptServer::new();
-    server.run(is_writer, port, data_count, data_size, data_char, test_set).await;
+    server
+        .run(is_writer, port, data_count, data_size, data_char, test_set)
+        .await;
     Ok(server)
 }
 
@@ -165,12 +162,12 @@ pub async fn js_run_client(
     assert_eq!(
         Some(0),
         status.code(),
-        "node client did not run successfully, is_writer={}, port={}, data_count={}, data_size={}, data_char={}, test_set={}",
-        is_writer, 
-        port,
-        data_count,
-        data_size,
-        data_char,
-        test_set
+        "node client did not run successfully, \
+        is_writer={is_writer}, \
+        port={port}, \
+        data_count={data_count}, \
+        data_size={data_size}, \
+        data_char={data_char}, \
+        test_set={test_set}"
     );
 }

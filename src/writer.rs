@@ -73,8 +73,7 @@ impl WriteState {
         let actual_len = frame.encode(&mut self.buf[self.end..])?;
         if actual_len != promised_len {
             panic!(
-                "encoded_len() did not return that right size, expected={}, actual={}",
-                promised_len, actual_len
+                "encoded_len() did not return that right size, expected={promised_len}, actual={actual_len}"
             );
         }
         self.advance(padded_promised_len)?;
