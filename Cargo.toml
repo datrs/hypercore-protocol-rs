@@ -1,6 +1,6 @@
 [package]
 name = "hypercore-protocol"
-version = "0.4.0-alpha.6"
+version = "0.4.0-alpha.7"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
 authors = [
@@ -25,23 +25,21 @@ categories = [
 bench = false
 
 [dependencies]
-async-channel = "1.5"
-snow = { version = "0.9.3", features = ["risky-raw-split"] }
-bytes = "1.0.1"
+async-channel = "1"
+snow = { version = "0.9", features = ["risky-raw-split"] }
+bytes = "1"
 rand = "0.8"
-blake2 = "0.10.6"
+blake2 = "0.10"
 hex = "0.4"
-async-trait = "0.1.63"
-salsa20 = "0.6"
+async-trait = "0.1"
 tracing = "0.1"
 pretty-hash = "0.4"
-futures-timer = "3.0"
-instant = "0.1"
-futures-lite = "1.11.3"
+futures-timer = "3"
+futures-lite = "1"
 hypercore = { git = "https://github.com/datrs/hypercore", branch = "v10", default-features = false }
-sha2 = "0.10.6"
-curve25519-dalek = "4.0.0"
-crypto_secretstream = "0.1.1"
+sha2 = "0.10"
+curve25519-dalek = "4"
+crypto_secretstream = "0.2"
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
@@ -52,6 +50,7 @@ random-access-storage = "5.0.0"
 random-access-disk = { version = "3.0.0", default-features = false }
 random-access-memory = "3.0.0"
 anyhow = "1.0.28"
+instant = "0.1"
 criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
