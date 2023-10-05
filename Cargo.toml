@@ -8,7 +8,7 @@ authors = [
   "Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"
 ]
 documentation = "https://docs.rs/hypercore-protocol"
-repository = "https://github.com/Frando/hypercore-protocol-rs"
+repository = "https://github.com/datrs/hypercore-protocol-rs"
 readme = "README.md"
 edition = "2021"
 keywords = ["dat", "p2p", "replication", "hypercore", "protocol"]

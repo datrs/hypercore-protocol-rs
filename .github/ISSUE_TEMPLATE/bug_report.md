@@ -5,11 +5,11 @@ about: Did something not work as expected?
 
 # Bug Report
 ## Your Environment
-| Software              | Version(s) |
-| --------------------- | ---------- |
-| hypercore-protocol-rs |
-| Rustc                 |
-| Operating System      |
+| Software           | Version(s) |
+| ------------------ | ---------- |
+| hypercore-protocol |
+| Rustc              |
+| Operating System   |
 
 ## Expected Behavior
 Tell us what should have happened.

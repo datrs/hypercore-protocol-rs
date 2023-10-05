@@ -1,15 +1,15 @@
 ---
 name: Question
-about: Have any questions regarding how hypercore-protocol-rs works?
+about: Have any questions regarding how hypercore-protocol works?
 ---
 
 # Question
 ## Your Environment
-| Software              | Version(s) |
-| --------------------- | ---------- |
-| hypercore-protocol-rs |
-| Rustc                 |
-| Operating System      |
+| Software           | Version(s) |
+| ------------------ | ---------- |
+| hypercore-protocol |
+| Rustc              |
+| Operating System   |
 
 ## Question
 Provide your question here.

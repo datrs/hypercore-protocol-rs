@@ -2,8 +2,8 @@
 Explain what is going on.
 
 ## Your Environment
-| Software              | Version(s) |
-| --------------------- | ---------- |
-| hypercore-protocol-rs |
-| Rustc                 |
-| Operating System      |
+| Software           | Version(s) |
+| ------------------ | ---------- |
+| hypercore-protocol |
+| Rustc              |
+| Operating System   |

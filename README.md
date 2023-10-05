@@ -32,7 +32,7 @@ for encryption.
 ## Installation
 
 ```bash
-cargo add hypercore-protocol-rs
+cargo add hypercore-protocol
 ```
 
 ## Examples
@@ -98,11 +98,11 @@ and take a look at the open [issues](https://github.com/datrs/hypercore-protocol
 
 [MIT](./LICENSE-MIT) OR [Apache-2.0](./LICENSE-APACHE)
 
-[1]: https://img.shields.io/crates/v/hypercore-protocol-rs.svg?style=flat-square
-[2]: https://crates.io/crates/hypercore-protocol-rs
+[1]: https://img.shields.io/crates/v/hypercore-protocol.svg?style=flat-square
+[2]: https://crates.io/crates/hypercore-protocol
 [3]: https://github.com/datrs/hypercore-protocol-rs/actions/workflows/ci.yml/badge.svg
 [4]: https://github.com/datrs/hypercore-protocol-rs/actions
-[5]: https://img.shields.io/crates/d/hypercore-protocol-rs.svg?style=flat-square
-[6]: https://crates.io/crates/hypercore-protocol-rs
+[5]: https://img.shields.io/crates/d/hypercore-protocol.svg?style=flat-square
+[6]: https://crates.io/crates/hypercore-protocol
 [7]: https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square
-[8]: https://docs.rs/hypercore-protocol-rs
+[8]: https://docs.rs/hypercore-protocol

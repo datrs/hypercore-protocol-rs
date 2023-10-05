@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Want us to add something to hypercore-protocol-rs?
+about: Want us to add something to hypercore-protocol?
 ---
 
 # Feature Request
