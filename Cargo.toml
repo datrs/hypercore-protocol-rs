@@ -37,7 +37,6 @@ tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3.0"
 instant = "0.1"
-getrandom = "0.1"
 futures-lite = "1.11.3"
 hypercore = { git = "https://github.com/datrs/hypercore", branch = "v10", default-features = false }
 sha2 = "0.10.6"
@@ -66,7 +65,6 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 default = ["async-std", "sparse"]
 wasm-bindgen = [
   "instant/wasm-bindgen", 
-  "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
 sparse = ["hypercore/sparse"]
