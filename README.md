@@ -4,7 +4,7 @@
 
 Hypercore protocol is a streaming, message based protocol. This is a Rust port of
 the wire protocol implementation in
-[the original Javascript version][holepunch-hypercore]. This
+[the original Javascript version](https://github.com/holepunchto/hypercore). This
 crate targets the Hypercore LTS version 10.
 
 This crate provides a low-level streaming API to hypercore-protocol and exposes an
