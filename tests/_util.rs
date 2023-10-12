@@ -3,6 +3,7 @@ use async_std::prelude::*;
 use async_std::task::{self, JoinHandle};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::{Channel, DiscoveryKey, Duplex, Event, Protocol, ProtocolBuilder};
+use instant::Duration;
 use std::io;
 
 pub type MemoryProtocol = Protocol<Duplex<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>>;
@@ -31,12 +32,11 @@ pub fn next_event<IO>(
 where
     IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let task = task::spawn(async move {
+    task::spawn(async move {
         let e1 = proto.next().await;
         let e1 = e1.unwrap();
         (proto, e1)
-    });
-    task
+    })
 }
 
 pub fn event_discovery_key(event: Event) -> DiscoveryKey {
@@ -65,9 +65,8 @@ where
     task::spawn(async move {
         while let Some(event) = proto.next().await {
             let event = event?;
-            match event {
-                Event::Channel(channel) => return Ok((proto, channel)),
-                _ => {}
+            if let Event::Channel(channel) = event {
+                return Ok((proto, channel));
             }
         }
         Err(io::Error::new(
@@ -95,5 +94,25 @@ pub mod tcp {
         let server_stream = server_stream?;
         let client_stream = connect_task.await?;
         Ok((server_stream, client_stream))
+    }
+}
+
+const RETRY_TIMEOUT: u64 = 100_u64;
+const NO_RESPONSE_TIMEOUT: u64 = 1000_u64;
+pub async fn wait_for_localhost_port(port: u32) {
+    loop {
+        let timeout = async_std::future::timeout(
+            Duration::from_millis(NO_RESPONSE_TIMEOUT),
+            TcpStream::connect(format!("localhost:{}", port)),
+        )
+        .await;
+        if timeout.is_err() {
+            continue;
+        }
+        if timeout.unwrap().is_err() {
+            async_std::task::sleep(Duration::from_millis(RETRY_TIMEOUT)).await;
+        } else {
+            break;
+        }
     }
 }

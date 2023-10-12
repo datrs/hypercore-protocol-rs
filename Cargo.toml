@@ -1,13 +1,16 @@
 [package]
 name = "hypercore-protocol"
-version = "0.3.1"
+version = "0.4.0-alpha.7"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
-authors = ["Franz Heinzmann (Frando) <frando@unbiskant.org>"]
+authors = [
+  "Franz Heinzmann (Frando) <frando@unbiskant.org>",
+  "Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"
+]
 documentation = "https://docs.rs/hypercore-protocol"
-repository = "https://github.com/Frando/hypercore-protocol-rs"
+repository = "https://github.com/datrs/hypercore-protocol-rs"
 readme = "README.md"
-edition = "2018"
+edition = "2021"
 keywords = ["dat", "p2p", "replication", "hypercore", "protocol"]
 categories = [
   "asynchronous",
@@ -22,47 +25,54 @@ categories = [
 bench = false
 
 [dependencies]
-async-channel = "1.5"
-snow = { version = "0.7.0-alpha5", features = ["risky-raw-split"] }
-prost = "0.7"
-bytes = "1.0.1"
-varinteger = "1.0"
-rand = "0.7"
-blake2-rfc = "0.2"
+async-channel = "1"
+snow = { version = "0.9", features = ["risky-raw-split"] }
+bytes = "1"
+rand = "0.8"
+blake2 = "0.10"
 hex = "0.4"
 async-trait = "0.1"
-salsa20 = "0.6"
-log = "0.4"
+tracing = "0.1"
 pretty-hash = "0.4"
-futures-timer = "3.0"
-instant = "0.1"
-getrandom = "0.1"
-futures-lite = "1.11.3"
+futures-timer = "3"
+futures-lite = "1"
+hypercore = { version = "0.12", default-features = false }
+sha2 = "0.10"
+curve25519-dalek = "4"
+crypto_secretstream = "0.2"
 
 [dev-dependencies]
-async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
+async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
+async-compat = "0.2.1"
+tokio = { version = "1.27.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 env_logger = "0.7.1"
-# hypercore from master branch as of 2021-03-03
-hypercore = { git = "https://github.com/datrs/hypercore", rev = "8d8cbef8a884a70e8d12d80968c1d97be2ceea0b" }
-random-access-disk = "2.0.0"
-random-access-memory = "2.0.0"
-random-access-storage = "4.0.0"
+random-access-storage = "5.0.0"
+random-access-disk = { version = "3.0.0", default-features = false }
+random-access-memory = "3.0.0"
 anyhow = "1.0.28"
-criterion = "0.3.2"
+instant = "0.1"
+criterion = { version = "0.4", features = ["async_std"] }
 pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
-
-[build-dependencies]
-prost-build = "0.6.1"
+log = "0.4"
+test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 
 [features]
+default = ["async-std", "sparse"]
 wasm-bindgen = [
-  "instant/wasm-bindgen", 
-  "getrandom/wasm-bindgen", 
   "futures-timer/wasm-bindgen"
 ]
+sparse = ["hypercore/sparse"]
+cache = ["hypercore/cache"]
+tokio = ["hypercore/tokio", "random-access-disk/tokio"]
+async-std = ["hypercore/async-std", "random-access-disk/async-std"]
+# Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
+# to verify that this crate works. To run them, use:
+# cargo test --features js_interop_tests
+js_interop_tests = []
 
 [profile.bench]
 # debug = true

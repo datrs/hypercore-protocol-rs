@@ -7,11 +7,12 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 use hypercore_protocol::{schema::*, DiscoveryKey};
 use std::io;
+use test_log::test;
 
 mod _util;
 use _util::*;
 
-#[async_std::test]
+#[test(async_std::test)]
 async fn basic_protocol() -> anyhow::Result<()> {
     // env_logger::init();
     let (proto_a, proto_b) = create_pair_memory().await?;
@@ -29,7 +30,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     let key = [3u8; 32];
 
-    proto_a.open(key.clone()).await?;
+    proto_a.open(key).await?;
 
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
@@ -38,7 +39,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
     assert!(matches!(event_b, Ok(Event::DiscoveryKey(_))));
     assert_eq!(event_discovery_key(event_b.unwrap()), discovery_key(&key));
 
-    proto_b.open(key.clone()).await?;
+    proto_b.open(key).await?;
 
     let next_b = next_event(proto_b);
     let (proto_b, event_b) = next_b.await;
@@ -51,54 +52,33 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     assert_eq!(channel_a.discovery_key(), channel_b.discovery_key());
 
-    channel_a
-        .want(Want {
-            start: 0,
-            length: Some(10),
-        })
-        .await?;
+    channel_a.send(want(0, 10)).await?;
 
-    channel_b
-        .want(Want {
-            start: 10,
-            length: Some(5),
-        })
-        .await?;
+    channel_b.send(want(10, 5)).await?;
 
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
 
     let channel_event_b = channel_b.next().await;
-    assert_eq!(
-        channel_event_b,
-        Some(Message::Want(Want {
-            start: 0,
-            length: Some(10)
-        }))
-    );
+    assert_eq!(channel_event_b, Some(want(0, 10)));
     // eprintln!("channel_event_b: {:?}", channel_event_b);
 
     let channel_event_a = channel_a.next().await;
-    assert_eq!(
-        channel_event_a,
-        Some(Message::Want(Want {
-            start: 10,
-            length: Some(5)
-        }))
-    );
+    assert_eq!(channel_event_a, Some(want(10, 5)));
 
     channel_a.close().await?;
-    channel_b.close().await?;
 
     let (_, event_a) = next_a.await;
     let (_, event_b) = next_b.await;
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
-    return Ok(());
+    assert!(channel_a.closed());
+    assert!(channel_b.closed());
+    Ok(())
 }
 
-#[async_std::test]
+#[test(async_std::test)]
 async fn open_close_channels() -> anyhow::Result<()> {
     let (mut proto_a, mut proto_b) = create_pair_memory().await?;
 
@@ -143,8 +123,8 @@ async fn open_close_channels() -> anyhow::Result<()> {
     let (mut proto_b, ev_b) = next_b.await;
     let ev_a = ev_a?;
     let ev_b = ev_b?;
-    eprintln!("next a: {:?}", ev_a);
-    eprintln!("next b: {:?}", ev_b);
+    eprintln!("next a: {ev_a:?}");
+    eprintln!("next b: {ev_b:?}");
 
     let channels_a: Vec<&DiscoveryKey> = proto_a.channels().collect();
     let channels_b: Vec<&DiscoveryKey> = proto_b.channels().collect();
@@ -153,17 +133,17 @@ async fn open_close_channels() -> anyhow::Result<()> {
     assert_eq!(channels_a.len(), 1);
     assert_eq!(channels_b.len(), 1);
 
-    let res = channel_a1.want(want(1)).await;
+    let res = channel_a1.send(want(0, 1)).await;
     assert!(matches!(res, Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted));
 
-    let res = channel_b1.want(want(2)).await;
+    let res = channel_b1.send(want(0, 2)).await;
     assert!(matches!(res, Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted));
 
     // Test that channel 2 still works
-    let res = channel_a2.want(want(10)).await;
+    let res = channel_a2.send(want(0, 10)).await;
     assert!(matches!(res, Ok(())));
 
-    let res = channel_b2.want(want(20)).await;
+    let res = channel_b2.send(want(0, 20)).await;
     assert!(matches!(res, Ok(())));
 
     // Check that the message arrives.
@@ -181,17 +161,14 @@ async fn open_close_channels() -> anyhow::Result<()> {
     let msg_a = channel_a2.next().await;
     let msg_b = channel_b2.next().await;
 
-    assert_eq!(msg_a, Some(Message::Want(want(20))));
-    assert_eq!(msg_b, Some(Message::Want(want(10))));
+    assert_eq!(msg_a, Some(want(0, 20)));
+    assert_eq!(msg_b, Some(want(0, 10)));
 
     eprintln!("all good!");
 
     Ok(())
 }
 
-fn want(len: u64) -> Want {
-    Want {
-        start: 0,
-        length: Some(len),
-    }
+fn want(start: u64, length: u64) -> Message {
+    Message::Want(Want { start, length })
 }

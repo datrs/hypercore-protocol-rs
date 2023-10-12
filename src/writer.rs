@@ -1,5 +1,6 @@
-use crate::message::{EncodeError, Encoder, Frame};
-use crate::noise::{Cipher, HandshakeResult};
+use crate::crypto::EncryptCipher;
+use crate::message::{Encoder, Frame};
+
 use futures_lite::{ready, AsyncWrite};
 use std::collections::VecDeque;
 use std::fmt;
@@ -10,19 +11,19 @@ use std::task::{Context, Poll};
 const BUF_SIZE: usize = 1024 * 64;
 
 #[derive(Debug)]
-pub enum Step {
+pub(crate) enum Step {
     Flushing,
     Writing,
     Processing,
 }
 
-pub struct WriteState {
+pub(crate) struct WriteState {
     queue: VecDeque<Frame>,
     buf: Vec<u8>,
     current_frame: Option<Frame>,
     start: usize,
     end: usize,
-    cipher: Option<Cipher>,
+    cipher: Option<EncryptCipher>,
     step: Step,
 }
 
@@ -41,7 +42,7 @@ impl fmt::Debug for WriteState {
 }
 
 impl WriteState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             queue: VecDeque::new(),
             buf: vec![0u8; BUF_SIZE],
@@ -53,34 +54,37 @@ impl WriteState {
         }
     }
 
-    pub fn queue_frame<F>(&mut self, frame: F)
+    pub(crate) fn queue_frame<F>(&mut self, frame: F)
     where
         F: Into<Frame>,
     {
         self.queue.push_back(frame.into())
     }
 
-    pub fn try_queue_direct<T: Encoder>(
-        &mut self,
-        frame: &T,
-    ) -> std::result::Result<bool, EncodeError> {
-        let len = frame.encoded_len();
-        if self.buf.len() < len {
-            self.buf.resize(len, 0u8);
+    pub(crate) fn try_queue_direct<T: Encoder>(&mut self, frame: &mut T) -> Result<bool> {
+        let promised_len = frame.encoded_len()?;
+        let padded_promised_len = self.safe_encrypted_len(promised_len);
+        if self.buf.len() < padded_promised_len {
+            self.buf.resize(padded_promised_len, 0u8);
         }
-        if len > self.remaining() {
+        if padded_promised_len > self.remaining() {
             return Ok(false);
         }
-        let len = frame.encode(&mut self.buf[self.end..])?;
-        self.advance(len);
+        let actual_len = frame.encode(&mut self.buf[self.end..])?;
+        if actual_len != promised_len {
+            panic!(
+                "encoded_len() did not return that right size, expected={promised_len}, actual={actual_len}"
+            );
+        }
+        self.advance(padded_promised_len)?;
         Ok(true)
     }
 
-    pub fn can_park_frame(&self) -> bool {
+    pub(crate) fn can_park_frame(&self) -> bool {
         self.current_frame.is_none()
     }
 
-    pub fn park_frame<F>(&mut self, frame: F)
+    pub(crate) fn park_frame<F>(&mut self, frame: F)
     where
         F: Into<Frame>,
     {
@@ -89,19 +93,23 @@ impl WriteState {
         }
     }
 
-    fn advance(&mut self, n: usize) {
+    fn advance(&mut self, n: usize) -> Result<()> {
         let end = self.end + n;
-        if let Some(ref mut cipher) = self.cipher {
-            cipher.apply(&mut self.buf[self.end..end]);
-        }
-        self.end = end;
-    }
 
-    pub fn upgrade_with_handshake(&mut self, handshake: &HandshakeResult) -> Result<()> {
-        let cipher = Cipher::from_handshake_tx(handshake)?;
-        self.cipher = Some(cipher);
+        let encrypted_end = if let Some(ref mut cipher) = self.cipher {
+            self.end + cipher.encrypt(&mut self.buf[self.end..end])?
+        } else {
+            end
+        };
+
+        self.end = encrypted_end;
         Ok(())
     }
+
+    pub(crate) fn upgrade_with_encrypt_cipher(&mut self, encrypt_cipher: EncryptCipher) {
+        self.cipher = Some(encrypt_cipher);
+    }
+
     fn remaining(&self) -> usize {
         self.buf.len() - self.end
     }
@@ -110,7 +118,11 @@ impl WriteState {
         self.end - self.start
     }
 
-    pub fn poll_send<W>(&mut self, cx: &mut Context<'_>, mut writer: &mut W) -> Poll<Result<()>>
+    pub(crate) fn poll_send<W>(
+        &mut self,
+        cx: &mut Context<'_>,
+        mut writer: &mut W,
+    ) -> Poll<Result<()>>
     where
         W: AsyncWrite + Unpin,
     {
@@ -121,11 +133,12 @@ impl WriteState {
                         self.current_frame = self.queue.pop_front();
                     }
 
-                    if let Some(frame) = self.current_frame.take() {
-                        if !self.try_queue_direct(&frame)? {
+                    if let Some(mut frame) = self.current_frame.take() {
+                        if !self.try_queue_direct(&mut frame)? {
                             self.current_frame = Some(frame);
                         }
                     }
+
                     if self.pending() == 0 {
                         return Poll::Ready(Ok(()));
                     }
@@ -147,6 +160,14 @@ impl WriteState {
                     Step::Processing
                 }
             }
+        }
+    }
+
+    fn safe_encrypted_len(&self, encoded_len: usize) -> usize {
+        if let Some(cipher) = &self.cipher {
+            cipher.safe_encrypted_len(encoded_len)
+        } else {
+            encoded_len
         }
     }
 }

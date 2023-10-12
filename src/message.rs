@@ -1,142 +1,344 @@
 use crate::schema::*;
+use crate::util::{stat_uint24_le, write_uint24_le};
+use hypercore::encoding::{
+    CompactEncoding, EncodingError, EncodingErrorKind, HypercoreState, State,
+};
 use pretty_hash::fmt as pretty_fmt;
-use prost::Message as _;
 use std::fmt;
 use std::io;
 
-use crate::constants::MAX_MESSAGE_SIZE;
-
-/// Error if the buffer has insufficient size to encode a message.
-#[derive(Debug)]
-pub struct EncodeError {
-    required: usize,
-}
-
-impl fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Cannot encode message: Write buffer is full")
-    }
-}
-
-impl EncodeError {
-    fn new(required: usize) -> Self {
-        Self { required }
-    }
-}
-
-impl From<prost::EncodeError> for EncodeError {
-    fn from(e: prost::EncodeError) -> Self {
-        Self::new(e.required_capacity())
-    }
-}
-
-impl From<EncodeError> for io::Error {
-    fn from(e: EncodeError) -> Self {
-        io::Error::new(io::ErrorKind::Other, format!("{}", e))
-    }
+/// The type of a data frame.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FrameType {
+    Raw,
+    Message,
 }
 
 /// Encode data into a buffer.
 ///
 /// This trait is implemented on data frames and their components
 /// (channel messages, messages, and individual message types through prost).
-pub trait Encoder: Sized + fmt::Debug {
+pub(crate) trait Encoder: Sized + fmt::Debug {
     /// Calculates the length that the encoded message needs.
-    fn encoded_len(&self) -> usize;
+    fn encoded_len(&mut self) -> Result<usize, EncodingError>;
 
     /// Encodes the message to a buffer.
     ///
     /// An error will be returned if the buffer does not have sufficient capacity.
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError>;
+    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError>;
 }
 
 impl Encoder for &[u8] {
-    fn encoded_len(&self) -> usize {
-        self.len()
+    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
+        Ok(self.len())
     }
 
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let len = self.encoded_len();
+    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
+        let len = self.encoded_len()?;
         if len > buf.len() {
-            return Err(EncodeError::new(len));
+            return Err(EncodingError::new(
+                EncodingErrorKind::Overflow,
+                &format!("Length does not fit buffer, {} > {}", len, buf.len()),
+            ));
         }
         buf[..len].copy_from_slice(&self[..]);
         Ok(len)
     }
 }
 
-/// The type of a data frame.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FrameType {
-    Raw,
-    Message,
-}
-
 /// A frame of data, either a buffer or a message.
 #[derive(Clone, PartialEq)]
-pub enum Frame {
-    /// A raw binary buffer. Used in the handshaking phase.
-    Raw(Vec<u8>),
-    /// A message. Used for everything after the handshake.
-    Message(ChannelMessage),
+pub(crate) enum Frame {
+    /// A raw batch binary buffer. Used in the handshaking phase.
+    RawBatch(Vec<Vec<u8>>),
+    /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
+    MessageBatch(Vec<ChannelMessage>),
 }
 
 impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Frame::Raw(buf) => write!(f, "Frame(Raw <{}>)", buf.len()),
-            Frame::Message(message) => write!(f, "Frame({:?})", message),
+            Frame::RawBatch(batch) => write!(f, "Frame(RawBatch <{}>)", batch.len()),
+            Frame::MessageBatch(messages) => write!(f, "Frame({messages:?})"),
         }
     }
 }
 
 impl From<ChannelMessage> for Frame {
     fn from(m: ChannelMessage) -> Self {
-        Self::Message(m)
+        Self::MessageBatch(vec![m])
     }
 }
 
 impl From<Vec<u8>> for Frame {
     fn from(m: Vec<u8>) -> Self {
-        Self::Raw(m)
+        Self::RawBatch(vec![m])
     }
 }
 
 impl Frame {
-    /// Decode a frame from a buffer.
-    pub fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
+    /// Decodes a frame from a buffer containing multiple concurrent messages.
+    pub(crate) fn decode_multiple(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
         match frame_type {
-            FrameType::Raw => Ok(Frame::Raw(buf.to_vec())),
-            FrameType::Message => Ok(Frame::Message(ChannelMessage::decode(buf)?)),
+            FrameType::Raw => {
+                let mut index = 0;
+                let mut raw_batch: Vec<Vec<u8>> = vec![];
+                while index < buf.len() {
+                    // There might be zero bytes in between, and with LE, the next message will
+                    // start with a non-zero
+                    if buf[index] == 0 {
+                        index += 1;
+                        continue;
+                    }
+                    let stat = stat_uint24_le(&buf[index..]);
+                    if let Some((header_len, body_len)) = stat {
+                        raw_batch.push(
+                            buf[index + header_len..index + header_len + body_len as usize]
+                                .to_vec(),
+                        );
+                        index += header_len + body_len as usize;
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "received invalid data in raw batch",
+                        ));
+                    }
+                }
+                Ok(Frame::RawBatch(raw_batch))
+            }
+            FrameType::Message => {
+                let mut index = 0;
+                let mut combined_messages: Vec<ChannelMessage> = vec![];
+                while index < buf.len() {
+                    // There might be zero bytes in between, and with LE, the next message will
+                    // start with a non-zero
+                    if buf[index] == 0 {
+                        index += 1;
+                        continue;
+                    }
+
+                    let stat = stat_uint24_le(&buf[index..]);
+                    if let Some((header_len, body_len)) = stat {
+                        let (frame, length) = Self::decode_message(
+                            &buf[index + header_len..index + header_len + body_len as usize],
+                        )?;
+                        if length != body_len as usize {
+                            tracing::warn!(
+                                "Did not know what to do with all the bytes, got {} but decoded {}",
+                                body_len,
+                                length
+                            );
+                        }
+                        if let Frame::MessageBatch(messages) = frame {
+                            for message in messages {
+                                combined_messages.push(message);
+                            }
+                        } else {
+                            unreachable!("Can not get Raw messages");
+                        }
+                        index += header_len + body_len as usize;
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "received invalid data in multi-message chunk",
+                        ));
+                    }
+                }
+                Ok(Frame::MessageBatch(combined_messages))
+            }
         }
     }
 
-    fn body_len(&self) -> usize {
-        match self {
-            Self::Raw(message) => message.as_slice().encoded_len(),
-            Self::Message(message) => message.encoded_len(),
+    /// Decode a frame from a buffer.
+    pub(crate) fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
+        match frame_type {
+            FrameType::Raw => Ok(Frame::RawBatch(vec![buf.to_vec()])),
+            FrameType::Message => {
+                let (frame, _) = Self::decode_message(buf)?;
+                Ok(frame)
+            }
         }
+    }
+
+    fn decode_message(buf: &[u8]) -> Result<(Self, usize), io::Error> {
+        if buf.len() >= 3 && buf[0] == 0x00 {
+            if buf[1] == 0x00 {
+                // Batch of messages
+                let mut messages: Vec<ChannelMessage> = vec![];
+                let mut state = State::new_with_start_and_end(2, buf.len());
+
+                // First, there is the original channel
+                let mut current_channel: u64 = state.decode(buf)?;
+                while state.start() < state.end() {
+                    // Length of the message is inbetween here
+                    let channel_message_length: usize = state.decode(buf)?;
+                    if state.start() + channel_message_length > state.end() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "received invalid message length, {} + {} > {}",
+                                state.start(),
+                                channel_message_length,
+                                state.end()
+                            ),
+                        ));
+                    }
+                    // Then the actual message
+                    let (channel_message, _) = ChannelMessage::decode(
+                        &buf[state.start()..state.start() + channel_message_length],
+                        current_channel,
+                    )?;
+                    messages.push(channel_message);
+                    state.add_start(channel_message_length)?;
+                    // After that, if there is an extra 0x00, that means the channel
+                    // changed. This works because of LE encoding, and channels starting
+                    // from the index 1.
+                    if state.start() < state.end() && buf[state.start()] == 0x00 {
+                        state.add_start(1)?;
+                        current_channel = state.decode(buf)?;
+                    }
+                }
+                Ok((Frame::MessageBatch(messages), state.start()))
+            } else if buf[1] == 0x01 {
+                // Open message
+                let (channel_message, length) = ChannelMessage::decode_open_message(&buf[2..])?;
+                Ok((Frame::MessageBatch(vec![channel_message]), length))
+            } else if buf[1] == 0x03 {
+                // Close message
+                let (channel_message, length) = ChannelMessage::decode_close_message(&buf[2..])?;
+                Ok((Frame::MessageBatch(vec![channel_message]), length))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "received invalid special message",
+                ))
+            }
+        } else if buf.len() >= 2 {
+            // Single message
+            let mut state = State::from_buffer(buf);
+            let channel: u64 = state.decode(buf)?;
+            let (channel_message, length) = ChannelMessage::decode(&buf[state.start()..], channel)?;
+            Ok((
+                Frame::MessageBatch(vec![channel_message]),
+                state.start() + length,
+            ))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("received too short message, {buf:02X?}"),
+            ))
+        }
+    }
+
+    fn preencode(&mut self, state: &mut State) -> Result<usize, EncodingError> {
+        match self {
+            Self::RawBatch(raw_batch) => {
+                for raw in raw_batch {
+                    state.add_end(raw.as_slice().encoded_len()?)?;
+                }
+            }
+            #[allow(clippy::comparison_chain)]
+            Self::MessageBatch(messages) => {
+                if messages.len() == 1 {
+                    if let Message::Open(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x01 intro bytes
+                        state.add_end(2 + &messages[0].encoded_len()?)?;
+                    } else if let Message::Close(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x03 intro bytes
+                        state.add_end(2 + &messages[0].encoded_len()?)?;
+                    } else {
+                        (*state).preencode(&messages[0].channel)?;
+                        state.add_end(messages[0].encoded_len()?)?;
+                    }
+                } else if messages.len() > 1 {
+                    // Two intro bytes 0x00 0x00, then channel id, then lengths
+                    state.add_end(2)?;
+                    let mut current_channel: u64 = messages[0].channel;
+                    state.preencode(&current_channel)?;
+                    for message in messages.iter_mut() {
+                        if message.channel != current_channel {
+                            // Channel changed, need to add a 0x00 in between and then the new
+                            // channel
+                            state.add_end(1)?;
+                            state.preencode(&message.channel)?;
+                            current_channel = message.channel;
+                        }
+                        let message_length = message.encoded_len()?;
+                        state.preencode(&message_length)?;
+                        state.add_end(message_length)?;
+                    }
+                }
+            }
+        }
+        Ok(state.end())
     }
 }
 
 impl Encoder for Frame {
-    fn encoded_len(&self) -> usize {
-        let body_len = self.body_len();
-        body_len + varinteger::length(body_len as u64)
+    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
+        let body_len = self.preencode(&mut State::new())?;
+        match self {
+            Self::RawBatch(_) => Ok(body_len),
+            Self::MessageBatch(_) => Ok(3 + body_len),
+        }
     }
 
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let len = self.encoded_len();
+    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
+        let mut state = State::new();
+        let header_len = if let Self::RawBatch(_) = self { 0 } else { 3 };
+        let body_len = self.preencode(&mut state)?;
+        let len = body_len + header_len;
         if buf.len() < len {
-            return Err(EncodeError::new(len));
+            return Err(EncodingError::new(
+                EncodingErrorKind::Overflow,
+                &format!("Length does not fit buffer, {} > {}", len, buf.len()),
+            ));
         }
-        let body_len = self.body_len();
-        let header_len = len - body_len;
-        varinteger::encode(body_len as u64, &mut buf[..header_len]);
         match self {
-            Self::Raw(ref message) => message.as_slice().encode(&mut buf[header_len..]),
-            Self::Message(ref message) => message.encode(&mut buf[header_len..]),
-        }?;
+            Self::RawBatch(ref raw_batch) => {
+                for raw in raw_batch {
+                    raw.as_slice().encode(buf)?;
+                }
+            }
+            #[allow(clippy::comparison_chain)]
+            Self::MessageBatch(ref mut messages) => {
+                write_uint24_le(body_len, buf);
+                let buf = buf.get_mut(3..).expect("Buffer should be over 3 bytes");
+                if messages.len() == 1 {
+                    if let Message::Open(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x01 intro bytes
+                        state.encode(&(0_u8), buf)?;
+                        state.encode(&(1_u8), buf)?;
+                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
+                    } else if let Message::Close(_) = &messages[0].message {
+                        // This is a special case with 0x00, 0x03 intro bytes
+                        state.encode(&(0_u8), buf)?;
+                        state.encode(&(3_u8), buf)?;
+                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
+                    } else {
+                        state.encode(&messages[0].channel, buf)?;
+                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
+                    }
+                } else if messages.len() > 1 {
+                    // Two intro bytes 0x00 0x00, then channel id, then lengths
+                    state.set_slice_to_buffer(&[0_u8, 0_u8], buf)?;
+                    let mut current_channel: u64 = messages[0].channel;
+                    state.encode(&current_channel, buf)?;
+                    for message in messages.iter_mut() {
+                        if message.channel != current_channel {
+                            // Channel changed, need to add a 0x00 in between and then the new
+                            // channel
+                            state.encode(&(0_u8), buf)?;
+                            state.encode(&message.channel, buf)?;
+                            current_channel = message.channel;
+                        }
+                        let message_length = message.encoded_len()?;
+                        state.encode(&message_length, buf)?;
+                        state.add_start(message.encode(&mut buf[state.start()..])?)?;
+                    }
+                }
+            }
+        };
         Ok(len)
     }
 }
@@ -146,104 +348,104 @@ impl Encoder for Frame {
 #[allow(missing_docs)]
 pub enum Message {
     Open(Open),
-    Options(Options),
-    Status(Status),
-    Have(Have),
-    Unhave(Unhave),
-    Want(Want),
-    Unwant(Unwant),
+    Close(Close),
+    Synchronize(Synchronize),
     Request(Request),
     Cancel(Cancel),
     Data(Data),
-    Close(Close),
-    Extension(ExtensionMessage),
+    NoData(NoData),
+    Want(Want),
+    Unwant(Unwant),
+    Bitfield(Bitfield),
+    Range(Range),
+    Extension(Extension),
+    /// A local signalling message never sent over the wire
+    LocalSignal((String, Vec<u8>)),
 }
 
 impl Message {
-    /// Decode a message from a buffer.
-    pub fn decode(buf: &[u8], typ: u64) -> io::Result<Self> {
-        match typ {
-            0 => Ok(Self::Open(Open::decode(buf)?)),
-            1 => Ok(Self::Options(Options::decode(buf)?)),
-            2 => Ok(Self::Status(Status::decode(buf)?)),
-            3 => Ok(Self::Have(Have::decode(buf)?)),
-            4 => Ok(Self::Unhave(Unhave::decode(buf)?)),
-            5 => Ok(Self::Want(Want::decode(buf)?)),
-            6 => Ok(Self::Unwant(Unwant::decode(buf)?)),
-            7 => Ok(Self::Request(Request::decode(buf)?)),
-            8 => Ok(Self::Cancel(Cancel::decode(buf)?)),
-            9 => Ok(Self::Data(Data::decode(buf)?)),
-            10 => Ok(Self::Close(Close::decode(buf)?)),
-            15 => Ok(Self::Extension(ExtensionMessage::decode(buf)?)),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid message type",
-            )),
-        }
-    }
-
     /// Wire type of this message.
-    pub fn typ(&self) -> u64 {
+    pub(crate) fn typ(&self) -> u64 {
         match self {
-            Self::Open(_) => 0,
-            Self::Options(_) => 1,
-            Self::Status(_) => 2,
-            Self::Have(_) => 3,
-            Self::Unhave(_) => 4,
+            Self::Synchronize(_) => 0,
+            Self::Request(_) => 1,
+            Self::Cancel(_) => 2,
+            Self::Data(_) => 3,
+            Self::NoData(_) => 4,
             Self::Want(_) => 5,
             Self::Unwant(_) => 6,
-            Self::Request(_) => 7,
-            Self::Cancel(_) => 8,
-            Self::Data(_) => 9,
-            Self::Close(_) => 10,
-            Self::Extension(_) => 15,
+            Self::Bitfield(_) => 7,
+            Self::Range(_) => 8,
+            Self::Extension(_) => 9,
+            value => unimplemented!("{} does not have a type", value),
         }
     }
-}
 
-impl Encoder for Message {
-    fn encoded_len(&self) -> usize {
+    /// Decode a message from a buffer based on type.
+    pub(crate) fn decode(buf: &[u8], typ: u64) -> Result<(Self, usize), EncodingError> {
+        let mut state = HypercoreState::from_buffer(buf);
+        let message = match typ {
+            0 => Ok(Self::Synchronize((*state).decode(buf)?)),
+            1 => Ok(Self::Request(state.decode(buf)?)),
+            2 => Ok(Self::Cancel((*state).decode(buf)?)),
+            3 => Ok(Self::Data(state.decode(buf)?)),
+            4 => Ok(Self::NoData((*state).decode(buf)?)),
+            5 => Ok(Self::Want((*state).decode(buf)?)),
+            6 => Ok(Self::Unwant((*state).decode(buf)?)),
+            7 => Ok(Self::Bitfield((*state).decode(buf)?)),
+            8 => Ok(Self::Range((*state).decode(buf)?)),
+            9 => Ok(Self::Extension((*state).decode(buf)?)),
+            _ => Err(EncodingError::new(
+                EncodingErrorKind::InvalidData,
+                &format!("Invalid message type to decode: {typ}"),
+            )),
+        }?;
+        Ok((message, state.start()))
+    }
+
+    /// Pre-encodes a message to state, returns length
+    pub(crate) fn preencode(&mut self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
         match self {
-            Self::Open(ref message) => message.encoded_len(),
-            Self::Options(ref message) => message.encoded_len(),
-            Self::Status(ref message) => message.encoded_len(),
-            Self::Have(ref message) => message.encoded_len(),
-            Self::Unhave(ref message) => message.encoded_len(),
-            Self::Want(ref message) => message.encoded_len(),
-            Self::Unwant(ref message) => message.encoded_len(),
-            Self::Request(ref message) => message.encoded_len(),
-            Self::Cancel(ref message) => message.encoded_len(),
-            Self::Data(ref message) => message.encoded_len(),
-            Self::Close(ref message) => message.encoded_len(),
-            Self::Extension(ref message) => message.encoded_len(),
-        }
+            Self::Open(ref message) => state.0.preencode(message)?,
+            Self::Close(ref message) => state.0.preencode(message)?,
+            Self::Synchronize(ref message) => state.0.preencode(message)?,
+            Self::Request(ref message) => state.preencode(message)?,
+            Self::Cancel(ref message) => state.0.preencode(message)?,
+            Self::Data(ref message) => state.preencode(message)?,
+            Self::NoData(ref message) => state.0.preencode(message)?,
+            Self::Want(ref message) => state.0.preencode(message)?,
+            Self::Unwant(ref message) => state.0.preencode(message)?,
+            Self::Bitfield(ref message) => state.0.preencode(message)?,
+            Self::Range(ref message) => state.0.preencode(message)?,
+            Self::Extension(ref message) => state.0.preencode(message)?,
+            Self::LocalSignal(_) => 0,
+        };
+        Ok(state.end())
     }
 
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+    /// Encodes a message to a given buffer, using preencoded state, results size
+    pub(crate) fn encode(
+        &mut self,
+        state: &mut HypercoreState,
+        buf: &mut [u8],
+    ) -> Result<usize, EncodingError> {
         match self {
-            Self::Open(ref message) => encode_prost_message(message, buf),
-            Self::Options(ref message) => encode_prost_message(message, buf),
-            Self::Status(ref message) => encode_prost_message(message, buf),
-            Self::Have(ref message) => encode_prost_message(message, buf),
-            Self::Unhave(ref message) => encode_prost_message(message, buf),
-            Self::Want(ref message) => encode_prost_message(message, buf),
-            Self::Unwant(ref message) => encode_prost_message(message, buf),
-            Self::Request(ref message) => encode_prost_message(message, buf),
-            Self::Cancel(ref message) => encode_prost_message(message, buf),
-            Self::Data(ref message) => encode_prost_message(message, buf),
-            Self::Close(ref message) => encode_prost_message(message, buf),
-            Self::Extension(ref message) => message.encode(buf),
-        }
+            Self::Open(ref message) => state.0.encode(message, buf)?,
+            Self::Close(ref message) => state.0.encode(message, buf)?,
+            Self::Synchronize(ref message) => state.0.encode(message, buf)?,
+            Self::Request(ref message) => state.encode(message, buf)?,
+            Self::Cancel(ref message) => state.0.encode(message, buf)?,
+            Self::Data(ref message) => state.encode(message, buf)?,
+            Self::NoData(ref message) => state.0.encode(message, buf)?,
+            Self::Want(ref message) => state.0.encode(message, buf)?,
+            Self::Unwant(ref message) => state.0.encode(message, buf)?,
+            Self::Bitfield(ref message) => state.0.encode(message, buf)?,
+            Self::Range(ref message) => state.0.encode(message, buf)?,
+            Self::Extension(ref message) => state.0.encode(message, buf)?,
+            Self::LocalSignal(_) => 0,
+        };
+        Ok(state.start())
     }
-}
-
-fn encode_prost_message(
-    msg: &impl prost::Message,
-    mut buf: &mut [u8],
-) -> Result<usize, EncodeError> {
-    let len = msg.encoded_len();
-    msg.encode(&mut buf)?;
-    Ok(len)
 }
 
 impl fmt::Display for Message {
@@ -257,11 +459,13 @@ impl fmt::Display for Message {
             ),
             Self::Data(msg) => write!(
                 f,
-                "Data(index {}, value: <{}>, nodes: {}, signature <{}>)",
-                msg.index,
-                msg.value.as_ref().map_or(0, |d| d.len()),
-                msg.nodes.len(),
-                msg.signature.as_ref().map_or(0, |d| d.len()),
+                "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade: {})",
+                msg.request,
+                msg.fork,
+                msg.block.is_some(),
+                msg.hash.is_some(),
+                msg.seek.is_some(),
+                msg.upgrade.is_some(),
             ),
             _ => write!(f, "{:?}", &self),
         }
@@ -269,10 +473,17 @@ impl fmt::Display for Message {
 }
 
 /// A message on a channel.
-#[derive(Clone, PartialEq)]
-pub struct ChannelMessage {
-    pub channel: u64,
-    pub message: Message,
+#[derive(Clone)]
+pub(crate) struct ChannelMessage {
+    pub(crate) channel: u64,
+    pub(crate) message: Message,
+    state: Option<HypercoreState>,
+}
+
+impl PartialEq for ChannelMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.channel == other.channel && self.message == other.message
+    }
 }
 
 impl fmt::Debug for ChannelMessage {
@@ -283,127 +494,161 @@ impl fmt::Debug for ChannelMessage {
 
 impl ChannelMessage {
     /// Create a new message.
-    pub fn new(channel: u64, message: Message) -> Self {
-        Self { channel, message }
+    pub(crate) fn new(channel: u64, message: Message) -> Self {
+        Self {
+            channel,
+            message,
+            state: None,
+        }
     }
 
     /// Consume self and return (channel, Message).
-    pub fn into_split(self) -> (u64, Message) {
+    pub(crate) fn into_split(self) -> (u64, Message) {
         (self.channel, self.message)
     }
 
-    /// Decode a channel message from a buffer.
+    /// Decodes an open message for a channel message from a buffer.
     ///
-    /// Note: `buf` has to have a valid length, and the length
-    /// prefix has to be removed already.
-    pub fn decode(buf: &[u8]) -> io::Result<Self> {
+    /// Note: `buf` has to have a valid length, and without the 3 LE
+    /// bytes in it
+    pub(crate) fn decode_open_message(buf: &[u8]) -> io::Result<(Self, usize)> {
+        if buf.len() <= 5 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "received too short Open message",
+            ));
+        }
+
+        let mut state = State::new_with_start_and_end(0, buf.len());
+        let open_msg: Open = state.decode(buf)?;
+        Ok((
+            Self {
+                channel: open_msg.channel,
+                message: Message::Open(open_msg),
+                state: None,
+            },
+            state.start(),
+        ))
+    }
+
+    /// Decodes a close message for a channel message from a buffer.
+    ///
+    /// Note: `buf` has to have a valid length, and without the 3 LE
+    /// bytes in it
+    pub(crate) fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
         if buf.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "received too short Close message",
+            ));
+        }
+        let mut state = State::new_with_start_and_end(0, buf.len());
+        let close_msg: Close = state.decode(buf)?;
+        Ok((
+            Self {
+                channel: close_msg.channel,
+                message: Message::Close(close_msg),
+                state: None,
+            },
+            state.start(),
+        ))
+    }
+
+    /// Decode a normal channel message from a buffer.
+    ///
+    /// Note: `buf` has to have a valid length, and without the 3 LE
+    /// bytes in it
+    pub(crate) fn decode(buf: &[u8], channel: u64) -> io::Result<(Self, usize)> {
+        if buf.len() <= 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received empty message",
             ));
         }
-        let mut header = 0u64;
-        let headerlen = varinteger::decode(&buf, &mut header);
-        // let body = buf.split_off(headerlen);
-        let channel = header >> 4;
-        let typ = header & 0b1111;
-        let message = Message::decode(&buf[headerlen..], typ)?;
-
-        let channel_message = Self { channel, message };
-
-        Ok(channel_message)
+        let mut state = State::from_buffer(buf);
+        let typ: u64 = state.decode(buf)?;
+        let (message, length) = Message::decode(&buf[state.start()..], typ)?;
+        Ok((
+            Self {
+                channel,
+                message,
+                state: None,
+            },
+            state.start() + length,
+        ))
     }
 
-    fn header(&self) -> u64 {
-        let typ = self.message.typ();
-        self.channel << 4 | typ
+    /// Performance optimization for letting calling encoded_len() already do
+    /// the preencode phase of compact_encoding.
+    fn prepare_state(&mut self) -> Result<(), EncodingError> {
+        if self.state.is_none() {
+            let state = if let Message::Open(_) = self.message {
+                // Open message doesn't have a type
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
+                let mut state = HypercoreState::new();
+                self.message.preencode(&mut state)?;
+                state
+            } else if let Message::Close(_) = self.message {
+                // Close message doesn't have a type
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L162
+                let mut state = HypercoreState::new();
+                self.message.preencode(&mut state)?;
+                state
+            } else {
+                // The header is the channel id uint followed by message type uint
+                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
+                let mut state = HypercoreState::new();
+                let typ = self.message.typ();
+                (*state).preencode(&typ)?;
+                self.message.preencode(&mut state)?;
+                state
+            };
+            self.state = Some(state);
+        }
+        Ok(())
     }
 }
 
 impl Encoder for ChannelMessage {
-    fn encoded_len(&self) -> usize {
-        let header_len = varinteger::length(self.header());
-        let body_len = self.message.encoded_len();
-        header_len + body_len
+    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
+        self.prepare_state()?;
+        Ok(self.state.as_ref().unwrap().end())
     }
 
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let header = self.header();
-        let header_len = varinteger::length(header);
-        let body_len = self.message.encoded_len();
-        let len = header_len + body_len;
-        if buf.len() < len || len > MAX_MESSAGE_SIZE as usize {
-            return Err(EncodeError::new(len));
+    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
+        self.prepare_state()?;
+        let state = self.state.as_mut().unwrap();
+        if let Message::Open(_) = self.message {
+            // Open message is different in that the type byte is missing
+            self.message.encode(state, buf)?;
+        } else if let Message::Close(_) = self.message {
+            // Close message is different in that the type byte is missing
+            self.message.encode(state, buf)?;
+        } else {
+            let typ = self.message.typ();
+            state.0.encode(&typ, buf)?;
+            self.message.encode(state, buf)?;
         }
-        varinteger::encode(header, &mut buf[..header_len]);
-        self.message.encode(&mut buf[header_len..len])?;
-        Ok(len)
-    }
-}
-
-/// A extension message.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExtensionMessage {
-    /// ID of this extension
-    pub id: u64,
-    /// Message content
-    pub message: Vec<u8>,
-}
-
-impl ExtensionMessage {
-    /// Create a new extension message.
-    pub fn new(id: u64, message: Vec<u8>) -> Self {
-        Self { id, message }
-    }
-
-    /// Decode an extension message from a buffer.
-    fn decode(buf: &[u8]) -> io::Result<Self> {
-        if buf.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Extension message may not be empty",
-            ));
-        }
-        let mut id: u64 = 0;
-        let id_len = varinteger::decode(&buf, &mut id);
-        Ok(Self {
-            id,
-            message: buf[id_len..].to_vec(),
-        })
-    }
-}
-
-impl Encoder for ExtensionMessage {
-    fn encoded_len(&self) -> usize {
-        let id_len = varinteger::length(self.id);
-        id_len + self.message.len()
-    }
-
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
-        let id_len = varinteger::length(self.id);
-        let len = self.message.len() + id_len;
-        if buf.len() < len {
-            return Err(EncodeError::new(len));
-        }
-        varinteger::encode(self.id, &mut buf[..id_len]);
-        buf[id_len..len].copy_from_slice(&self.message[..]);
-        Ok(len)
+        Ok(state.start())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hypercore::{
+        DataBlock, DataHash, DataSeek, DataUpgrade, Node, RequestBlock, RequestSeek, RequestUpgrade,
+    };
 
     macro_rules! message_enc_dec {
         ($( $msg:expr ),*) => {
             $(
                 let channel = rand::random::<u8>() as u64;
-                let channel_message = ChannelMessage::new(channel, $msg);
-                let mut buf = vec![0u8; channel_message.encoded_len()];
+                let mut channel_message = ChannelMessage::new(channel, $msg);
+                let encoded_len = channel_message.encoded_len().expect("Failed to get encoded length");
+                let mut buf = vec![0u8; encoded_len];
                 let n = channel_message.encode(&mut buf[..]).expect("Failed to encode message");
-                let decoded = ChannelMessage::decode(&buf[..n]).expect("Failed to decode message").into_split();
+                let decoded = ChannelMessage::decode(&buf[..n], channel).expect("Failed to decode message").0.into_split();
                 assert_eq!(channel, decoded.0);
                 assert_eq!($msg, decoded.1);
             )*
@@ -411,53 +656,85 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode() {
+    fn message_encode_decode() {
         message_enc_dec! {
-            Message::Open(Open{
-                discovery_key: vec![2u8; 20],
-                capability: None
+            Message::Synchronize(Synchronize{
+                fork: 0,
+                can_upgrade: true,
+                downloading: true,
+                uploading: true,
+                length: 5,
+                remote_length: 0,
             }),
-            Message::Options(Options {
-                extensions: vec!["test ext".to_string()],
-                ack: None
+            Message::Request(Request {
+                id: 1,
+                fork: 1,
+                block: Some(RequestBlock {
+                    index: 5,
+                    nodes: 10,
+                }),
+                hash: Some(RequestBlock {
+                    index: 20,
+                    nodes: 0
+                }),
+                seek: Some(RequestSeek {
+                    bytes: 10
+                }),
+                upgrade: Some(RequestUpgrade {
+                    start: 0,
+                    length: 10
+                })
             }),
-            Message::Status(Status {
-                uploading: Some(true),
-                downloading: Some(false)
+            Message::Cancel(Cancel {
+                request: 1,
             }),
-            Message::Have(Have {
-                start: 0,
-                length: Some(100),
-                bitfield: None,
-                ack: Some(true)
+            Message::Data(Data{
+                request: 1,
+                fork: 5,
+                block: Some(DataBlock {
+                    index: 5,
+                    nodes: vec![Node::new(1, vec![0x01; 32], 100)],
+                    value: vec![0xFF; 10]
+                }),
+                hash: Some(DataHash {
+                    index: 20,
+                    nodes: vec![Node::new(2, vec![0x02; 32], 200)],
+                }),
+                seek: Some(DataSeek {
+                    bytes: 10,
+                    nodes: vec![Node::new(3, vec![0x03; 32], 300)],
+                }),
+                upgrade: Some(DataUpgrade {
+                    start: 0,
+                    length: 10,
+                    nodes: vec![Node::new(4, vec![0x04; 32], 400)],
+                    additional_nodes: vec![Node::new(5, vec![0x05; 32], 500)],
+                    signature: vec![0xAB; 32]
+                })
             }),
-            Message::Unhave(Unhave {
-                start: 0,
-                length: Some(100),
+            Message::NoData(NoData {
+                request: 2,
             }),
             Message::Want(Want {
                 start: 0,
-                length: Some(100),
+                length: 100,
             }),
-            Message::Request(Request {
-                index: 0,
-                bytes: None,
-                hash: Some(true),
-                nodes: None
+            Message::Unwant(Unwant {
+                start: 10,
+                length: 2,
             }),
-            Message::Cancel(Cancel{
-                index: 10,
-                bytes: Some(10),
-                hash: Some(true)
+            Message::Bitfield(Bitfield {
+                start: 20,
+                bitfield: vec![0x89ABCDEF, 0x00, 0xFFFFFFFF],
             }),
-            Message::Data(Data {
-                index: 1,
-                value: None,
-                nodes: vec![],
-                signature: None
+            Message::Range(Range {
+                drop: true,
+                start: 12345,
+                length: 100000
             }),
-            Message::Close(Close {
-                discovery_key: Some(vec![1u8; 10])
+            Message::Extension(Extension {
+                name: "custom_extension/v1/open".to_string(),
+                message: vec![0x44, 20]
             })
         };
     }

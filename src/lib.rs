@@ -1,24 +1,49 @@
-//! Hypercore protocol is a streaming, message based protocol
+//! ## Introduction
+//!
+//! Hypercore protocol is a streaming, message based protocol. This is a rust port of the wire
+//! protocol implementation in [the original Javascript version][holepunch-hypercore] aiming
+//! for interoperability with LTS version.
+//!
+//! This crate is built on top of the [hypercore] crate, which defines some structs used here.
+//!
+//! ## Design
 //!
 //! This crate does not include any IO related code, it is up to the user to supply a streaming IO
 //! handler that implements the [AsyncRead] and [AsyncWrite] traits.
 //!
 //! When opening a Hypercore protocol stream on an IO handler, the protocol will perform a Noise
-//! handshake to setup a secure and authenticated connection. After that, each side can request any
-//! number of channels on the protocol. A channel is opened with a [Key], a 32 byte buffer.
-//! Channels are only opened if both peers opened a channel for the same key. It is automatically
-//! verified that both parties know the key without transmitting the key itself.
+//! handshake followed by libsodium's [crypto_secretstream] to setup a secure and authenticated
+//! connection. After that, each side can request any number of channels on the protocol. A
+//! channel is opened with a [Key], a 32 byte buffer. Channels are only opened if both peers
+//! opened a channel for the same key. It is automatically verified that both parties know the
+//! key without transmitting the key itself.
 //!
-//! On a channel, the predefined messages of the Hypercore protocol can be sent and received.
-//! Additionally, Hypercore protocol supports protocol extensions that can be registered both on an
-//! individual channel and on the main protocol stream. Extensions are registered with a string
-//! name and are only established if both peers register an extension with the same name. Each
-//! extension then can be used as a duplex stream. Note that individual messages on an extension
-//! stream are enrypted but not authenticated.
+//! On a channel, the predefined messages, including a custom Extension message, of the Hypercore
+//! protocol can be sent and received.
 //!
-//! [AsyncRead]: futures_lite::AsyncRead
-//! [AsyncWrite]: futures_lite::AsyncWrite
-//! [TcpStream]: async_std::net::TcpStream
+//! ## Features
+//!
+//! ### `sparse` (default)
+//!
+//! When using disk storage for hypercore, clearing values may create sparse files. On by default.
+//!
+//! ### `async-std` (default)
+//!
+//! Use the async-std runtime, on by default. Either this or `tokio` is mandatory.
+//!
+//! ### `tokio`
+//!
+//! Use the tokio runtime. Either this or `async_std` is mandatory.
+//!
+//! ### `wasm-bindgen`
+//!
+//! Enable for WASM runtime support.
+//!
+//! ### `cache`
+//!
+//! Use a moka cache for hypercore's merkle tree nodes to speed-up reading.
+//!
+//! ## Example
 //!
 //! The following example opens a TCP server on localhost and connects to that server. Both ends
 //! then open a channel with the same key and exchange a message.
@@ -28,7 +53,6 @@
 //! use hypercore_protocol::{ProtocolBuilder, Event, Message};
 //! use hypercore_protocol::schema::*;
 //! use async_std::prelude::*;
-//!
 //! // Start a tcp server.
 //! let listener = async_std::net::TcpListener::bind("localhost:8000").await.unwrap();
 //! async_std::task::spawn(async move {
@@ -55,6 +79,7 @@
 //!     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
 //!
 //!     // Iterate over the protocol events. This is required to "drive" the protocol.
+//!
 //!     while let Some(Ok(event)) = protocol.next().await {
 //!         eprintln!("{} received event {:?}", name, event);
 //!         match event {
@@ -67,7 +92,7 @@
 //!                 // A Channel can be sent to other tasks.
 //!                 async_std::task::spawn(async move {
 //!                     // A Channel can both send messages and is a stream of incoming messages.
-//!                     channel.want(Want { start: 0, length: None }).await;
+//!                     channel.send(Message::Want(Want { start: 0, length: 1 })).await;
 //!                     while let Some(message) = channel.next().await {
 //!                         eprintln!("{} received message: {:?}", name, message);
 //!                     }
@@ -79,35 +104,41 @@
 //! }
 //! # })
 //! ```
+//!
+//! Find more examples in the [Github repository][examples].
+//!
+//! [holepunch-hypercore]: https://github.com/holepunchto/hypercore
+//! [datrs-hypercore]: https://github.com/datrs/hypercore
+//! [AsyncRead]: futures_lite::AsyncRead
+//! [AsyncWrite]: futures_lite::AsyncWrite
+//! [examples]: https://github.com/datrs/hypercore-protocol-rs#examples
 
 #![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
 #![deny(missing_debug_implementations, nonstandard_style)]
-// #![warn(missing_docs, missing_doc_code_examples, unreachable_pub)]
-#![warn(missing_docs, missing_doc_code_examples)]
+#![warn(missing_docs, unreachable_pub)]
 
 mod builder;
 mod channels;
 mod constants;
+mod crypto;
 mod duplex;
-mod extension;
 mod message;
-mod noise;
 mod protocol;
 mod reader;
 mod util;
 mod writer;
 
 /// The wire messages used by the protocol.
-#[allow(missing_docs)]
-pub mod schema {
-    include!(concat!(env!("OUT_DIR"), "/hypercore.schema.rs"));
-    pub use crate::message::ExtensionMessage;
-}
+pub mod schema;
 
-pub use builder::{Builder as ProtocolBuilder, Options};
+pub use builder::Builder as ProtocolBuilder;
 pub use channels::Channel;
+// Export the needed types for Channel::take_receiver, and Channel::local_sender()
+pub use async_channel::{
+    Receiver as ChannelReceiver, SendError as ChannelSendError, Sender as ChannelSender,
+};
 pub use duplex::Duplex;
-pub use extension::Extension;
+pub use hypercore; // Re-export hypercore
 pub use message::Message;
 pub use protocol::{DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;

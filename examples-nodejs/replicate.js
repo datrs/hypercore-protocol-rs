@@ -1,53 +1,29 @@
 const net = require('net')
-const Protocol = require('hypercore-protocol')
-const hypercore = require('hypercore')
-const ram = require('random-access-memory')
-const { pipeline } = require('stream')
-const fs = require('fs')
-const p = require('path')
-const os = require('os')
-const split = require('split2')
+const Hypercore = require('hypercore');
+const RAM = require('random-access-memory')
 
-const hostname = 'localhost'
-let [mode, port, keyOrFilename] = process.argv.slice(2)
-if (['client', 'server'].indexOf(mode) === -1 || !port || !keyOrFilename) {
-  exit('usage: node index.js [client|server] PORT [KEY|FILENAME]')
+const hostname = '127.0.0.1'
+let [mode, port, key] = process.argv.slice(2)
+if (['client', 'server'].indexOf(mode) === -1 || !port) {
+  exit('usage: node replicate.js [client|server] PORT (KEY)')
 }
-
-const KEY_REGEX = /^[d0-9a-f]{64}$/i
-let key, filename
-if (keyOrFilename.match(KEY_REGEX)) {
-  key = keyOrFilename
-} else {
-  filename = keyOrFilename
-}
-
-const feed = hypercore(ram, key)
-feed.ready(() => {
-  console.log('KEY=' + feed.key.toString('hex'))
+const hypercore = new Hypercore((_) => new RAM(), key)
+hypercore.info().then((_info) => {
+  console.log('KEY=' + hypercore.key.toString('hex'))
   console.log()
-  if (feed.writable && filename) {
-    feed.append(['hi\n', 'ola\n', 'hello\n', 'mundo\n'])
-    // pipeline(
-    //   fs.createReadStream(filename),
-    //   split(),
-    //   feed.createWriteStream(),
-    //   err => {
-    //     if (err) console.error('error importing file', err)
-    //     else console.error('import done, new len %o, bytes %o', feed.length, feed.byteLength)
-    //   }
-    // )
+  if (hypercore.writable && !key) {
+    hypercore.append(['hi\n', 'ola\n', 'hello\n', 'mundo\n'])
   }
 })
 
 const opts = {
-  feed, filename, mode, port, hostname
+  hypercore, mode, port, hostname
 }
 
 start(opts)
 
 function start (opts) {
-  const { port, hostname, mode, feed, filename } = opts
+  const { port, hostname, mode } = opts
   const isInitiator = mode === 'client'
   opts.isInitiator = isInitiator
 
@@ -64,7 +40,7 @@ function start (opts) {
 }
 
 function onconnection (opts) {
-  const { socket, isInitiator, feed } = opts
+  const { socket, isInitiator, mode, hypercore } = opts
   const { remoteAddress, remotePort } = socket
   if (!isInitiator) {
     console.error(`new connection from ${remoteAddress}:${remotePort}`)
@@ -77,36 +53,20 @@ function onconnection (opts) {
     }
   })
 
-  // const proto = new Protocol(isInitiator, { noise: true, encrypted: false })
-  feed.ready(() => {
-    let mode = feed.writable ? 'write' : 'read'
-    const proto = feed.replicate(isInitiator, { encrypted: true, live: true })
-
-    console.error('init protocol')
-    console.error('key', feed.key.toString('hex'))
-
-    proto.pipe(socket).pipe(proto)
-
-    proto.on('error', err => {
-      console.error('protocol error', err)
-      socket.destroy()
-    })
-
-    if (mode === 'write') {
-      // feed.append(feed.length)
-      // feed.append('hello')
-      // setTimeout(() => feed.append('world'), 500)
-
-      // const filepath = p.join(os.homedir(), 'Musik', 'foo.mp3')
-      // const rs = fs.createReadStream(filepath)
-      // rs.pipe(feed.createWriteStream())
-    }
-    if (mode === 'read') {
-      feed.createReadStream({ live: true }).pipe(process.stdout)
-    }
-
-    // setTimeout(() => proto.destroy(), 1000)
+  hypercore.on('append', _ => {
+      console.log(`${mode} got append, new length ${hypercore.length} and byte length ${hypercore.byteLength}, replaying:`)
+      console.log("");
+      console.log("### Results (Press Ctrl-C to exit)");
+      console.log("");
+      console.log("Replication succeeded if you see '0: hi', '1: ola', '2: hello' and '3: mundo' (not necessarily in that order)")
+      console.log("");
+      for (let i = 0; i < hypercore.length; i++) {
+          hypercore.get(i).then(value => {
+             console.log(`${i}: ${value}`);
+          });
+      }
   })
+  socket.pipe(hypercore.replicate(isInitiator)).pipe(socket)
 }
 
 function exit (msg) {

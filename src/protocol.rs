@@ -2,7 +2,6 @@ use async_channel::{Receiver, Sender};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::Stream;
 use futures_timer::Delay;
-use log::*;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fmt;
@@ -12,16 +11,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::builder::{Builder, Options};
 use crate::channels::{Channel, ChannelMap};
-use crate::constants::DEFAULT_KEEPALIVE;
-use crate::extension::{Extension, Extensions};
-use crate::message::{ChannelMessage, EncodeError, Frame, FrameType, Message};
-use crate::noise::{Handshake, HandshakeResult};
+use crate::constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME};
+use crate::crypto::{DecryptCipher, EncryptCipher, Handshake, HandshakeResult};
+use crate::message::{ChannelMessage, Frame, FrameType, Message};
 use crate::reader::ReadState;
 use crate::schema::*;
-use crate::util::map_channel_err;
-use crate::util::pretty_hash;
+use crate::util::{map_channel_err, pretty_hash};
 use crate::writer::WriteState;
 
 macro_rules! return_error {
@@ -35,8 +31,32 @@ macro_rules! return_error {
 const CHANNEL_CAP: usize = 1000;
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
 
+/// Options for a Protocol instance.
+#[derive(Debug)]
+pub(crate) struct Options {
+    /// Whether this peer initiated the IO connection for this protoccol
+    pub(crate) is_initiator: bool,
+    /// Enable or disable the handshake.
+    /// Disabling the handshake will also disable capabilitity verification.
+    /// Don't disable this if you're not 100% sure you want this.
+    pub(crate) noise: bool,
+    /// Enable or disable transport encryption.
+    pub(crate) encrypted: bool,
+}
+
+impl Options {
+    /// Create with default options.
+    pub(crate) fn new(is_initiator: bool) -> Self {
+        Self {
+            is_initiator,
+            noise: true,
+            encrypted: true,
+        }
+    }
+}
+
 /// Remote public key (32 bytes).
-pub type RemotePublicKey = [u8; 32];
+pub(crate) type RemotePublicKey = [u8; 32];
 /// Discovery key (32 bytes).
 pub type DiscoveryKey = [u8; 32];
 /// Key (32 bytes).
@@ -55,6 +75,9 @@ pub enum Event {
     Channel(Channel),
     /// Emitted when a channel is closed.
     Close(DiscoveryKey),
+    /// Convenience event to make it possible to signal the protocol from a channel.
+    /// See channel.signal_local().
+    LocalSignal((String, Vec<u8>)),
 }
 
 /// A protocol command.
@@ -77,17 +100,21 @@ impl fmt::Debug for Event {
                 write!(f, "Channel({})", &pretty_hash(channel.discovery_key()))
             }
             Event::Close(discovery_key) => write!(f, "Close({})", &pretty_hash(discovery_key)),
+            Event::LocalSignal((name, data)) => {
+                write!(f, "LocalSignal(name={},len={})", name, data.len())
+            }
         }
     }
 }
 
 /// Protocol state
 #[allow(clippy::large_enum_variant)]
-pub enum State {
+pub(crate) enum State {
     NotInitialized,
     // The Handshake struct sits behind an option only so that we can .take()
     // it out, it's never actually empty when in State::Handshake.
     Handshake(Option<Handshake>),
+    SecretStream(Option<EncryptCipher>),
     Established,
 }
 
@@ -96,6 +123,7 @@ impl fmt::Debug for State {
         match self {
             State::NotInitialized => write!(f, "NotInitialized"),
             State::Handshake(_) => write!(f, "Handshaking"),
+            State::SecretStream(_) => write!(f, "SecretStream"),
             State::Established => write!(f, "Established"),
         }
     }
@@ -114,11 +142,10 @@ pub struct Protocol<IO> {
     channels: ChannelMap,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
-    outbound_rx: Receiver<ChannelMessage>,
-    outbound_tx: Sender<ChannelMessage>,
+    outbound_rx: Receiver<Vec<ChannelMessage>>,
+    outbound_tx: Sender<Vec<ChannelMessage>>,
     keepalive: Delay,
     queued_events: VecDeque<Event>,
-    extensions: Extensions,
 }
 
 impl<IO> Protocol<IO>
@@ -126,9 +153,12 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new protocol instance.
-    pub fn new(io: IO, options: Options) -> Self {
+    pub(crate) fn new(io: IO, options: Options) -> Self {
         let (command_tx, command_rx) = async_channel::bounded(CHANNEL_CAP);
-        let (outbound_tx, outbound_rx) = async_channel::bounded(1);
+        let (outbound_tx, outbound_rx): (
+            Sender<Vec<ChannelMessage>>,
+            Receiver<Vec<ChannelMessage>>,
+        ) = async_channel::bounded(1);
         Protocol {
             io,
             read_state: ReadState::new(),
@@ -137,7 +167,6 @@ where
             state: State::NotInitialized,
             channels: ChannelMap::new(),
             handshake: None,
-            extensions: Extensions::new(outbound_tx.clone(), 0),
             command_rx,
             command_tx: CommandTx(command_tx),
             outbound_tx,
@@ -145,17 +174,6 @@ where
             keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
         }
-    }
-
-    /// Create a protocol instance with the default options.
-    pub fn with_defaults(io: IO, is_initiator: bool) -> Self {
-        let options = Options::new(is_initiator);
-        Protocol::new(io, options)
-    }
-
-    /// Create a protocol builder that allows to set additional options.
-    pub fn builder(is_initiator: bool) -> Builder {
-        Builder::new(is_initiator)
     }
 
     /// Whether this protocol stream initiated the underlying IO connection.
@@ -191,11 +209,6 @@ where
     /// Give a command to the protocol.
     pub async fn command(&mut self, command: Command) -> Result<()> {
         self.command_tx.send(command).await
-    }
-
-    /// Register a protocol extension on the stream.
-    pub async fn register_extension(&mut self, name: impl ToString) -> Extension {
-        self.extensions.register(name.to_string()).await
     }
 
     /// Open a new protocol channel.
@@ -251,9 +264,10 @@ where
     }
 
     fn init(&mut self) -> Result<()> {
-        debug!(
+        tracing::debug!(
             "protocol init, state {:?}, options {:?}",
-            self.state, self.options
+            self.state,
+            self.options
         );
         match self.state {
             State::NotInitialized => {}
@@ -287,20 +301,35 @@ where
     /// Poll the keepalive timer and queue a ping message if needed.
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) {
         if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            self.write_state.queue_frame(Frame::Raw(vec![0u8; 0]));
+            if let State::Established = self.state {
+                // 24 bit header for the empty message, hence the 3
+                self.write_state
+                    .queue_frame(Frame::RawBatch(vec![vec![0u8; 3]]));
+            }
             self.keepalive.reset(KEEPALIVE_DURATION);
         }
     }
 
-    fn on_outbound_message(&mut self, message: &ChannelMessage) {
+    fn on_outbound_message(&mut self, message: &ChannelMessage) -> bool {
         // If message is close, close the local channel.
         if let ChannelMessage {
             channel,
             message: Message::Close(_),
+            ..
         } = message
         {
             self.close_local(*channel);
+        // If message is a LocalSignal, emit an event and return false to indicate
+        // this message should be filtered out.
+        } else if let ChannelMessage {
+            message: Message::LocalSignal((name, data)),
+            ..
+        } = message
+        {
+            self.queue_event(Event::LocalSignal((name.to_string(), data.to_vec())));
+            return false;
         }
+        true
     }
 
     /// Poll for inbound messages and processs them.
@@ -328,10 +357,14 @@ where
             }
 
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
-                Poll::Ready(Some(message)) => {
-                    self.on_outbound_message(&message);
-                    let frame = Frame::Message(message);
-                    self.write_state.park_frame(frame);
+                Poll::Ready(Some(mut messages)) => {
+                    if !messages.is_empty() {
+                        messages.retain(|message| self.on_outbound_message(message));
+                        if !messages.is_empty() {
+                            let frame = Frame::MessageBatch(messages);
+                            self.write_state.park_frame(frame);
+                        }
+                    }
                 }
                 Poll::Ready(None) => unreachable!("Channel closed before end"),
                 Poll::Pending => return Ok(()),
@@ -341,13 +374,54 @@ where
 
     fn on_inbound_frame(&mut self, frame: Frame) -> Result<()> {
         match frame {
-            Frame::Raw(buf) => match self.state {
-                State::Handshake(_) => self.on_handshake_message(buf),
-                _ => unreachable!("May not receive raw frames outside of handshake state"),
-            },
-            Frame::Message(channel_message) => match self.state {
-                State::Established => self.on_inbound_message(channel_message),
-                _ => unreachable!("May not receive message frames when not established"),
+            Frame::RawBatch(raw_batch) => {
+                let mut processed_state: Option<String> = None;
+                for buf in raw_batch {
+                    let state_name: String = format!("{:?}", self.state);
+                    match self.state {
+                        State::Handshake(_) => self.on_handshake_message(buf)?,
+                        State::SecretStream(_) => self.on_secret_stream_message(buf)?,
+                        State::Established => {
+                            if let Some(processed_state) = processed_state.as_ref() {
+                                let previous_state = if self.options.encrypted {
+                                    State::SecretStream(None)
+                                } else {
+                                    State::Handshake(None)
+                                };
+                                if processed_state == &format!("{previous_state:?}") {
+                                    // This is the unlucky case where the batch had two or more messages where
+                                    // the first one was correctly identified as Raw but everything
+                                    // after that should have been (decrypted and) a MessageBatch. Correct the mistake
+                                    // here post-hoc.
+                                    let buf = self.read_state.decrypt_buf(&buf)?;
+                                    let frame = Frame::decode(&buf, &FrameType::Message)?;
+                                    self.on_inbound_frame(frame)?;
+                                    continue;
+                                }
+                            }
+                            unreachable!(
+                                "May not receive raw frames in Established state"
+                            )
+                        }
+                        _ => unreachable!(
+                            "May not receive raw frames outside of handshake or secretstream state, was {:?}",
+                            self.state
+                        ),
+                    };
+                    if processed_state.is_none() {
+                        processed_state = Some(state_name)
+                    }
+                }
+                Ok(())
+            }
+            Frame::MessageBatch(channel_messages) => match self.state {
+                State::Established => {
+                    for channel_message in channel_messages {
+                        self.on_inbound_message(channel_message)?
+                    }
+                    Ok(())
+                }
+                _ => unreachable!("May not receive message batch frames when not established"),
             },
         }
     }
@@ -365,43 +439,61 @@ where
         if !handshake.complete() {
             self.state = State::Handshake(Some(handshake));
         } else {
-            let result = handshake.into_result()?;
+            let handshake_result = handshake.into_result()?;
+
             if self.options.encrypted {
-                self.read_state.upgrade_with_handshake(&result)?;
-                self.write_state.upgrade_with_handshake(&result)?;
+                // The cipher will be put to use to the writer only after the peer's answer has come
+                let (cipher, init_msg) = EncryptCipher::from_handshake_tx(&handshake_result)?;
+                self.state = State::SecretStream(Some(cipher));
+
+                // Send the secret stream init message header to the other side
+                self.queue_frame_direct(init_msg).unwrap();
+            } else {
+                // Skip secret stream and go straight to Established, then notify about
+                // handshake
+                self.read_state.set_frame_type(FrameType::Message);
+                let remote_public_key = parse_key(&handshake_result.remote_pubkey)?;
+                self.queue_event(Event::Handshake(remote_public_key));
+                self.state = State::Established;
             }
-            self.read_state.set_frame_type(FrameType::Message);
-            let remote_public_key = parse_key(&result.remote_pubkey)?;
-            log::debug!(
-                "handshake complete, remote_key {}",
-                pretty_hash(&remote_public_key)
-            );
-            self.handshake = Some(result);
-            self.state = State::Established;
-            self.queue_event(Event::Handshake(remote_public_key));
+            // Store handshake result
+            self.handshake = Some(handshake_result);
         }
+        Ok(())
+    }
+
+    fn on_secret_stream_message(&mut self, buf: Vec<u8>) -> Result<()> {
+        let encrypt_cipher = match &mut self.state {
+            State::SecretStream(encrypt_cipher) => encrypt_cipher.take().unwrap(),
+            _ => {
+                unreachable!("May not call on_secret_stream_message when not in SecretStream state")
+            }
+        };
+        let handshake_result = &self
+            .handshake
+            .as_ref()
+            .expect("Handshake result must be set before secret stream");
+        let decrypt_cipher = DecryptCipher::from_handshake_rx_and_init_msg(handshake_result, &buf)?;
+        self.read_state.upgrade_with_decrypt_cipher(decrypt_cipher);
+        self.write_state.upgrade_with_encrypt_cipher(encrypt_cipher);
+        self.read_state.set_frame_type(FrameType::Message);
+
+        // Lastly notify that handshake is ready and set state to established
+        let remote_public_key = parse_key(&handshake_result.remote_pubkey)?;
+        self.queue_event(Event::Handshake(remote_public_key));
+        self.state = State::Established;
         Ok(())
     }
 
     fn on_inbound_message(&mut self, channel_message: ChannelMessage) -> Result<()> {
         // let channel_message = ChannelMessage::decode(buf)?;
-        log::debug!("[{}] recv {:?}", self.is_initiator(), channel_message);
         let (remote_id, message) = channel_message.into_split();
-        match remote_id {
-            // Id 0 means stream-level, where only extension and options messages are supported.
-            0 => match message {
-                Message::Options(msg) => self.extensions.on_remote_update(msg.extensions),
-                Message::Extension(msg) => self.extensions.on_message(msg),
-                _ => {}
-            },
-            // Any other Id is a regular channel message.
-            _ => match message {
-                Message::Open(msg) => self.on_open(remote_id, msg)?,
-                Message::Close(msg) => self.on_close(remote_id, msg)?,
-                _ => self
-                    .channels
-                    .forward_inbound_message(remote_id as usize, message)?,
-            },
+        match message {
+            Message::Open(msg) => self.on_open(remote_id, msg)?,
+            Message::Close(msg) => self.on_close(remote_id, msg)?,
+            _ => self
+                .channels
+                .forward_inbound_message(remote_id as usize, message)?,
         }
         Ok(())
     }
@@ -428,13 +520,16 @@ where
 
         // Tell the remote end about the new channel.
         let capability = self.capability(&key);
+        let channel = local_id as u64;
         let message = Message::Open(Open {
+            channel,
+            protocol: PROTOCOL_NAME.to_string(),
             discovery_key: discovery_key.to_vec(),
             capability,
         });
-        let channel_message = ChannelMessage::new(local_id as u64, message);
+        let channel_message = ChannelMessage::new(channel, message);
         self.write_state
-            .queue_frame(Frame::Message(channel_message));
+            .queue_frame(Frame::MessageBatch(vec![channel_message]));
         Ok(())
     }
 
@@ -458,9 +553,9 @@ where
         self.queued_events.push_back(event);
     }
 
-    fn queue_frame_direct(&mut self, body: Vec<u8>) -> std::result::Result<bool, EncodeError> {
-        let frame = Frame::Raw(body);
-        self.write_state.try_queue_direct(&frame)
+    fn queue_frame_direct(&mut self, body: Vec<u8>) -> Result<bool> {
+        let mut frame = Frame::RawBatch(vec![body]);
+        self.write_state.try_queue_direct(&mut frame)
     }
 
     fn accept_channel(&mut self, local_id: usize) -> Result<()> {
@@ -482,8 +577,10 @@ where
     fn on_close(&mut self, remote_id: u64, msg: Close) -> Result<()> {
         if let Some(channel_handle) = self.channels.get_remote(remote_id as usize) {
             let discovery_key = *channel_handle.discovery_key();
+            // There is a possibility both sides will close at the same time, so
+            // the channel could be closed already, let's tolerate that.
             self.channels
-                .forward_inbound_message(remote_id as usize, Message::Close(msg))?;
+                .forward_inbound_message_tolerate_closed(remote_id as usize, Message::Close(msg))?;
             self.channels.remove(&discovery_key);
             self.queue_event(Event::Close(discovery_key));
         }

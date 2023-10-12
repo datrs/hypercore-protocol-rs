@@ -4,7 +4,7 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use futures::future::Either;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::{FuturesUnordered, StreamExt};
-use hypercore_protocol::schema::*;
+use hypercore_protocol::{schema::*, Duplex};
 use hypercore_protocol::{Channel, Event, Message, ProtocolBuilder};
 use log::*;
 use std::time::Instant;
@@ -88,14 +88,14 @@ async fn start_server(address: &str) -> futures::channel::oneshot::Sender<()> {
     kill_tx
 }
 
-async fn onconnection<R, W>(reader: R, writer: W, is_initiator: bool) -> (R, W)
+async fn onconnection<R, W>(reader: R, writer: W, is_initiator: bool) -> Duplex<R, W>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
 {
     let key = [0u8; 32];
     let mut protocol = ProtocolBuilder::new(is_initiator)
-        .set_encrypted(false)
+        .encrypted(false)
         .connect_rw(reader, writer);
     while let Some(Ok(event)) = protocol.next().await {
         // eprintln!("RECV EVENT [{}] {:?}", protocol.is_initiator(), event);
@@ -122,11 +122,7 @@ async fn onchannel(mut channel: Channel, is_initiator: bool) {
     } else {
         channel_server(&mut channel).await
     }
-    let _res = channel
-        .send(Message::Close(Close {
-            discovery_key: None,
-        }))
-        .await;
+    let _res = channel.close().await;
 }
 
 async fn channel_server(channel: &mut Channel) {
@@ -141,30 +137,20 @@ async fn channel_server(channel: &mut Channel) {
 async fn channel_client(channel: &mut Channel) {
     let data = vec![0u8; SIZE as usize];
     let start = Instant::now();
-    let message = Message::Data(Data {
-        index: 0,
-        value: Some(data.clone()),
-        nodes: vec![],
-        signature: None,
-    });
+    let message = msg_data(0, data.clone());
     channel.send(message).await.unwrap();
     while let Some(message) = channel.next().await {
         match message {
-            Message::Data(msg) => {
-                if msg.index < COUNT {
-                    let message = Message::Data(Data {
-                        index: msg.index + 1,
-                        value: Some(data.clone()),
-                        nodes: vec![],
-                        signature: None,
-                    });
+            Message::Data(ref msg) => {
+                if index(msg) < COUNT {
+                    let message = msg_data(index(msg) + 1, data.clone());
                     channel.send(message).await.unwrap();
                 } else {
                     let time = start.elapsed();
                     let bytes = COUNT * SIZE;
                     trace!(
                         "client completed. {} blocks, {} bytes, {:?}",
-                        msg.index,
+                        index(msg),
                         bytes,
                         time
                     );
@@ -174,4 +160,25 @@ async fn channel_client(channel: &mut Channel) {
             _ => {}
         }
     }
+}
+
+fn msg_data(index: u64, value: Vec<u8>) -> Message {
+    use hypercore::DataBlock;
+
+    Message::Data(Data {
+        request: index,
+        fork: 0,
+        block: Some(DataBlock {
+            index,
+            value,
+            nodes: vec![],
+        }),
+        hash: None,
+        seek: None,
+        upgrade: None,
+    })
+}
+
+fn index(msg: &Data) -> u64 {
+    msg.request
 }

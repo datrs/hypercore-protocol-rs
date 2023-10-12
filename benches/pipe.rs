@@ -2,7 +2,7 @@ use async_std::task;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::StreamExt;
-use hypercore_protocol::schema::*;
+use hypercore_protocol::{schema::*, Duplex};
 use hypercore_protocol::{Channel, Event, Message, Protocol, ProtocolBuilder};
 use log::*;
 use pretty_bytes::converter::convert as pretty_bytes;
@@ -44,10 +44,10 @@ async fn run_echo(i: u64) -> Result<()> {
 
     let encrypted = true;
     let a = ProtocolBuilder::new(true)
-        .set_encrypted(encrypted)
+        .encrypted(encrypted)
         .connect_rw(ar, aw);
     let b = ProtocolBuilder::new(false)
-        .set_encrypted(encrypted)
+        .encrypted(encrypted)
         .connect_rw(br, bw);
     let ta = task::spawn(async move { onconnection(i, a).await });
     let tb = task::spawn(async move { onconnection(i, b).await });
@@ -58,7 +58,7 @@ async fn run_echo(i: u64) -> Result<()> {
 
 // The onconnection handler is called for each incoming connection (if server)
 // or once when connected (if client).
-async fn onconnection<R, W>(i: u64, mut protocol: Protocol<R, W>) -> Result<u64>
+async fn onconnection<R, W>(i: u64, mut protocol: Protocol<Duplex<R, W>>) -> Result<u64>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
@@ -104,8 +104,8 @@ async fn on_channel_resp(_i: u64, mut channel: Channel) -> Result<u64> {
     while let Some(message) = channel.next().await {
         match message {
             Message::Data(ref data) => {
-                len += data.value.as_ref().map_or(0, |v| v.len() as u64);
-                debug!("[b] echo {}", data.index);
+                len += value_len(data);
+                debug!("[b] echo {}", index(data));
                 channel.send(message).await?;
             }
             Message::Close(_) => {
@@ -129,18 +129,14 @@ async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
     while let Some(message) = channel.next().await {
         match message {
             Message::Data(mut data) => {
-                len += data.value.as_ref().map_or(0, |v| v.len() as u64);
-                debug!("[a] recv {}", data.index);
-                if data.index >= COUNT {
-                    debug!("close at {}", data.index);
-                    channel
-                        .send(Message::Close(Close {
-                            discovery_key: None,
-                        }))
-                        .await?;
+                len += value_len(&data);
+                debug!("[a] recv {}", index(&data));
+                if index(&data) >= COUNT {
+                    debug!("close at {}", index(&data));
+                    channel.close().await?;
                     break;
                 } else {
-                    data.index += 1;
+                    increment_index(&mut data);
                     channel.send(Message::Data(data)).await?;
                 }
             }
@@ -153,12 +149,32 @@ async fn on_channel_init(i: u64, mut channel: Channel) -> Result<u64> {
 }
 
 fn msg_data(index: u64, value: Vec<u8>) -> Message {
+    use hypercore::DataBlock;
+
     Message::Data(Data {
-        index,
-        value: Some(value),
-        nodes: vec![],
-        signature: None,
+        request: index,
+        fork: 0,
+        block: Some(DataBlock {
+            index,
+            value,
+            nodes: vec![],
+        }),
+        hash: None,
+        seek: None,
+        upgrade: None,
     })
+}
+
+fn index(data: &Data) -> u64 {
+    data.request
+}
+
+fn increment_index(data: &mut Data) {
+    data.request += 1;
+}
+
+fn value_len(data: &Data) -> u64 {
+    data.block.as_ref().map_or(0, |b| b.value.len() as u64)
 }
 
 fn print_stats(msg: impl ToString, instant: Instant, bytes: f64) {
