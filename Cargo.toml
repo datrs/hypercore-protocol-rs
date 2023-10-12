@@ -36,7 +36,7 @@ tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3"
 futures-lite = "1"
-hypercore = { git = "https://github.com/datrs/hypercore", branch = "v10", default-features = false }
+hypercore = { version = "0.12", default-features = false }
 sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
