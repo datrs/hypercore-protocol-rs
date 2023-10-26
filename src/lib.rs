@@ -140,5 +140,5 @@ pub use async_channel::{
 pub use duplex::Duplex;
 pub use hypercore; // Re-export hypercore
 pub use message::Message;
-pub use protocol::{DiscoveryKey, Event, Key, Protocol};
+pub use protocol::{Command, CommandTx, DiscoveryKey, Event, Key, Protocol};
 pub use util::discovery_key;

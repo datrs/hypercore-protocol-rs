@@ -76,15 +76,19 @@ pub enum Event {
     /// Emitted when a channel is closed.
     Close(DiscoveryKey),
     /// Convenience event to make it possible to signal the protocol from a channel.
-    /// See channel.signal_local().
+    /// See channel.signal_local() and protocol.commands().signal_local().
     LocalSignal((String, Vec<u8>)),
 }
 
 /// A protocol command.
 #[derive(Debug)]
 pub enum Command {
+    /// Open a channel
     Open(Key),
+    /// Close a channel by discovery key
     Close(DiscoveryKey),
+    /// Signal locally to protocol
+    SignalLocal((String, Vec<u8>)),
 }
 
 impl fmt::Debug for Event {
@@ -501,7 +505,8 @@ where
     fn on_command(&mut self, command: Command) -> Result<()> {
         match command {
             Command::Open(key) => self.command_open(key),
-            _ => Ok(()),
+            Command::Close(discovery_key) => self.command_close(discovery_key),
+            Command::SignalLocal((name, data)) => self.command_signal_local(name, data),
         }
     }
 
@@ -530,6 +535,19 @@ where
         let channel_message = ChannelMessage::new(channel, message);
         self.write_state
             .queue_frame(Frame::MessageBatch(vec![channel_message]));
+        Ok(())
+    }
+
+    fn command_close(&mut self, discovery_key: DiscoveryKey) -> Result<()> {
+        if self.channels.has_channel(&discovery_key) {
+            self.channels.remove(&discovery_key);
+            self.queue_event(Event::Close(discovery_key));
+        }
+        Ok(())
+    }
+
+    fn command_signal_local(&mut self, name: String, data: Vec<u8>) -> Result<()> {
+        self.queue_event(Event::LocalSignal((name, data)));
         Ok(())
     }
 
@@ -620,6 +638,7 @@ where
 pub struct CommandTx(Sender<Command>);
 
 impl CommandTx {
+    /// Send a protocol command
     pub async fn send(&mut self, command: Command) -> Result<()> {
         self.0.send(command).await.map_err(map_channel_err)
     }
@@ -633,6 +652,12 @@ impl CommandTx {
     /// Close a protocol channel.
     pub async fn close(&mut self, discovery_key: DiscoveryKey) -> Result<()> {
         self.send(Command::Close(discovery_key)).await
+    }
+
+    /// Send a local signal event to the protocol.
+    pub async fn signal_local(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
+        self.send(Command::SignalLocal((name.to_string(), data)))
+            .await
     }
 }
 
