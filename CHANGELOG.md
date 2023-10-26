@@ -6,6 +6,10 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 * TODO: Add changes here as they happen
 
+### 0.4.1
+
+* Implement close() and signal_local() in CommandTx
+
 ### 0.4.0
 
 #### API breaking changes
