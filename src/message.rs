@@ -124,7 +124,9 @@ impl Frame {
                         )?;
                         if length != body_len as usize {
                             tracing::warn!(
-                                "Did not know what to do with all the bytes, got {} but decoded {}",
+                                "Did not know what to do with all the bytes, got {} but decoded {}. \
+                                This may be because the peer implements a newer protocol version \
+                                that has extra fields.",
                                 body_len,
                                 length
                             );
@@ -202,11 +204,11 @@ impl Frame {
             } else if buf[1] == 0x01 {
                 // Open message
                 let (channel_message, length) = ChannelMessage::decode_open_message(&buf[2..])?;
-                Ok((Frame::MessageBatch(vec![channel_message]), length))
+                Ok((Frame::MessageBatch(vec![channel_message]), length + 2))
             } else if buf[1] == 0x03 {
                 // Close message
                 let (channel_message, length) = ChannelMessage::decode_close_message(&buf[2..])?;
-                Ok((Frame::MessageBatch(vec![channel_message]), length))
+                Ok((Frame::MessageBatch(vec![channel_message]), length + 2))
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
