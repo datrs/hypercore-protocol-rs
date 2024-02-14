@@ -13,6 +13,7 @@ cargo-install:### 	cargo install --path .
 	@cargo install --path $(PWD)
 cargo-br:cargo-build-release### 	cargo-br
 ## 	make cargo-br q=true
+cargo-b-release:cargo-build-release### 	cargo-build-release
 cargo-build-release:### 	cargo-build-release
 ## 	make cargo-build-release q=true
 	@. $(HOME)/.cargo/env
@@ -30,22 +31,12 @@ cargo-report:### 	cargo-report
 	@. $(HOME)/.cargo/env
 	cargo report future-incompatibilities --id 1
 
-cargo-deps-gnostr-all:cargo-deps-gnostr-cat cargo-deps-gnostr-cli cargo-deps-gnostr-command cargo-deps-gnostr-grep cargo-deps-gnostr-legit cargo-deps-gnostr-sha256### 	cargo-deps-gnostr-all
-cargo-deps-gnostr-cat:### 	cargo-deps-gnostr-cat
-	rustup-init -y -q --default-toolchain $(TOOLCHAIN) && \
-    source "$(HOME)/.cargo/env" && \
-    cd deps/gnostr-cat && $(MAKE) cargo-build-release cargo-install
-    ## cargo $(Z) deps/gnostr-cat install --path .
-cargo-deps-gnostr-cli:### 	cargo-deps-gnostr-cli
-	cargo -Z unstable-options  -C deps/gnostr-cli install --path .
-cargo-deps-gnostr-command:### 	cargo-deps-gnostr-command
-	cargo -Z unstable-options  -C deps/gnostr-command install --path .
-cargo-deps-gnostr-grep:### 	cargo-deps-gnostr-grep
-	cargo -Z unstable-options  -C deps/gnostr-grep install --path .
-cargo-deps-gnostr-legit:### 	cargo-deps-gnostr-legit
-	cargo -Z unstable-options  -C deps/gnostr-legit install --path .
-cargo-deps-gnostr-sha256:### 	cargo-deps-gnostr-sha256
-	cargo -Z unstable-options  -C deps/gnostr-sha256 install --path .
-
+cargo-sort:## 	cargo-sort
+	@[ -x cargo-sort ] || cargo install cargo-sort
+	cargo-sort
+#cargo-deny-check-bans:## 	cargo-deny-check-bans
+#	@[ -x cargo-deny ] || cargo install cargo-deny
+#	cargo deny check bans
+#
 # vim: set noexpandtab:
 # vim: set setfiletype make

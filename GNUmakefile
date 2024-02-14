@@ -1,4 +1,3 @@
-
 ifeq ($(project),)
 PROJECT_NAME                            := $(notdir $(PWD))
 else
@@ -166,7 +165,8 @@ export GIT_REPO_NAME
 GIT_REPO_PATH                           := $(HOME)/$(GIT_REPO_NAME)
 export GIT_REPO_PATH
 
-
+GNOSTR_BITS=$(shell which gnostr-bits)
+export GNOSTR_BITS
 
 .PHONY:- help
 -:
@@ -175,8 +175,6 @@ export GIT_REPO_PATH
 more:## 	more help
 	@sed -n 's/^##//p' ${MAKEFILE_LIST} | column -t -s ':' |  sed -e 's/^/	/'
 	#$(MAKE) -f Makefile help
-
--include Makefile
 
 ##initialize
 ##	git submodule update --init --recursive
@@ -383,13 +381,27 @@ nvm: ## 	nvm
 nvm-clean: ## 	nvm-clean
 	@rm -rf ~/.nvm
 
--include gnostr.mk
--include gnostr-act.mk
--include gnostr-bot.mk
--include venv.mk
--include clean.mk
+rustup-install:
+## 	rustup target add x86_64-unknown-linux-musl
+	rustup target add x86_64-unknown-linux-musl
+
+## test-dl-from-remote:## 	test-dl-from-remote
+## 	rm -rf ~/.gnostr/bits/test-remote
+## 	$(GNOSTR_BITS) download https://bitcoincore.org/bin/bitcoin-core-26.0/bitcoin-26.0.torrent -o ~/.gnostr/bits/test-remote
+## test-dl-from-local:## 	test-dl-from-local
+## 	rm -rf ~/.gnostr/bits/test-local
+## 	$(GNOSTR_BITS) download ./bitcoin-26.0.local.torrent -o ~/.gnostr/bits/test-local
+
+.PHONY:desktop
+desktop:
+	@npx kill-port 4240 >/tmp/gnostr-bits.log || true
+	@npx kill-port 3030 >/tmp/gnostr-bits.log || true
+	@pushd desktop && npm run dev >/tmp/gnostr-bits.log &
+	@pushd desktop/src-tauri >/tmp/gnostr-bits.log && cargo run
+
+-include Makefile
 -include cargo.mk
--include tests.mk
+-include node.mk
 
 # vim: set noexpandtab:
 # vim: set setfiletype make
