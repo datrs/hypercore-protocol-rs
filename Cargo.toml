@@ -87,3 +87,5 @@ harness = false
 [[bench]]
 name = "pipe"
 harness = false
+
+[workspace]
