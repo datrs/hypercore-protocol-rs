@@ -20,7 +20,7 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 #### API breaking changes
 
-* Changed the generic argument of the Protocol struct to be a single IO handle (AsyncRead + AsyncWrite) in place of a R: AsyncRead and W: AsyncWrite. This is a change in the public API. If you have seperate reader and writer structs, a Duplex handle is provided that combines the reader and writer. If you have a struct that is both AsyncRead and AsyncWrite, the Protocol is now generic just over that struct.
+* Changed the generic argument of the Protocol struct to be a single IO handle (AsyncRead + AsyncWrite) in place of a R: AsyncRead and W: AsyncWrite. This is a change in the public API. If you have separate reader and writer structs, a Duplex handle is provided that combines the reader and writer. If you have a struct that is both AsyncRead and AsyncWrite, the Protocol is now generic just over that struct.
 * Reworked internals to use manual poll functions and not an async function. The `Protocol` struct now directly implements `Stream`, the `ProtocolStream` wrapper is removed.
 * Made the `Event` enum non-exhaustive.
 * Removed the `destroy` method, errors are emitted on the protocol stream.

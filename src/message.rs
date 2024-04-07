@@ -51,7 +51,7 @@ impl Encoder for &[u8] {
 pub(crate) enum Frame {
     /// A raw batch binary buffer. Used in the handshaking phase.
     RawBatch(Vec<Vec<u8>>),
-    /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
+    /// Message batch, containing one or more channel messages. Used for everything after the handshake.
     MessageBatch(Vec<ChannelMessage>),
 }
 
