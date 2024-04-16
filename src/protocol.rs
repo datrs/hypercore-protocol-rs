@@ -66,7 +66,7 @@ pub type Key = [u8; 32];
 #[non_exhaustive]
 #[derive(PartialEq)]
 pub enum Event {
-    /// Emitted after the handshake with the remove peer is complete.
+    /// Emitted after the handshake with the remote peer is complete.
     /// This is the first event (if the handshake is not disabled).
     Handshake(RemotePublicKey),
     /// Emitted when the remote peer opens a channel that we did not yet open.
