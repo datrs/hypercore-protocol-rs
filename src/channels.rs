@@ -120,7 +120,7 @@ impl Channel {
     /// you will only want to send a LocalSignal message with this sender to make
     /// it clear what event came from the remote peer and what was local
     /// signaling.
-    pub fn local_sender(&mut self) -> Sender<Message> {
+    pub fn local_sender(&self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
     }
 
