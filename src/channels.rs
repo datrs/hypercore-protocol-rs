@@ -124,6 +124,10 @@ impl Channel {
         self.direct_inbound_tx.clone()
     }
 
+    pub fn sender(&self) -> Sender<Vec<ChannelMessage>> {
+        self.outbound_tx.clone()
+    }
+
     /// Send a close message and close this channel.
     pub async fn close(&mut self) -> Result<()> {
         if self.closed() {
