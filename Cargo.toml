@@ -40,6 +40,7 @@ hypercore = { version = "0.13.0",  default-features = false }
 sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
+tokio = { version = "1.12.0", featuers = ["sync"], optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
@@ -64,8 +65,8 @@ wasm-bindgen = [
 ]
 sparse = ["hypercore/sparse"]
 cache = ["hypercore/cache"]
-tokio = ["hypercore/tokio"]
-async-std = ["hypercore/async-std"]
+tokio = [ "dep:tokio", "tokio/sync", "hypercore/tokio" ]
+async-std = [ "hypercore/async-std" ]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
 # cargo test --features js_interop_tests

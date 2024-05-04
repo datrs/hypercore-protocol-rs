@@ -14,6 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 
+#[cfg(feature = "debug")]
+static MAX_SENT_MSG_QUE: usize = 32;
+
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
@@ -27,7 +30,8 @@ pub struct Channel {
     local_id: usize,
     closed: Arc<AtomicBool>,
     #[cfg(feature = "debug")]
-    sent_messages: Vec<Message>,
+    /// feed of messages sent through channel
+    pub messages: tokio::sync::broadcast::Sender<Message>,
 }
 
 impl PartialEq for Channel {
@@ -75,11 +79,11 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        let message = ChannelMessage::new(self.local_id as u64, message);
         #[cfg(feature = "debug")]
         {
-            self.sent_messages.push(message.clone());
+            let _ = self.messages.send(message.clone());
         }
+        let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
             .await
@@ -104,6 +108,12 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+        #[cfg(feature = "debug")]
+        {
+            for m in messages.to_vec() {
+                let _ = self.messages.send(m);
+            }
+        }
         let messages = messages
             .iter()
             .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
@@ -112,6 +122,12 @@ impl Channel {
             .send(messages)
             .await
             .map_err(map_channel_err)
+    }
+
+    #[cfg(feature = "debug")]
+    /// get the messages that this channel has sent
+    pub fn listen_to_sent_messages(&self) -> tokio::sync::broadcast::Receiver<Message> {
+        self.messages.subscribe()
     }
 
     /// Take the receiving part out of the channel.
@@ -129,10 +145,6 @@ impl Channel {
     /// signaling.
     pub fn local_sender(&self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
-    }
-
-    pub fn sender(&self) -> Sender<Vec<ChannelMessage>> {
-        self.outbound_tx.clone()
     }
 
     /// Send a close message and close this channel.
@@ -276,6 +288,8 @@ impl ChannelHandle {
             key: local_state.key,
             local_id: local_state.local_id,
             closed: self.closed.clone(),
+            #[cfg(feature = "debug")]
+            messages: tokio::sync::broadcast::channel(MAX_SENT_MSG_QUE).0,
         };
         self.inbound_tx = Some(inbound_tx);
         channel
