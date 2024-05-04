@@ -70,6 +70,8 @@ async-std = ["hypercore/async-std"]
 # to verify that this crate works. To run them, use:
 # cargo test --features js_interop_tests
 js_interop_tests = []
+# Used for inspecting messages sent over the channel for debugging and testing 
+debug = []
 
 [profile.bench]
 # debug = true

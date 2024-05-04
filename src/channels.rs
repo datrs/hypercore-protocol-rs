@@ -26,6 +26,8 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
+    #[cfg(feature = "debug")]
+    sent_messages: Vec<Message>,
 }
 
 impl PartialEq for Channel {
@@ -74,6 +76,10 @@ impl Channel {
             ));
         }
         let message = ChannelMessage::new(self.local_id as u64, message);
+        #[cfg(feature = "debug")]
+        {
+            self.sent_messages.push(message.clone());
+        }
         self.outbound_tx
             .send(vec![message])
             .await
