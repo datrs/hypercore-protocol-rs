@@ -55,8 +55,8 @@ impl Channel {
         inbound_rx: Option<Receiver<Message>>,
         direct_inbound_tx: Sender<Message>,
         outbound_tx: Sender<Vec<ChannelMessage>>,
-        key: Key,
         discovery_key: DiscoveryKey,
+        key: Key,
         local_id: usize,
         closed: Arc<AtomicBool>,
     ) -> Self {
