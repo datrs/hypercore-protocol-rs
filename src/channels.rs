@@ -245,8 +245,8 @@ impl ChannelHandle {
     }
 
     #[cfg(feature = "debug")]
-    fn subscribe_to_messages(&self) -> Option<tokio::sync::broadcast::Receiver<Message>> {
-        self.messages_subscriber.as_ref().map(|s| s.subscribe())
+    fn get_message_sender(&self) -> Option<tokio::sync::broadcast::Sender<Message>> {
+        self.messages_subscriber.as_ref().map(|s| s.clone())
     }
 
     fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
@@ -384,12 +384,12 @@ impl ChannelMap {
     }
 
     #[cfg(feature = "debug")]
-    pub(crate) fn subscribe_to_messages(
+    pub(crate) fn get_message_senders(
         &self,
-    ) -> HashMap<String, Option<tokio::sync::broadcast::Receiver<Message>>> {
+    ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
         let mut out = HashMap::new();
         for (key, chan_hand) in self.channels.iter() {
-            out.insert(key.clone(), chan_hand.subscribe_to_messages());
+            out.insert(key.clone(), chan_hand.get_message_sender());
         }
         out
     }

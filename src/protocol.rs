@@ -183,10 +183,10 @@ where
         }
     }
     #[cfg(feature = "debug")]
-    pub fn subscribe_to_messages(
+    pub fn get_message_senders(
         &self,
-    ) -> HashMap<String, Option<tokio::sync::broadcast::Receiver<Message>>> {
-        self.channels.subscribe_to_messages()
+    ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
+        self.channels.get_message_senders()
     }
 
     /// Whether this protocol stream initiated the underlying IO connection.
