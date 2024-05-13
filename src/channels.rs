@@ -51,6 +51,27 @@ impl fmt::Debug for Channel {
 }
 
 impl Channel {
+    fn new(
+        inbound_rx: Option<Receiver<Message>>,
+        direct_inbound_tx: Sender<Message>,
+        outbound_tx: Sender<Vec<ChannelMessage>>,
+        key: Key,
+        discovery_key: DiscoveryKey,
+        local_id: usize,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inbound_rx,
+            direct_inbound_tx,
+            outbound_tx,
+            key,
+            discovery_key,
+            local_id,
+            closed,
+            #[cfg(feature = "debug")]
+            messages: tokio::sync::broadcast::channel(MAX_SENT_MSG_QUE).0,
+        }
+    }
     /// Get the discovery key of this channel.
     pub fn discovery_key(&self) -> &[u8; 32] {
         &self.discovery_key
@@ -194,6 +215,8 @@ pub(crate) struct ChannelHandle {
     remote_state: Option<RemoteState>,
     inbound_tx: Option<Sender<Message>>,
     closed: Arc<AtomicBool>,
+    #[cfg(feature = "debug")]
+    messages_subscriber: Option<tokio::sync::broadcast::Sender<Message>>,
 }
 
 #[derive(Clone, Debug)]
@@ -216,8 +239,16 @@ impl ChannelHandle {
             remote_state: None,
             inbound_tx: None,
             closed: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "debug")]
+            messages_subscriber: None,
         }
     }
+
+    #[cfg(feature = "debug")]
+    fn subscribe_to_messages(&self) -> Option<tokio::sync::broadcast::Receiver<Message>> {
+        self.messages_subscriber.as_ref().map(|s| s.subscribe())
+    }
+
     fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
         let mut this = Self::new(discovery_key);
         this.attach_local(local_id, key);
@@ -280,17 +311,21 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let channel = Channel {
-            inbound_rx: Some(inbound_rx),
-            direct_inbound_tx: inbound_tx.clone(),
+        let channel = Channel::new(
+            Some(inbound_rx),
+            inbound_tx.clone(),
             outbound_tx,
-            discovery_key: self.discovery_key,
-            key: local_state.key,
-            local_id: local_state.local_id,
-            closed: self.closed.clone(),
-            #[cfg(feature = "debug")]
-            messages: tokio::sync::broadcast::channel(MAX_SENT_MSG_QUE).0,
-        };
+            self.discovery_key,
+            local_state.key,
+            local_state.local_id,
+            self.closed.clone(),
+        );
+
+        #[cfg(feature = "debug")]
+        {
+            self.messages_subscriber = Some(channel.messages.clone());
+        }
+
         self.inbound_tx = Some(inbound_tx);
         channel
     }
@@ -346,6 +381,17 @@ impl ChannelMap {
             local_id: vec![None],
             remote_id: vec![],
         }
+    }
+
+    #[cfg(feature = "debug")]
+    pub(crate) fn subscribe_to_messages(
+        &self,
+    ) -> HashMap<String, Option<tokio::sync::broadcast::Receiver<Message>>> {
+        let mut out = HashMap::new();
+        for (key, chan_hand) in self.channels.iter() {
+            out.insert(key.clone(), chan_hand.subscribe_to_messages());
+        }
+        out
     }
 
     pub(crate) fn attach_local(&mut self, key: Key) -> &ChannelHandle {
