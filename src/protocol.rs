@@ -20,6 +20,9 @@ use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::writer::WriteState;
 
+#[cfg(feature = "debug")]
+use std::collections::HashMap;
+
 macro_rules! return_error {
     ($msg:expr) => {
         if let Err(e) = $msg {
@@ -178,6 +181,12 @@ where
             keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
         }
+    }
+    #[cfg(feature = "debug")]
+    pub fn get_message_senders(
+        &self,
+    ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
+        self.channels.get_message_senders()
     }
 
     /// Whether this protocol stream initiated the underlying IO connection.

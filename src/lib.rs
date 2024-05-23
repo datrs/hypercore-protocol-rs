@@ -135,7 +135,11 @@ pub use builder::Builder as ProtocolBuilder;
 pub use channels::Channel;
 // Export the needed types for Channel::take_receiver, and Channel::local_sender()
 pub use async_channel::{
-    Receiver as ChannelReceiver, SendError as ChannelSendError, Sender as ChannelSender,
+    Receiver as ChannelReceiver,
+    SendError as ChannelSendError,
+    // TODO why do we expose this? Users can't use it for outbound_tx because they cant use acces to
+    // crate::messages::ChannelMessage.
+    Sender as ChannelSender,
 };
 pub use duplex::Duplex;
 pub use hypercore; // Re-export hypercore
