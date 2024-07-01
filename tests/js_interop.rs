@@ -8,8 +8,6 @@ use hypercore::{
     VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use instant::Duration;
-use random_access_disk::RandomAccessDisk;
-use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::Arc;
@@ -388,7 +386,7 @@ async fn create_writer_hypercore(
     data_size: usize,
     data_char: char,
     path: &str,
-) -> Result<Hypercore<RandomAccessDisk>> {
+) -> Result<Hypercore> {
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(true);
     let storage = Storage::new_disk(&path, false).await?;
@@ -403,7 +401,7 @@ async fn create_writer_hypercore(
     Ok(hypercore)
 }
 
-async fn create_reader_hypercore(path: &str) -> Result<Hypercore<RandomAccessDisk>> {
+async fn create_reader_hypercore(path: &str) -> Result<Hypercore> {
     let path = Path::new(path).to_owned();
     let key_pair = get_test_key_pair(false);
     let storage = Storage::new_disk(&path, false).await?;
@@ -442,14 +440,11 @@ pub fn get_test_key_pair(include_secret: bool) -> PartialKeypair {
 }
 
 #[cfg(feature = "async-std")]
-async fn on_replication_connection<T: 'static>(
+async fn on_replication_connection(
     stream: TcpStream,
     is_initiator: bool,
-    hypercore: Arc<HypercoreWrapper<T>>,
-) -> Result<()>
-where
-    T: RandomAccess + Debug + Send,
-{
+    hypercore: Arc<HypercoreWrapper>,
+) -> Result<()> {
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
     while let Some(event) = protocol.next().await {
         let event = event?;
@@ -479,14 +474,11 @@ where
 }
 
 #[cfg(feature = "tokio")]
-async fn on_replication_connection<T: 'static>(
+async fn on_replication_connection(
     stream: TcpStream,
     is_initiator: bool,
-    hypercore: Arc<HypercoreWrapper<T>>,
-) -> Result<()>
-where
-    T: RandomAccess + Debug + Send,
-{
+    hypercore: Arc<HypercoreWrapper>,
+) -> Result<()> {
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream.compat());
     while let Some(event) = protocol.next().await {
         let event = event?;
@@ -516,21 +508,15 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct HypercoreWrapper<T>
-where
-    T: RandomAccess + Debug + Send,
-{
+pub struct HypercoreWrapper {
     discovery_key: [u8; 32],
     key: [u8; 32],
-    hypercore: Arc<Mutex<Hypercore<T>>>,
+    hypercore: Arc<Mutex<Hypercore>>,
     result_path: Option<String>,
 }
 
-impl HypercoreWrapper<RandomAccessDisk> {
-    pub fn from_disk_hypercore(
-        hypercore: Hypercore<RandomAccessDisk>,
-        result_path: Option<String>,
-    ) -> Self {
+impl HypercoreWrapper {
+    pub fn from_disk_hypercore(hypercore: Hypercore, result_path: Option<String>) -> Self {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
@@ -539,12 +525,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
             result_path,
         }
     }
-}
 
-impl<T> HypercoreWrapper<T>
-where
-    T: RandomAccess + Debug + Send + 'static,
-{
     pub fn key(&self) -> &[u8; 32] {
         &self.key
     }
@@ -609,16 +590,13 @@ where
     }
 }
 
-async fn on_replication_message<T>(
-    hypercore: &mut Arc<Mutex<Hypercore<T>>>,
+async fn on_replication_message(
+    hypercore: &mut Arc<Mutex<Hypercore>>,
     peer_state: &mut PeerState,
     result_path: Option<String>,
     channel: &mut Channel,
     message: Message,
-) -> Result<bool>
-where
-    T: RandomAccess + Debug + Send,
-{
+) -> Result<bool> {
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
@@ -857,7 +835,7 @@ impl RustServer {
         RustServer { handle: None }
     }
 
-    pub async fn run(&mut self, hypercore: Arc<HypercoreWrapper<RandomAccessDisk>>, port: u32) {
+    pub async fn run(&mut self, hypercore: Arc<HypercoreWrapper>, port: u32) {
         self.handle = Some(task::spawn(async move {
             tcp_server(port, on_replication_connection, hypercore)
                 .await
