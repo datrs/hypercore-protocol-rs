@@ -10,8 +10,6 @@ use hypercore::{
     VerifyingKey,
 };
 use log::*;
-use random_access_memory::RandomAccessMemory;
-use random_access_storage::RandomAccess;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::env;
@@ -38,7 +36,7 @@ fn main() {
     });
 
     task::block_on(async move {
-        let mut hypercore_store: HypercoreStore<RandomAccessMemory> = HypercoreStore::new();
+        let mut hypercore_store: HypercoreStore = HypercoreStore::new();
         let storage = Storage::new_memory().await.unwrap();
         // Create a hypercore.
         let hypercore = if let Some(key) = key {
@@ -86,14 +84,11 @@ fn usage() {
 // or once when connected (if client).
 // Unfortunately, everything that touches the hypercore_store or a hypercore has to be generic
 // at the moment.
-async fn onconnection<T: 'static>(
+async fn onconnection(
     stream: TcpStream,
     is_initiator: bool,
-    hypercore_store: Arc<HypercoreStore<T>>,
-) -> Result<()>
-where
-    T: RandomAccess + Debug + Send,
-{
+    hypercore_store: Arc<HypercoreStore>,
+) -> Result<()> {
     info!("onconnection, initiator: {}", is_initiator);
     let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
     info!("protocol created, polling for next()");
@@ -127,27 +122,21 @@ where
 
 /// A container for hypercores.
 #[derive(Debug)]
-struct HypercoreStore<T>
-where
-    T: RandomAccess + Debug + Send,
-{
-    hypercores: HashMap<String, Arc<HypercoreWrapper<T>>>,
+struct HypercoreStore {
+    hypercores: HashMap<String, Arc<HypercoreWrapper>>,
 }
-impl<T> HypercoreStore<T>
-where
-    T: RandomAccess + Debug + Send,
-{
+impl HypercoreStore {
     pub fn new() -> Self {
         let hypercores = HashMap::new();
         Self { hypercores }
     }
 
-    pub fn add(&mut self, hypercore: HypercoreWrapper<T>) {
+    pub fn add(&mut self, hypercore: HypercoreWrapper) {
         let hdkey = hex::encode(hypercore.discovery_key);
         self.hypercores.insert(hdkey, Arc::new(hypercore));
     }
 
-    pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<HypercoreWrapper<T>>> {
+    pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<HypercoreWrapper>> {
         let hdkey = hex::encode(discovery_key);
         self.hypercores.get(&hdkey)
     }
@@ -155,17 +144,14 @@ where
 
 /// A Hypercore is a single unit of replication, an append-only log.
 #[derive(Debug, Clone)]
-struct HypercoreWrapper<T>
-where
-    T: RandomAccess + Debug + Send,
-{
+struct HypercoreWrapper {
     discovery_key: [u8; 32],
     key: [u8; 32],
-    hypercore: Arc<Mutex<Hypercore<T>>>,
+    hypercore: Arc<Mutex<Hypercore>>,
 }
 
-impl HypercoreWrapper<RandomAccessMemory> {
-    pub fn from_memory_hypercore(hypercore: Hypercore<RandomAccessMemory>) -> Self {
+impl HypercoreWrapper {
+    pub fn from_memory_hypercore(hypercore: Hypercore) -> Self {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
@@ -173,12 +159,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
             hypercore: Arc::new(Mutex::new(hypercore)),
         }
     }
-}
 
-impl<T> HypercoreWrapper<T>
-where
-    T: RandomAccess + Debug + Send + 'static,
-{
     pub fn key(&self) -> &[u8; 32] {
         &self.key
     }
@@ -263,15 +244,12 @@ impl Default for PeerState {
     }
 }
 
-async fn onmessage<T>(
-    hypercore: &mut Arc<Mutex<Hypercore<T>>>,
+async fn onmessage(
+    hypercore: &mut Arc<Mutex<Hypercore>>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-) -> Result<()>
-where
-    T: RandomAccess + Debug + Send,
-{
+) -> Result<()> {
     match message {
         Message::Synchronize(message) => {
             println!("Got Synchronize message {message:?}");
