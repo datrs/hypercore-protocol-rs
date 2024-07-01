@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 
-#[cfg(feature = "debug")]
+/// ChannelMap holds ChannelHandle's which can give you a Channel
+
 static MAX_SENT_MSG_QUE: usize = 32;
 
 /// A protocol channel.
@@ -29,7 +30,6 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
-    #[cfg(feature = "debug")]
     /// feed of messages sent through channel
     pub messages: tokio::sync::broadcast::Sender<Message>,
 }
@@ -68,7 +68,6 @@ impl Channel {
             discovery_key,
             local_id,
             closed,
-            #[cfg(feature = "debug")]
             messages: tokio::sync::broadcast::channel(MAX_SENT_MSG_QUE).0,
         }
     }
@@ -100,10 +99,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        #[cfg(feature = "debug")]
-        {
-            let _ = self.messages.send(message.clone());
-        }
+        let _ = self.messages.send(message.clone());
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -129,11 +125,8 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        #[cfg(feature = "debug")]
-        {
-            for m in messages.to_vec() {
-                let _ = self.messages.send(m);
-            }
+        for m in messages.to_vec() {
+            let _ = self.messages.send(m);
         }
         let messages = messages
             .iter()
@@ -145,7 +138,6 @@ impl Channel {
             .map_err(map_channel_err)
     }
 
-    #[cfg(feature = "debug")]
     /// get the messages that this channel has sent
     pub fn listen_to_sent_messages(&self) -> tokio::sync::broadcast::Receiver<Message> {
         self.messages.subscribe()
@@ -215,7 +207,6 @@ pub(crate) struct ChannelHandle {
     remote_state: Option<RemoteState>,
     inbound_tx: Option<Sender<Message>>,
     closed: Arc<AtomicBool>,
-    #[cfg(feature = "debug")]
     messages_subscriber: Option<tokio::sync::broadcast::Sender<Message>>,
 }
 
@@ -239,12 +230,10 @@ impl ChannelHandle {
             remote_state: None,
             inbound_tx: None,
             closed: Arc::new(AtomicBool::new(false)),
-            #[cfg(feature = "debug")]
             messages_subscriber: None,
         }
     }
 
-    #[cfg(feature = "debug")]
     fn get_message_sender(&self) -> Option<tokio::sync::broadcast::Sender<Message>> {
         self.messages_subscriber.as_ref().map(|s| s.clone())
     }
@@ -321,10 +310,7 @@ impl ChannelHandle {
             self.closed.clone(),
         );
 
-        #[cfg(feature = "debug")]
-        {
-            self.messages_subscriber = Some(channel.messages.clone());
-        }
+        self.messages_subscriber = Some(channel.messages.clone());
 
         self.inbound_tx = Some(inbound_tx);
         channel
@@ -383,7 +369,6 @@ impl ChannelMap {
         }
     }
 
-    #[cfg(feature = "debug")]
     pub(crate) fn get_message_senders(
         &self,
     ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
