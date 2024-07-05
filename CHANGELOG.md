@@ -6,6 +6,12 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 * TODO: Add changes here as they happen
 
+### 0.5.0
+
+#### API breaking changes
+
+Support hypercore v0.13.0 which [removed generic parameters from Hypercore and Storage][https://github.com/datrs/hypercore/pull/139].
+
 ### 0.4.1
 
 * Implement close() and signal_local() in CommandTx

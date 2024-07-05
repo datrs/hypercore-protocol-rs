@@ -1,6 +1,6 @@
 [package]
 name = "hypercore-protocol"
-version = "0.4.2-alpha.1"
+version = "0.5.0"
 license = "MIT OR Apache-2.0"
 description = "Replication protocol for Hypercore feeds"
 authors = [
