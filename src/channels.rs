@@ -30,8 +30,7 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
-    /// feed of messages sent through channel
-    pub messages: tokio::sync::broadcast::Sender<Message>,
+    sent_messages: Sender<Message>,
 }
 
 impl PartialEq for Channel {
@@ -59,6 +58,7 @@ impl Channel {
         key: Key,
         local_id: usize,
         closed: Arc<AtomicBool>,
+        sent_messages: Sender<Message>,
     ) -> Self {
         Self {
             inbound_rx,
@@ -68,7 +68,7 @@ impl Channel {
             discovery_key,
             local_id,
             closed,
-            messages: tokio::sync::broadcast::channel(MAX_SENT_MSG_QUE).0,
+            sent_messages,
         }
     }
     /// Get the discovery key of this channel.
@@ -99,7 +99,11 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        let _ = self.messages.send(message.clone());
+        let _ = self
+            .sent_messages
+            .send(message.clone())
+            .await
+            .expect("TODO");
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -125,9 +129,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        for m in messages.to_vec() {
-            let _ = self.messages.send(m);
-        }
+
         let messages = messages
             .iter()
             .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
@@ -136,11 +138,6 @@ impl Channel {
             .send(messages)
             .await
             .map_err(map_channel_err)
-    }
-
-    /// get the messages that this channel has sent
-    pub fn listen_to_sent_messages(&self) -> tokio::sync::broadcast::Receiver<Message> {
-        self.messages.subscribe()
     }
 
     /// Take the receiving part out of the channel.
@@ -207,7 +204,7 @@ pub(crate) struct ChannelHandle {
     remote_state: Option<RemoteState>,
     inbound_tx: Option<Sender<Message>>,
     closed: Arc<AtomicBool>,
-    messages_subscriber: Option<tokio::sync::broadcast::Sender<Message>>,
+    sent_messages: Sender<Message>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,23 +220,24 @@ struct RemoteState {
 }
 
 impl ChannelHandle {
-    fn new(discovery_key: DiscoveryKey) -> Self {
+    fn new(discovery_key: DiscoveryKey, sent_messages: Sender<Message>) -> Self {
         Self {
             discovery_key,
             local_state: None,
             remote_state: None,
             inbound_tx: None,
             closed: Arc::new(AtomicBool::new(false)),
-            messages_subscriber: None,
+            sent_messages,
         }
     }
 
-    fn get_message_sender(&self) -> Option<tokio::sync::broadcast::Sender<Message>> {
-        self.messages_subscriber.as_ref().map(|s| s.clone())
-    }
-
-    fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
-        let mut this = Self::new(discovery_key);
+    fn new_local(
+        local_id: usize,
+        discovery_key: DiscoveryKey,
+        key: Key,
+        sent_messages: Sender<Message>,
+    ) -> Self {
+        let mut this = Self::new(discovery_key, sent_messages);
         this.attach_local(local_id, key);
         this
     }
@@ -248,8 +246,9 @@ impl ChannelHandle {
         remote_id: usize,
         discovery_key: DiscoveryKey,
         remote_capability: Option<Vec<u8>>,
+        sent_messages: Sender<Message>,
     ) -> Self {
-        let mut this = Self::new(discovery_key);
+        let mut this = Self::new(discovery_key, sent_messages);
         this.attach_remote(remote_id, remote_capability);
         this
     }
@@ -300,6 +299,7 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
+        let sent_messages = self.sent_messages.clone();
         let channel = Channel::new(
             Some(inbound_rx),
             inbound_tx.clone(),
@@ -308,9 +308,8 @@ impl ChannelHandle {
             local_state.key,
             local_state.local_id,
             self.closed.clone(),
+            sent_messages,
         );
-
-        self.messages_subscriber = Some(channel.messages.clone());
 
         self.inbound_tx = Some(inbound_tx);
         channel
@@ -356,6 +355,7 @@ pub(crate) struct ChannelMap {
     channels: HashMap<String, ChannelHandle>,
     local_id: Vec<Option<String>>,
     remote_id: Vec<Option<String>>,
+    pub messages: (Sender<Message>, Receiver<Message>),
 }
 
 impl ChannelMap {
@@ -366,17 +366,8 @@ impl ChannelMap {
             // This makes sure that 0 may be used for stream-level extensions.
             local_id: vec![None],
             remote_id: vec![],
+            messages: async_channel::unbounded(),
         }
-    }
-
-    pub(crate) fn get_message_senders(
-        &self,
-    ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
-        let mut out = HashMap::new();
-        for (key, chan_hand) in self.channels.iter() {
-            out.insert(key.clone(), chan_hand.get_message_sender());
-        }
-        out
     }
 
     pub(crate) fn attach_local(&mut self, key: Key) -> &ChannelHandle {
@@ -384,10 +375,13 @@ impl ChannelMap {
         let hdkey = hex::encode(discovery_key);
         let local_id = self.alloc_local();
 
+        let sent_messages = self.messages.0.clone();
         self.channels
             .entry(hdkey.clone())
             .and_modify(|channel| channel.attach_local(local_id, key))
-            .or_insert_with(|| ChannelHandle::new_local(local_id, discovery_key, key));
+            .or_insert_with(|| {
+                ChannelHandle::new_local(local_id, discovery_key, key, sent_messages)
+            });
 
         self.local_id[local_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()
@@ -401,11 +395,18 @@ impl ChannelMap {
     ) -> &ChannelHandle {
         let hdkey = hex::encode(discovery_key);
         self.alloc_remote(remote_id);
+        let sent_messages = self.messages.0.clone();
+
         self.channels
             .entry(hdkey.clone())
             .and_modify(|channel| channel.attach_remote(remote_id, remote_capability.clone()))
             .or_insert_with(|| {
-                ChannelHandle::new_remote(remote_id, discovery_key, remote_capability)
+                ChannelHandle::new_remote(
+                    remote_id,
+                    discovery_key,
+                    remote_capability,
+                    sent_messages,
+                )
             });
         self.remote_id[remote_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()

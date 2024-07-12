@@ -20,8 +20,6 @@ use crate::schema::*;
 use crate::util::{map_channel_err, pretty_hash};
 use crate::writer::WriteState;
 
-use std::collections::HashMap;
-
 macro_rules! return_error {
     ($msg:expr) => {
         if let Err(e) = $msg {
@@ -145,7 +143,8 @@ pub struct Protocol<IO> {
     state: State,
     options: Options,
     handshake: Option<HandshakeResult>,
-    channels: ChannelMap,
+    #[allow(private_interfaces)]
+    pub channels: ChannelMap,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
     outbound_rx: Receiver<Vec<ChannelMessage>>,
@@ -179,15 +178,12 @@ where
             outbound_rx,
             keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
+            //channel_messages: async_channel::unbounded(),
         }
     }
-    /// get messages sent in this protocol
-    pub fn get_message_senders(
-        &self,
-    ) -> HashMap<String, Option<tokio::sync::broadcast::Sender<Message>>> {
-        self.channels.get_message_senders()
+    pub fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
+        self.channels.messages.1.clone()
     }
-
     /// Whether this protocol stream initiated the underlying IO connection.
     pub fn is_initiator(&self) -> bool {
         self.options.is_initiator
@@ -518,6 +514,7 @@ where
         }
     }
 
+    /// open a Channel with the given key. Adding it to our channel map
     fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key);
