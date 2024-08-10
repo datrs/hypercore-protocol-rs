@@ -461,14 +461,16 @@ impl CompactEncoding<Bitfield> for State {
 }
 
 /// Range message. Type 8.
+/// Sender sharing info about a range of contiguous blocks it has.
+/// the range is from Range.start to (Range.start + Range.length)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Range {
     /// If true, notifies that data has been cleared from this range.
     /// If false, notifies existing data range.
     pub drop: bool,
-    /// Start index
+    /// range starts at this index
     pub start: u64,
-    /// Length
+    /// length of the range
     pub length: u64,
 }
 
