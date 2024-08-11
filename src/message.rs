@@ -459,16 +459,22 @@ impl fmt::Display for Message {
                 pretty_fmt(&msg.discovery_key).unwrap(),
                 msg.capability.as_ref().map_or(0, |c| c.len())
             ),
-            Self::Data(msg) => write!(
-                f,
-                "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade: {})",
-                msg.request,
-                msg.fork,
-                msg.block.is_some(),
-                msg.hash.is_some(),
-                msg.seek.is_some(),
-                msg.upgrade.is_some(),
-            ),
+            Self::Data(msg) => {
+                write!(
+                    f,
+                    "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade:",
+                    msg.request,
+                    msg.fork,
+                    msg.block.is_some(),
+                    msg.hash.is_some(),
+                    msg.seek.is_some(),
+                )?;
+                let s = match &msg.upgrade {
+                    Some(du) => format!("{du}"),
+                    None => "false".to_owned(),
+                };
+                write!(f, " {s})")
+            }
             _ => write!(f, "{:?}", &self),
         }
     }
