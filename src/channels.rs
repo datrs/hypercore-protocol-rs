@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -32,6 +32,7 @@ pub struct Channel {
     local_id: usize,
     closed: Arc<AtomicBool>,
     sent_messages: Sender<Message>,
+    name: String,
 }
 
 impl PartialEq for Channel {
@@ -50,6 +51,8 @@ impl fmt::Debug for Channel {
     }
 }
 
+static CHANNEL_NAMES: AtomicUsize = AtomicUsize::new(44);
+
 impl Channel {
     fn new(
         inbound_rx: Option<Receiver<Message>>,
@@ -61,6 +64,9 @@ impl Channel {
         closed: Arc<AtomicBool>,
         sent_messages: Sender<Message>,
     ) -> Self {
+        let x = CHANNEL_NAMES.load(Ordering::SeqCst).clone();
+        let name = format!("{x}");
+        CHANNEL_NAMES.fetch_add(11, Ordering::SeqCst);
         Self {
             inbound_rx,
             direct_inbound_tx,
@@ -70,6 +76,7 @@ impl Channel {
             local_id,
             closed,
             sent_messages,
+            name,
         }
     }
     /// Get the discovery key of this channel.
@@ -100,6 +107,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+        println!("{}-TX:\n{message}\n", self.name);
         let _ = self
             .sent_messages
             .send(message.clone())
@@ -129,6 +137,11 @@ impl Channel {
                 ErrorKind::ConnectionAborted,
                 "Channel is closed",
             ));
+        }
+
+        for m in messages.iter() {
+            println!("{}-TX:\n{m}\n", self.name);
+            let _ = self.sent_messages.send(m.clone()).await.expect("TODO");
         }
 
         let messages = messages
@@ -191,6 +204,7 @@ impl Stream for Channel {
             None => Poll::Ready(None),
             Some(ref mut inbound_rx) => {
                 let message = ready!(Pin::new(inbound_rx).poll_next(cx));
+                println!("{}-RX:\n{}\n", this.name, message.as_ref().unwrap());
                 Poll::Ready(message)
             }
         }
