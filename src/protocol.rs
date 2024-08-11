@@ -134,7 +134,6 @@ impl fmt::Debug for State {
 }
 
 /// A Protocol stream.
-///
 pub struct Protocol<IO: AsyncWrite + AsyncRead + Send + Unpin + 'static> {
     write_state: WriteState,
     read_state: ReadState,

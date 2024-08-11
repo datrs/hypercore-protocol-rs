@@ -21,6 +21,7 @@ static MAX_SENT_MSG_QUE: usize = 32;
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
+/// The thing that the protocol receives in a protocol event
 #[derive(Clone)]
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
@@ -292,6 +293,7 @@ impl ChannelHandle {
         Ok((&local_state.key, remote_state.remote_capability.as_ref()))
     }
 
+    /// outbound_tx is sender to another (remote) channel
     pub(crate) fn open(&mut self, outbound_tx: Sender<Vec<ChannelMessage>>) -> Channel {
         let local_state = self
             .local_state
@@ -412,6 +414,7 @@ impl ChannelMap {
         self.channels.get(&hdkey).unwrap()
     }
 
+    /// get handle to remote handle
     pub(crate) fn get_remote_mut(&mut self, remote_id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.remote_id.get(remote_id).as_ref() {
             self.channels.get_mut(hdkey)
@@ -428,6 +431,7 @@ impl ChannelMap {
         }
     }
 
+    /// get handle to local handle
     pub(crate) fn get_local_mut(&mut self, local_id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.local_id.get(local_id).as_ref() {
             self.channels.get_mut(hdkey)
@@ -470,6 +474,7 @@ impl ChannelMap {
         channel_handle.prepare_to_verify()
     }
 
+    /// Accept what?
     pub(crate) fn accept(
         &mut self,
         local_id: usize,
