@@ -366,6 +366,24 @@ pub enum Message {
 }
 
 impl Message {
+    pub fn kind(&self) -> String {
+        (match self {
+            Self::Open(_) => "Open",
+            Self::Close(_) => "Close",
+            Self::Synchronize(_) => "Synchronize",
+            Self::Request(_) => "Request",
+            Self::Cancel(_) => "Cancel",
+            Self::Data(_) => "Data",
+            Self::NoData(_) => "NoData",
+            Self::Want(_) => "Want",
+            Self::Unwant(_) => "Unwant",
+            Self::Bitfield(_) => "Bitfield",
+            Self::Range(_) => "Range",
+            Self::Extension(_) => "Extension",
+            Self::LocalSignal(_) => "LocalSignal",
+        })
+        .to_string()
+    }
     /// Wire type of this message.
     pub(crate) fn typ(&self) -> u64 {
         match self {
