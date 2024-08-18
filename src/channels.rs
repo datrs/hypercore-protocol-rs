@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
+use tracing::debug;
 
 /// ChannelMap holds ChannelHandle's which can give you a Channel
 
@@ -204,7 +205,9 @@ impl Stream for Channel {
             None => Poll::Ready(None),
             Some(ref mut inbound_rx) => {
                 let message = ready!(Pin::new(inbound_rx).poll_next(cx));
-                println!("{}-RX:\n{}\n", this.name, message.as_ref().unwrap());
+                if let Some(m) = &message {
+                    debug!("{}:RX:{}", this.name, m.kind());
+                }
                 Poll::Ready(message)
             }
         }
