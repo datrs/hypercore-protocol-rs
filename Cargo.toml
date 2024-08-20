@@ -36,11 +36,16 @@ tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3"
 futures-lite = "1"
-hypercore = { git = "https://github.com/cowlicks/hypercore.git", branch = "add-events" }
 sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
 tokio = { version = "1.12.0", features = ["sync"], optional = true }
+
+[dependencies.hypercore]
+path = "../core"
+#git = "https://github.com/cowlicks/hypercore.git"
+#branch = "add-events"
+
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
