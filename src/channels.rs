@@ -108,7 +108,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        println!("{}-TX:\n{message}\n", self.name);
+        debug!("{}:TX:\n{message}\n", self.name);
         let _ = self
             .sent_messages
             .send(message.clone())
@@ -141,7 +141,7 @@ impl Channel {
         }
 
         for m in messages.iter() {
-            println!("{}-TX:\n{m}\n", self.name);
+            debug!("{}:TX:\n{m}\n", self.name);
             let _ = self.sent_messages.send(m.clone()).await.expect("TODO");
         }
 
