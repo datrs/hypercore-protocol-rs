@@ -32,7 +32,6 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
-    sent_messages: Sender<Message>,
     name: String,
 }
 
@@ -63,7 +62,6 @@ impl Channel {
         key: Key,
         local_id: usize,
         closed: Arc<AtomicBool>,
-        sent_messages: Sender<Message>,
     ) -> Self {
         let x = CHANNEL_NAMES.load(Ordering::SeqCst).clone();
         let name = format!("{x}");
@@ -76,7 +74,6 @@ impl Channel {
             discovery_key,
             local_id,
             closed,
-            sent_messages,
             name,
         }
     }
@@ -109,11 +106,6 @@ impl Channel {
             ));
         }
         debug!("{}:TX:\n{message}\n", self.name);
-        let _ = self
-            .sent_messages
-            .send(message.clone())
-            .await
-            .expect("TODO");
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -140,14 +132,12 @@ impl Channel {
             ));
         }
 
-        for m in messages.iter() {
-            debug!("{}:TX:\n{m}\n", self.name);
-            let _ = self.sent_messages.send(m.clone()).await.expect("TODO");
-        }
-
         let messages = messages
             .iter()
-            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+            .map(|message| {
+                debug!("{}:TX:\n{message}\n", self.name);
+                ChannelMessage::new(self.local_id as u64, message.clone())
+            })
             .collect();
         self.outbound_tx
             .send(messages)
@@ -222,7 +212,6 @@ pub(crate) struct ChannelHandle {
     remote_state: Option<RemoteState>,
     inbound_tx: Option<Sender<Message>>,
     closed: Arc<AtomicBool>,
-    sent_messages: Sender<Message>,
 }
 
 #[derive(Clone, Debug)]
@@ -238,24 +227,18 @@ struct RemoteState {
 }
 
 impl ChannelHandle {
-    fn new(discovery_key: DiscoveryKey, sent_messages: Sender<Message>) -> Self {
+    fn new(discovery_key: DiscoveryKey) -> Self {
         Self {
             discovery_key,
             local_state: None,
             remote_state: None,
             inbound_tx: None,
             closed: Arc::new(AtomicBool::new(false)),
-            sent_messages,
         }
     }
 
-    fn new_local(
-        local_id: usize,
-        discovery_key: DiscoveryKey,
-        key: Key,
-        sent_messages: Sender<Message>,
-    ) -> Self {
-        let mut this = Self::new(discovery_key, sent_messages);
+    fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
+        let mut this = Self::new(discovery_key);
         this.attach_local(local_id, key);
         this
     }
@@ -264,9 +247,8 @@ impl ChannelHandle {
         remote_id: usize,
         discovery_key: DiscoveryKey,
         remote_capability: Option<Vec<u8>>,
-        sent_messages: Sender<Message>,
     ) -> Self {
-        let mut this = Self::new(discovery_key, sent_messages);
+        let mut this = Self::new(discovery_key);
         this.attach_remote(remote_id, remote_capability);
         this
     }
@@ -318,7 +300,6 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let sent_messages = self.sent_messages.clone();
         let channel = Channel::new(
             Some(inbound_rx),
             inbound_tx.clone(),
@@ -327,7 +308,6 @@ impl ChannelHandle {
             local_state.key,
             local_state.local_id,
             self.closed.clone(),
-            sent_messages,
         );
 
         self.inbound_tx = Some(inbound_tx);
@@ -394,13 +374,10 @@ impl ChannelMap {
         let hdkey = hex::encode(discovery_key);
         let local_id = self.alloc_local();
 
-        let sent_messages = self.messages.0.clone();
         self.channels
             .entry(hdkey.clone())
             .and_modify(|channel| channel.attach_local(local_id, key))
-            .or_insert_with(|| {
-                ChannelHandle::new_local(local_id, discovery_key, key, sent_messages)
-            });
+            .or_insert_with(|| ChannelHandle::new_local(local_id, discovery_key, key));
 
         self.local_id[local_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()
@@ -414,18 +391,12 @@ impl ChannelMap {
     ) -> &ChannelHandle {
         let hdkey = hex::encode(discovery_key);
         self.alloc_remote(remote_id);
-        let sent_messages = self.messages.0.clone();
 
         self.channels
             .entry(hdkey.clone())
             .and_modify(|channel| channel.attach_remote(remote_id, remote_capability.clone()))
             .or_insert_with(|| {
-                ChannelHandle::new_remote(
-                    remote_id,
-                    discovery_key,
-                    remote_capability,
-                    sent_messages,
-                )
+                ChannelHandle::new_remote(remote_id, discovery_key, remote_capability)
             });
         self.remote_id[remote_id] = Some(hdkey.clone());
         self.channels.get(&hdkey).unwrap()
