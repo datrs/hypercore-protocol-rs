@@ -354,7 +354,6 @@ pub(crate) struct ChannelMap {
     channels: HashMap<String, ChannelHandle>,
     local_id: Vec<Option<String>>,
     remote_id: Vec<Option<String>>,
-    pub messages: (Sender<Message>, Receiver<Message>),
 }
 
 impl ChannelMap {
@@ -365,7 +364,6 @@ impl ChannelMap {
             // This makes sure that 0 may be used for stream-level extensions.
             local_id: vec![None],
             remote_id: vec![],
-            messages: async_channel::unbounded(),
         }
     }
 

@@ -141,8 +141,7 @@ pub struct Protocol<IO: AsyncWrite + AsyncRead + Send + Unpin + 'static> {
     state: State,
     options: Options,
     handshake: Option<HandshakeResult>,
-    #[allow(private_interfaces)]
-    pub channels: ChannelMap,
+    channels: ChannelMap,
     command_rx: Receiver<Command>,
     command_tx: CommandTx,
     outbound_rx: Receiver<Vec<ChannelMessage>>,
@@ -199,9 +198,7 @@ where
             //channel_messages: async_channel::unbounded(),
         }
     }
-    pub fn receiver_for_all_channel_messages(&self) -> Receiver<Message> {
-        self.channels.messages.1.clone()
-    }
+
     /// Whether this protocol stream initiated the underlying IO connection.
     pub fn is_initiator(&self) -> bool {
         self.options.is_initiator
