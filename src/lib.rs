@@ -115,7 +115,6 @@
 
 #![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
 #![deny(missing_debug_implementations, nonstandard_style)]
-#![allow(dead_code)]
 //#![warn(missing_docs, unreachable_pub)] // TODO uncomment me
 
 mod builder;
