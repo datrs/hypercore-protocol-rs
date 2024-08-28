@@ -15,10 +15,6 @@ use std::sync::Arc;
 use std::task::Poll;
 use tracing::debug;
 
-/// ChannelMap holds ChannelHandle's which can give you a Channel
-
-static MAX_SENT_MSG_QUE: usize = 32;
-
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
