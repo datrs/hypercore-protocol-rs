@@ -28,7 +28,7 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
-    name: String,
+    pub name: String,
 }
 
 impl PartialEq for Channel {
@@ -47,7 +47,7 @@ impl fmt::Debug for Channel {
     }
 }
 
-static CHANNEL_NAMES: AtomicUsize = AtomicUsize::new(44);
+static CHANNEL_CONUTER: AtomicUsize = AtomicUsize::new(111);
 
 impl Channel {
     fn new(
@@ -59,9 +59,9 @@ impl Channel {
         local_id: usize,
         closed: Arc<AtomicBool>,
     ) -> Self {
-        let x = CHANNEL_NAMES.load(Ordering::SeqCst).clone();
-        let name = format!("{x}");
-        CHANNEL_NAMES.fetch_add(11, Ordering::SeqCst);
+        let name = CHANNEL_CONUTER.load(Ordering::SeqCst).clone();
+        let name = format!("{name}");
+        CHANNEL_CONUTER.fetch_add(111, Ordering::SeqCst);
         Self {
             inbound_rx,
             direct_inbound_tx,
