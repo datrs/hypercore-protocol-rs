@@ -4,6 +4,7 @@ use hypercore::encoding::{
     CompactEncoding, EncodingError, EncodingErrorKind, HypercoreState, State,
 };
 use pretty_hash::fmt as pretty_fmt;
+use serde::Serialize;
 use std::fmt;
 use std::io;
 
@@ -346,7 +347,7 @@ impl Encoder for Frame {
 }
 
 /// A protocol message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub enum Message {
     Open(Open),

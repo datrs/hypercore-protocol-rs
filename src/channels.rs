@@ -101,7 +101,8 @@ impl Channel {
                 "Channel is closed",
             ));
         }
-        debug!("{}:TX:\n{message}\n", self.name);
+        let s = serde_json::to_string_pretty(&message)?;
+        debug!("{}:TX:\n{s}\n", self.name);
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -131,7 +132,8 @@ impl Channel {
         let messages = messages
             .iter()
             .map(|message| {
-                debug!("{}:TX:\n{message}\n", self.name);
+                let s = serde_json::to_string_pretty(&message).unwrap();
+                debug!("{}:TX:\n{s}\n", self.name);
                 ChannelMessage::new(self.local_id as u64, message.clone())
             })
             .collect();

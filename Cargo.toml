@@ -40,6 +40,8 @@ sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
 tokio = { version = "1.12.0", features = ["sync"], optional = true }
+serde = { version = "1.0.209", features = ["derive"] }
+serde_json = "1.0.127"
 
 [dependencies.hypercore]
 path = "../core"

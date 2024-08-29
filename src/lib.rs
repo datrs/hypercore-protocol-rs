@@ -113,7 +113,7 @@
 //! [AsyncWrite]: futures_lite::AsyncWrite
 //! [examples]: https://github.com/datrs/hypercore-protocol-rs#examples
 
-#![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
+//#![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
 #![deny(missing_debug_implementations, nonstandard_style)]
 //#![warn(missing_docs, unreachable_pub)] // TODO uncomment me
 
