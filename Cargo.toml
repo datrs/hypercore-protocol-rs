@@ -36,10 +36,18 @@ tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3"
 futures-lite = "1"
-hypercore = { version = "0.13.0",  default-features = false }
 sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
+tokio = { version = "1.12.0", features = ["sync"], optional = true }
+serde = { version = "1.0.209", features = ["derive"] }
+serde_json = "1.0.127"
+
+[dependencies.hypercore]
+#path = "../core"
+git = "https://github.com/cowlicks/hypercore.git"
+rev = "38251fea433b188f23b404a4ebda069d489e2b21"
+
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
@@ -58,18 +66,20 @@ test-log = { version = "0.2.11", default-features = false, features = ["trace"] 
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 
 [features]
-default = ["async-std", "sparse"]
+default = ["tokio", "sparse"]
 wasm-bindgen = [
   "futures-timer/wasm-bindgen"
 ]
 sparse = ["hypercore/sparse"]
 cache = ["hypercore/cache"]
-tokio = ["hypercore/tokio"]
-async-std = ["hypercore/async-std"]
+tokio = [ "dep:tokio", "tokio/sync", "hypercore/tokio" ]
+async-std = [ "hypercore/async-std" ]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
 # cargo test --features js_interop_tests
 js_interop_tests = []
+# Used for inspecting messages sent over the channel for debugging and testing 
+debug = []
 
 [profile.bench]
 # debug = true

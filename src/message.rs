@@ -4,6 +4,7 @@ use hypercore::encoding::{
     CompactEncoding, EncodingError, EncodingErrorKind, HypercoreState, State,
 };
 use pretty_hash::fmt as pretty_fmt;
+use serde::Serialize;
 use std::fmt;
 use std::io;
 
@@ -346,7 +347,7 @@ impl Encoder for Frame {
 }
 
 /// A protocol message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub enum Message {
     Open(Open),
@@ -366,6 +367,24 @@ pub enum Message {
 }
 
 impl Message {
+    pub fn kind(&self) -> String {
+        (match self {
+            Self::Open(_) => "Open",
+            Self::Close(_) => "Close",
+            Self::Synchronize(_) => "Synchronize",
+            Self::Request(_) => "Request",
+            Self::Cancel(_) => "Cancel",
+            Self::Data(_) => "Data",
+            Self::NoData(_) => "NoData",
+            Self::Want(_) => "Want",
+            Self::Unwant(_) => "Unwant",
+            Self::Bitfield(_) => "Bitfield",
+            Self::Range(_) => "Range",
+            Self::Extension(_) => "Extension",
+            Self::LocalSignal(_) => "LocalSignal",
+        })
+        .to_string()
+    }
     /// Wire type of this message.
     pub(crate) fn typ(&self) -> u64 {
         match self {
@@ -459,16 +478,22 @@ impl fmt::Display for Message {
                 pretty_fmt(&msg.discovery_key).unwrap(),
                 msg.capability.as_ref().map_or(0, |c| c.len())
             ),
-            Self::Data(msg) => write!(
-                f,
-                "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade: {})",
-                msg.request,
-                msg.fork,
-                msg.block.is_some(),
-                msg.hash.is_some(),
-                msg.seek.is_some(),
-                msg.upgrade.is_some(),
-            ),
+            Self::Data(msg) => {
+                write!(
+                    f,
+                    "Data(request: {}, fork: {}, block: {}, hash: {}, seek: {}, upgrade:",
+                    msg.request,
+                    msg.fork,
+                    msg.block.is_some(),
+                    msg.hash.is_some(),
+                    msg.seek.is_some(),
+                )?;
+                let s = match &msg.upgrade {
+                    Some(du) => format!("{du}"),
+                    None => "false".to_owned(),
+                };
+                write!(f, " {s})")
+            }
             _ => write!(f, "{:?}", &self),
         }
     }

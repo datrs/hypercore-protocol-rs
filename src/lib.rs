@@ -113,9 +113,9 @@
 //! [AsyncWrite]: futures_lite::AsyncWrite
 //! [examples]: https://github.com/datrs/hypercore-protocol-rs#examples
 
-#![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
+//#![forbid(unsafe_code, future_incompatible, rust_2018_idioms)]
 #![deny(missing_debug_implementations, nonstandard_style)]
-#![warn(missing_docs, unreachable_pub)]
+//#![warn(missing_docs, unreachable_pub)] // TODO uncomment me
 
 mod builder;
 mod channels;
@@ -135,7 +135,11 @@ pub use builder::Builder as ProtocolBuilder;
 pub use channels::Channel;
 // Export the needed types for Channel::take_receiver, and Channel::local_sender()
 pub use async_channel::{
-    Receiver as ChannelReceiver, SendError as ChannelSendError, Sender as ChannelSender,
+    Receiver as ChannelReceiver,
+    SendError as ChannelSendError,
+    // TODO why do we expose this? Users can't use it for outbound_tx because they cant use acces to
+    // crate::messages::ChannelMessage.
+    Sender as ChannelSender,
 };
 pub use duplex::Duplex;
 pub use hypercore; // Re-export hypercore

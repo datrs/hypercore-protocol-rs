@@ -10,13 +10,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
+use tracing::debug;
 
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
+/// The thing that the protocol receives in a protocol event
+#[derive(Clone)]
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
     direct_inbound_tx: Sender<Message>,
@@ -25,6 +28,7 @@ pub struct Channel {
     discovery_key: DiscoveryKey,
     local_id: usize,
     closed: Arc<AtomicBool>,
+    pub name: String,
 }
 
 impl PartialEq for Channel {
@@ -43,7 +47,32 @@ impl fmt::Debug for Channel {
     }
 }
 
+static CHANNEL_CONUTER: AtomicUsize = AtomicUsize::new(111);
+
 impl Channel {
+    fn new(
+        inbound_rx: Option<Receiver<Message>>,
+        direct_inbound_tx: Sender<Message>,
+        outbound_tx: Sender<Vec<ChannelMessage>>,
+        discovery_key: DiscoveryKey,
+        key: Key,
+        local_id: usize,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
+        let name = CHANNEL_CONUTER.load(Ordering::SeqCst).clone();
+        let name = format!("{name}");
+        CHANNEL_CONUTER.fetch_add(111, Ordering::SeqCst);
+        Self {
+            inbound_rx,
+            direct_inbound_tx,
+            outbound_tx,
+            key,
+            discovery_key,
+            local_id,
+            closed,
+            name,
+        }
+    }
     /// Get the discovery key of this channel.
     pub fn discovery_key(&self) -> &[u8; 32] {
         &self.discovery_key
@@ -72,6 +101,8 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+        let s = serde_json::to_string_pretty(&message)?;
+        debug!("{}:TX:\n{s}\n", self.name);
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -97,9 +128,14 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+
         let messages = messages
             .iter()
-            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+            .map(|message| {
+                let s = serde_json::to_string_pretty(&message).unwrap();
+                debug!("{}:TX:\n{s}\n", self.name);
+                ChannelMessage::new(self.local_id as u64, message.clone())
+            })
             .collect();
         self.outbound_tx
             .send(messages)
@@ -120,7 +156,7 @@ impl Channel {
     /// you will only want to send a LocalSignal message with this sender to make
     /// it clear what event came from the remote peer and what was local
     /// signaling.
-    pub fn local_sender(&mut self) -> Sender<Message> {
+    pub fn local_sender(&self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
     }
 
@@ -157,6 +193,9 @@ impl Stream for Channel {
             None => Poll::Ready(None),
             Some(ref mut inbound_rx) => {
                 let message = ready!(Pin::new(inbound_rx).poll_next(cx));
+                if let Some(m) = &message {
+                    debug!("{}:RX:{}", this.name, m.kind());
+                }
                 Poll::Ready(message)
             }
         }
@@ -195,6 +234,7 @@ impl ChannelHandle {
             closed: Arc::new(AtomicBool::new(false)),
         }
     }
+
     fn new_local(local_id: usize, discovery_key: DiscoveryKey, key: Key) -> Self {
         let mut this = Self::new(discovery_key);
         this.attach_local(local_id, key);
@@ -250,6 +290,7 @@ impl ChannelHandle {
         Ok((&local_state.key, remote_state.remote_capability.as_ref()))
     }
 
+    /// outbound_tx is sender to another (remote) channel
     pub(crate) fn open(&mut self, outbound_tx: Sender<Vec<ChannelMessage>>) -> Channel {
         let local_state = self
             .local_state
@@ -257,15 +298,16 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let channel = Channel {
-            inbound_rx: Some(inbound_rx),
-            direct_inbound_tx: inbound_tx.clone(),
+        let channel = Channel::new(
+            Some(inbound_rx),
+            inbound_tx.clone(),
             outbound_tx,
-            discovery_key: self.discovery_key,
-            key: local_state.key,
-            local_id: local_state.local_id,
-            closed: self.closed.clone(),
-        };
+            self.discovery_key,
+            local_state.key,
+            local_state.local_id,
+            self.closed.clone(),
+        );
+
         self.inbound_tx = Some(inbound_tx);
         channel
     }
@@ -345,6 +387,7 @@ impl ChannelMap {
     ) -> &ChannelHandle {
         let hdkey = hex::encode(discovery_key);
         self.alloc_remote(remote_id);
+
         self.channels
             .entry(hdkey.clone())
             .and_modify(|channel| channel.attach_remote(remote_id, remote_capability.clone()))
@@ -355,6 +398,7 @@ impl ChannelMap {
         self.channels.get(&hdkey).unwrap()
     }
 
+    /// get handle to remote handle
     pub(crate) fn get_remote_mut(&mut self, remote_id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.remote_id.get(remote_id).as_ref() {
             self.channels.get_mut(hdkey)
@@ -371,6 +415,7 @@ impl ChannelMap {
         }
     }
 
+    /// get handle to local handle
     pub(crate) fn get_local_mut(&mut self, local_id: usize) -> Option<&mut ChannelHandle> {
         if let Some(Some(hdkey)) = self.local_id.get(local_id).as_ref() {
             self.channels.get_mut(hdkey)
@@ -413,6 +458,7 @@ impl ChannelMap {
         channel_handle.prepare_to_verify()
     }
 
+    /// Accept what?
     pub(crate) fn accept(
         &mut self,
         local_id: usize,
