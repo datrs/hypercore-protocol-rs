@@ -44,9 +44,9 @@ serde = { version = "1.0.209", features = ["derive"] }
 serde_json = "1.0.127"
 
 [dependencies.hypercore]
-path = "../core"
-#git = "https://github.com/cowlicks/hypercore.git"
-#branch = "add-events"
+#path = "../core"
+git = "https://github.com/cowlicks/hypercore.git"
+rev = "38251fea433b188f23b404a4ebda069d489e2b21"
 
 
 [dev-dependencies]
