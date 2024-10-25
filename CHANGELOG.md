@@ -6,6 +6,12 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 * TODO: Add changes here as they happen
 
+### 0.6.0
+
+#### API breaking changes
+
+Support hypercore v0.14.0 and change tokio as the default async runtime.
+
 ### 0.5.0
 
 #### API breaking changes
