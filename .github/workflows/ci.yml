@@ -30,8 +30,10 @@ jobs:
         components: rustfmt
     - name: Run tests
       run: |
-        cargo check --no-default-features --features tokio
-        cargo check --no-default-features --features async-std
+        cargo check --all-targets
+        cargo check --all-targets --no-default-features --features tokio
+        cargo check --all-targets --no-default-features --features async-std
+        cargo test --features js_interop_tests
         cargo test --no-default-features --features js_interop_tests,tokio
         cargo test --no-default-features --features js_interop_tests,async-std
         cargo test --benches
