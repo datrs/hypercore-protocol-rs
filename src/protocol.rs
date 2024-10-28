@@ -528,6 +528,7 @@ where
         }
     }
 
+    /// Open a Channel with the given key. Adding it to our channel map
     fn command_open(&mut self, key: Key) -> Result<()> {
         // Create a new channel.
         let channel_handle = self.channels.attach_local(key);
