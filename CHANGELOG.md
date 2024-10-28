@@ -6,6 +6,10 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 * TODO: Add changes here as they happen
 
+### 0.6.1
+
+* Implement Clone on Channel, remove unnecessary mut requirements, and improve Protocol debugging.
+
 ### 0.6.0
 
 #### API breaking changes
