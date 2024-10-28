@@ -93,6 +93,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+        debug!("TX:\n{message:?}\n");
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -118,9 +119,13 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+
         let messages = messages
             .iter()
-            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+            .map(|message| {
+                debug!("TX:\n{message:?}\n");
+                ChannelMessage::new(self.local_id as u64, message.clone())
+            })
             .collect();
         self.outbound_tx
             .send(messages)
