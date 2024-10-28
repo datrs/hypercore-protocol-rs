@@ -46,6 +46,25 @@ impl fmt::Debug for Channel {
 }
 
 impl Channel {
+    fn new(
+        inbound_rx: Option<Receiver<Message>>,
+        direct_inbound_tx: Sender<Message>,
+        outbound_tx: Sender<Vec<ChannelMessage>>,
+        discovery_key: DiscoveryKey,
+        key: Key,
+        local_id: usize,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inbound_rx,
+            direct_inbound_tx,
+            outbound_tx,
+            key,
+            discovery_key,
+            local_id,
+            closed,
+        }
+    }
     /// Get the discovery key of this channel.
     pub fn discovery_key(&self) -> &[u8; 32] {
         &self.discovery_key
@@ -259,15 +278,16 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let channel = Channel {
-            inbound_rx: Some(inbound_rx),
-            direct_inbound_tx: inbound_tx.clone(),
+        let channel = Channel::new(
+            Some(inbound_rx),
+            inbound_tx.clone(),
             outbound_tx,
-            discovery_key: self.discovery_key,
-            key: local_state.key,
-            local_id: local_state.local_id,
-            closed: self.closed.clone(),
-        };
+            self.discovery_key,
+            local_state.key,
+            local_state.local_id,
+            self.closed.clone(),
+        );
+
         self.inbound_tx = Some(inbound_tx);
         channel
     }
