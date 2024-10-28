@@ -406,7 +406,7 @@ impl Message {
     }
 
     /// Pre-encodes a message to state, returns length
-    pub(crate) fn preencode(&mut self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
+    pub(crate) fn preencode(&self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
         match self {
             Self::Open(ref message) => state.0.preencode(message)?,
             Self::Close(ref message) => state.0.preencode(message)?,
@@ -427,7 +427,7 @@ impl Message {
 
     /// Encodes a message to a given buffer, using preencoded state, results size
     pub(crate) fn encode(
-        &mut self,
+        &self,
         state: &mut HypercoreState,
         buf: &mut [u8],
     ) -> Result<usize, EncodingError> {

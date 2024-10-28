@@ -13,10 +13,12 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
+use tracing::debug;
 
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
+#[derive(Clone)]
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
     direct_inbound_tx: Sender<Message>,
@@ -44,6 +46,25 @@ impl fmt::Debug for Channel {
 }
 
 impl Channel {
+    fn new(
+        inbound_rx: Option<Receiver<Message>>,
+        direct_inbound_tx: Sender<Message>,
+        outbound_tx: Sender<Vec<ChannelMessage>>,
+        discovery_key: DiscoveryKey,
+        key: Key,
+        local_id: usize,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inbound_rx,
+            direct_inbound_tx,
+            outbound_tx,
+            key,
+            discovery_key,
+            local_id,
+            closed,
+        }
+    }
     /// Get the discovery key of this channel.
     pub fn discovery_key(&self) -> &[u8; 32] {
         &self.discovery_key
@@ -72,6 +93,7 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+        debug!("TX:\n{message:?}\n");
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -97,9 +119,13 @@ impl Channel {
                 "Channel is closed",
             ));
         }
+
         let messages = messages
             .iter()
-            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+            .map(|message| {
+                debug!("TX:\n{message:?}\n");
+                ChannelMessage::new(self.local_id as u64, message.clone())
+            })
             .collect();
         self.outbound_tx
             .send(messages)
@@ -120,7 +146,7 @@ impl Channel {
     /// you will only want to send a LocalSignal message with this sender to make
     /// it clear what event came from the remote peer and what was local
     /// signaling.
-    pub fn local_sender(&mut self) -> Sender<Message> {
+    pub fn local_sender(&self) -> Sender<Message> {
         self.direct_inbound_tx.clone()
     }
 
@@ -257,15 +283,16 @@ impl ChannelHandle {
             .expect("May not open channel that is not locally attached");
 
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
-        let channel = Channel {
-            inbound_rx: Some(inbound_rx),
-            direct_inbound_tx: inbound_tx.clone(),
+        let channel = Channel::new(
+            Some(inbound_rx),
+            inbound_tx.clone(),
             outbound_tx,
-            discovery_key: self.discovery_key,
-            key: local_state.key,
-            local_id: local_state.local_id,
-            closed: self.closed.clone(),
-        };
+            self.discovery_key,
+            local_state.key,
+            local_state.local_id,
+            self.closed.clone(),
+        );
+
         self.inbound_tx = Some(inbound_tx);
         channel
     }
@@ -387,7 +414,7 @@ impl ChannelMap {
         }
     }
 
-    pub(crate) fn has_channel(&mut self, discovery_key: &[u8]) -> bool {
+    pub(crate) fn has_channel(&self, discovery_key: &[u8]) -> bool {
         let hdkey = hex::encode(discovery_key);
         self.channels.contains_key(&hdkey)
     }
