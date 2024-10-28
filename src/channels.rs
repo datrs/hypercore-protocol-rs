@@ -13,10 +13,12 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
+use tracing::debug;
 
 /// A protocol channel.
 ///
 /// This is the handle that can be sent to other threads.
+#[derive(Clone)]
 pub struct Channel {
     inbound_rx: Option<Receiver<Message>>,
     direct_inbound_tx: Sender<Message>,
