@@ -414,7 +414,7 @@ impl ChannelMap {
         }
     }
 
-    pub(crate) fn has_channel(&mut self, discovery_key: &[u8]) -> bool {
+    pub(crate) fn has_channel(&self, discovery_key: &[u8]) -> bool {
         let hdkey = hex::encode(discovery_key);
         self.channels.contains_key(&hdkey)
     }
