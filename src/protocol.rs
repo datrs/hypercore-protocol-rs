@@ -1,6 +1,5 @@
 use async_channel::{Receiver, Sender};
 use futures_lite::stream::Stream;
-use futures_timer::Delay;
 use hypercore_handshake::{CipherTrait, state_machine::PUBLIC_KEYLEN};
 use std::{
     collections::VecDeque,
@@ -9,13 +8,12 @@ use std::{
     io::{self, Result},
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 use tracing::{error, instrument};
 
 use crate::{
     channels::{Channel, ChannelMap},
-    constants::{DEFAULT_KEEPALIVE, PROTOCOL_NAME},
+    constants::PROTOCOL_NAME,
     crypto::HandshakeResult,
     message::{ChannelMessage, Message},
     mqueue::MessageIo,
@@ -102,8 +100,6 @@ pub struct Protocol {
     command_tx: CommandTx,
     outbound_rx: Receiver<Vec<ChannelMessage>>,
     outbound_tx: Sender<Vec<ChannelMessage>>,
-    #[allow(dead_code)] // TODO: Implement keepalive
-    keepalive: Delay,
     queued_events: VecDeque<Event>,
     handshake_emitted: bool,
 }
@@ -141,7 +137,6 @@ impl Protocol {
             command_tx: CommandTx(command_tx),
             outbound_tx,
             outbound_rx,
-            keepalive: Delay::new(Duration::from_secs(DEFAULT_KEEPALIVE as u64)),
             queued_events: VecDeque::new(),
             handshake_emitted: false,
         }
@@ -219,9 +214,6 @@ impl Protocol {
         // Check for commands.
         return_error!(this.poll_commands(cx));
 
-        // Poll the keepalive timer.
-        this.poll_keepalive(cx);
-
         // Write everything we can write.
         return_error!(this.poll_outbound_write(cx));
 
@@ -242,21 +234,6 @@ impl Protocol {
             }
         }
         Ok(())
-    }
-
-    /// TODO Poll the keepalive timer and queue a ping message if needed.
-    fn poll_keepalive(&self, _cx: &mut Context<'_>) {
-        /*
-        const KEEPALIVE_DURATION: Duration = Duration::from_secs(DEFAULT_KEEPALIVE as u64);
-        if Pin::new(&mut self.keepalive).poll(cx).is_ready() {
-            if let State::Established = self.state {
-                // 24 bit header for the empty message, hence the 3
-                self.write_state
-                    .queue_frame(Frame::RawBatch(vec![vec![0u8; 3]]));
-            }
-            self.keepalive.reset(KEEPALIVE_DURATION);
-        }
-        */
     }
 
     // just handles Close and LocalSignal
