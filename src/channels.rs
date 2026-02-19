@@ -105,7 +105,7 @@ impl Channel {
     }
 
     /// Send a batch of messages over the channel.
-    pub async fn send_batch(&self, messages: &[Message]) -> Result<()> {
+    pub fn send_batch(&self, messages: &[Message]) -> impl Future<Output = Result<()>> + use<> {
         // In javascript this is cork()/uncork(), e.g.:
         //
         // https://github.com/holepunchto/hypercore/blob/c338b9aaa4442d35bc9d283d2c242b86a46de6d4/lib/replicator.js#L402-L418
@@ -116,22 +116,30 @@ impl Channel {
         // https://github.com/holepunchto/protomux/blob/d3d6f8f55e52c2fbe5cd56f5d067ac43ca13c27d/index.js#L368-L389
         //
         // Batching messages across channels like protomux is capable of doing is not (yet) implemented.
-        if self.closed() {
-            return Err(Error::new(
-                ErrorKind::ConnectionAborted,
-                "Channel is closed",
-            ));
+
+        let closed = self.closed();
+
+        // we do this to avoid having the future capture &[Messages]
+        let messages = if !closed {
+            messages
+                .iter()
+                .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let outbound_tx = self.outbound_tx.clone();
+        async move {
+            if closed {
+                return Err(Error::new(
+                    ErrorKind::ConnectionAborted,
+                    "Channel is closed",
+                ));
+            }
+
+            outbound_tx.send(messages).await.map_err(map_channel_err)
         }
-
-        let messages = messages
-            .iter()
-            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
-            .collect();
-
-        self.outbound_tx
-            .send(messages)
-            .await
-            .map_err(map_channel_err)
     }
 
     /// Take the receiving part out of the channel.
