@@ -1,5 +1,3 @@
-mod cipher;
-mod curve;
-mod handshake;
-pub(crate) use cipher::{DecryptCipher, EncryptCipher};
-pub(crate) use handshake::{Handshake, HandshakeResult};
+/// Handshake result and capability verification.
+pub(crate) mod handshake;
+pub(crate) use handshake::HandshakeResult;

@@ -1,0 +1,5 @@
+# groups 'use' statements by crate
+imports_granularity = "crate"
+# formats code within doc tests
+# requires: cargo +nightly fmt (otherwise rustfmt will warn, but pass)
+format_code_in_doc_comments = true

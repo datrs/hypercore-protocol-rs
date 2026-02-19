@@ -2,6 +2,7 @@
     "name": "hypercore-protocol-rs-js-interop-tests",
     "version": "0.0.1",
     "dependencies": {
-        "hypercore": "10.31.12"
+        "hypercore": "10.31.12",
+        "udx-native": "^1.0.0"
     }
 }

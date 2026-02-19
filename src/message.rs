@@ -1,353 +1,122 @@
 use crate::schema::*;
-use crate::util::{stat_uint24_le, write_uint24_le};
-use hypercore::encoding::{
-    CompactEncoding, EncodingError, EncodingErrorKind, HypercoreState, State,
+use compact_encoding::{
+    CompactEncoding, EncodingError, EncodingErrorKind, VecEncodable, decode_usize, take_array,
+    write_array,
 };
 use pretty_hash::fmt as pretty_fmt;
-use std::fmt;
-use std::io;
+use std::{fmt, io};
+use tracing::{debug, instrument, trace, warn};
 
-/// The type of a data frame.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum FrameType {
-    Raw,
-    Message,
-}
+const OPEN_MESSAGE_PREFIX: [u8; 2] = [0, 1];
+const CLOSE_MESSAGE_PREFIX: [u8; 2] = [0, 3];
+const MULTI_MESSAGE_PREFIX: [u8; 2] = [0, 0];
+const CHANNEL_CHANGE_SEPERATOR: [u8; 1] = [0];
 
-/// Encode data into a buffer.
-///
-/// This trait is implemented on data frames and their components
-/// (channel messages, messages, and individual message types through prost).
-pub(crate) trait Encoder: Sized + fmt::Debug {
-    /// Calculates the length that the encoded message needs.
-    fn encoded_len(&mut self) -> Result<usize, EncodingError>;
+#[instrument(skip_all err)]
+pub(crate) fn decode_unframed_channel_messages(
+    buf: &[u8],
+) -> Result<(Vec<ChannelMessage>, usize), io::Error> {
+    let og_len = buf.len();
+    if og_len >= 3 && buf[0] == 0x00 {
+        // batch of NOT open/close messages
+        if buf[1] == 0x00 {
+            let (_, mut buf) = take_array::<2>(buf)?;
+            // Batch of messages
+            let mut messages: Vec<ChannelMessage> = vec![];
 
-    /// Encodes the message to a buffer.
-    ///
-    /// An error will be returned if the buffer does not have sufficient capacity.
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError>;
-}
-
-impl Encoder for &[u8] {
-    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
-        Ok(self.len())
-    }
-
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
-        let len = self.encoded_len()?;
-        if len > buf.len() {
-            return Err(EncodingError::new(
-                EncodingErrorKind::Overflow,
-                &format!("Length does not fit buffer, {} > {}", len, buf.len()),
-            ));
-        }
-        buf[..len].copy_from_slice(&self[..]);
-        Ok(len)
-    }
-}
-
-/// A frame of data, either a buffer or a message.
-#[derive(Clone, PartialEq)]
-pub(crate) enum Frame {
-    /// A raw batch binary buffer. Used in the handshaking phase.
-    RawBatch(Vec<Vec<u8>>),
-    /// Message batch, containing one or more channel messsages. Used for everything after the handshake.
-    MessageBatch(Vec<ChannelMessage>),
-}
-
-impl fmt::Debug for Frame {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Frame::RawBatch(batch) => write!(f, "Frame(RawBatch <{}>)", batch.len()),
-            Frame::MessageBatch(messages) => write!(f, "Frame({messages:?})"),
-        }
-    }
-}
-
-impl From<ChannelMessage> for Frame {
-    fn from(m: ChannelMessage) -> Self {
-        Self::MessageBatch(vec![m])
-    }
-}
-
-impl From<Vec<u8>> for Frame {
-    fn from(m: Vec<u8>) -> Self {
-        Self::RawBatch(vec![m])
-    }
-}
-
-impl Frame {
-    /// Decodes a frame from a buffer containing multiple concurrent messages.
-    pub(crate) fn decode_multiple(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
-        match frame_type {
-            FrameType::Raw => {
-                let mut index = 0;
-                let mut raw_batch: Vec<Vec<u8>> = vec![];
-                while index < buf.len() {
-                    // There might be zero bytes in between, and with LE, the next message will
-                    // start with a non-zero
-                    if buf[index] == 0 {
-                        index += 1;
-                        continue;
-                    }
-                    let stat = stat_uint24_le(&buf[index..]);
-                    if let Some((header_len, body_len)) = stat {
-                        raw_batch.push(
-                            buf[index + header_len..index + header_len + body_len as usize]
-                                .to_vec(),
-                        );
-                        index += header_len + body_len as usize;
-                    } else {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "received invalid data in raw batch",
-                        ));
-                    }
+            // First, there is the original channel
+            let mut current_channel;
+            (current_channel, buf) = u64::decode(buf)?;
+            while !buf.is_empty() {
+                // Length of the message is inbetween here
+                let channel_message_length;
+                (channel_message_length, buf) = decode_usize(buf)?;
+                if channel_message_length > buf.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "received invalid message length: [{channel_message_length}]
+\tbut we have [{}] remaining bytes.
+\tInitial buffer size [{og_len}]",
+                            buf.len()
+                        ),
+                    ));
                 }
-                Ok(Frame::RawBatch(raw_batch))
-            }
-            FrameType::Message => {
-                let mut index = 0;
-                let mut combined_messages: Vec<ChannelMessage> = vec![];
-                while index < buf.len() {
-                    // There might be zero bytes in between, and with LE, the next message will
-                    // start with a non-zero
-                    if buf[index] == 0 {
-                        index += 1;
-                        continue;
-                    }
-
-                    let stat = stat_uint24_le(&buf[index..]);
-                    if let Some((header_len, body_len)) = stat {
-                        let (frame, length) = Self::decode_message(
-                            &buf[index + header_len..index + header_len + body_len as usize],
-                        )?;
-                        if length != body_len as usize {
-                            tracing::warn!(
-                                "Did not know what to do with all the bytes, got {} but decoded {}. \
-                                This may be because the peer implements a newer protocol version \
-                                that has extra fields.",
-                                body_len,
-                                length
-                            );
-                        }
-                        if let Frame::MessageBatch(messages) = frame {
-                            for message in messages {
-                                combined_messages.push(message);
-                            }
-                        } else {
-                            unreachable!("Can not get Raw messages");
-                        }
-                        index += header_len + body_len as usize;
-                    } else {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "received invalid data in multi-message chunk",
-                        ));
-                    }
+                // Then the actual message
+                let channel_message;
+                let bl = buf.len();
+                (channel_message, buf) = ChannelMessage::decode_with_channel(buf, current_channel)?;
+                trace!(
+                    "Decoded ChannelMessage::{:?} using [{} bytes]",
+                    channel_message.message,
+                    bl - buf.len()
+                );
+                messages.push(channel_message);
+                // After that, if there is an extra 0x00, that means the channel
+                // changed. This works because of LE encoding, and channels starting
+                // from the index 1.
+                if !buf.is_empty() && buf[0] == 0x00 {
+                    (current_channel, buf) = u64::decode(buf)?;
                 }
-                Ok(Frame::MessageBatch(combined_messages))
             }
-        }
-    }
-
-    /// Decode a frame from a buffer.
-    pub(crate) fn decode(buf: &[u8], frame_type: &FrameType) -> Result<Self, io::Error> {
-        match frame_type {
-            FrameType::Raw => Ok(Frame::RawBatch(vec![buf.to_vec()])),
-            FrameType::Message => {
-                let (frame, _) = Self::decode_message(buf)?;
-                Ok(frame)
-            }
-        }
-    }
-
-    fn decode_message(buf: &[u8]) -> Result<(Self, usize), io::Error> {
-        if buf.len() >= 3 && buf[0] == 0x00 {
-            if buf[1] == 0x00 {
-                // Batch of messages
-                let mut messages: Vec<ChannelMessage> = vec![];
-                let mut state = State::new_with_start_and_end(2, buf.len());
-
-                // First, there is the original channel
-                let mut current_channel: u64 = state.decode(buf)?;
-                while state.start() < state.end() {
-                    // Length of the message is inbetween here
-                    let channel_message_length: usize = state.decode(buf)?;
-                    if state.start() + channel_message_length > state.end() {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!(
-                                "received invalid message length, {} + {} > {}",
-                                state.start(),
-                                channel_message_length,
-                                state.end()
-                            ),
-                        ));
-                    }
-                    // Then the actual message
-                    let (channel_message, _) = ChannelMessage::decode(
-                        &buf[state.start()..state.start() + channel_message_length],
-                        current_channel,
-                    )?;
-                    messages.push(channel_message);
-                    state.add_start(channel_message_length)?;
-                    // After that, if there is an extra 0x00, that means the channel
-                    // changed. This works because of LE encoding, and channels starting
-                    // from the index 1.
-                    if state.start() < state.end() && buf[state.start()] == 0x00 {
-                        state.add_start(1)?;
-                        current_channel = state.decode(buf)?;
-                    }
-                }
-                Ok((Frame::MessageBatch(messages), state.start()))
-            } else if buf[1] == 0x01 {
-                // Open message
-                let (channel_message, length) = ChannelMessage::decode_open_message(&buf[2..])?;
-                Ok((Frame::MessageBatch(vec![channel_message]), length + 2))
-            } else if buf[1] == 0x03 {
-                // Close message
-                let (channel_message, length) = ChannelMessage::decode_close_message(&buf[2..])?;
-                Ok((Frame::MessageBatch(vec![channel_message]), length + 2))
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "received invalid special message",
-                ))
-            }
-        } else if buf.len() >= 2 {
-            // Single message
-            let mut state = State::from_buffer(buf);
-            let channel: u64 = state.decode(buf)?;
-            let (channel_message, length) = ChannelMessage::decode(&buf[state.start()..], channel)?;
-            Ok((
-                Frame::MessageBatch(vec![channel_message]),
-                state.start() + length,
-            ))
+            Ok((messages, og_len - buf.len()))
+        } else if buf[1] == 0x01 {
+            // Open message
+            let (channel_message, length) = ChannelMessage::decode_open_message(&buf[2..])?;
+            Ok((vec![channel_message], length + 2))
+        } else if buf[1] == 0x03 {
+            // Close message
+            let (channel_message, length) = ChannelMessage::decode_close_message(&buf[2..])?;
+            Ok((vec![channel_message], length + 2))
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("received too short message, {buf:02X?}"),
+                "received invalid special message",
             ))
         }
-    }
-
-    fn preencode(&mut self, state: &mut State) -> Result<usize, EncodingError> {
-        match self {
-            Self::RawBatch(raw_batch) => {
-                for raw in raw_batch {
-                    state.add_end(raw.as_slice().encoded_len()?)?;
-                }
-            }
-            #[allow(clippy::comparison_chain)]
-            Self::MessageBatch(messages) => {
-                if messages.len() == 1 {
-                    if let Message::Open(_) = &messages[0].message {
-                        // This is a special case with 0x00, 0x01 intro bytes
-                        state.add_end(2 + &messages[0].encoded_len()?)?;
-                    } else if let Message::Close(_) = &messages[0].message {
-                        // This is a special case with 0x00, 0x03 intro bytes
-                        state.add_end(2 + &messages[0].encoded_len()?)?;
-                    } else {
-                        (*state).preencode(&messages[0].channel)?;
-                        state.add_end(messages[0].encoded_len()?)?;
-                    }
-                } else if messages.len() > 1 {
-                    // Two intro bytes 0x00 0x00, then channel id, then lengths
-                    state.add_end(2)?;
-                    let mut current_channel: u64 = messages[0].channel;
-                    state.preencode(&current_channel)?;
-                    for message in messages.iter_mut() {
-                        if message.channel != current_channel {
-                            // Channel changed, need to add a 0x00 in between and then the new
-                            // channel
-                            state.add_end(1)?;
-                            state.preencode(&message.channel)?;
-                            current_channel = message.channel;
-                        }
-                        let message_length = message.encoded_len()?;
-                        state.preencode(&message_length)?;
-                        state.add_end(message_length)?;
-                    }
-                }
-            }
-        }
-        Ok(state.end())
+    } else if buf.len() >= 2 {
+        trace!("Decoding single ChannelMessage");
+        // Single message
+        let og_len = buf.len();
+        let (channel_message, buf) = ChannelMessage::decode_from_channel_and_message(buf)?;
+        Ok((vec![channel_message], og_len - buf.len()))
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("received too short message, {buf:?}"),
+        ))
     }
 }
 
-impl Encoder for Frame {
-    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
-        let body_len = self.preencode(&mut State::new())?;
-        match self {
-            Self::RawBatch(_) => Ok(body_len),
-            Self::MessageBatch(_) => Ok(3 + body_len),
-        }
-    }
-
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
-        let mut state = State::new();
-        let header_len = if let Self::RawBatch(_) = self { 0 } else { 3 };
-        let body_len = self.preencode(&mut state)?;
-        let len = body_len + header_len;
-        if buf.len() < len {
-            return Err(EncodingError::new(
-                EncodingErrorKind::Overflow,
-                &format!("Length does not fit buffer, {} > {}", len, buf.len()),
-            ));
-        }
-        match self {
-            Self::RawBatch(ref raw_batch) => {
-                for raw in raw_batch {
-                    raw.as_slice().encode(buf)?;
+fn vec_channel_messages_encoded_size(messages: &[ChannelMessage]) -> Result<usize, EncodingError> {
+    Ok(match messages {
+        [] => 0,
+        [msg] => match msg.message {
+            Message::Open(_) | Message::Close(_) => 2 + msg.encoded_size()?,
+            _ => msg.encoded_size()?,
+        },
+        msgs => {
+            let mut out = MULTI_MESSAGE_PREFIX.len();
+            let mut current_channel: u64 = messages[0].channel;
+            out += current_channel.encoded_size()?;
+            for message in msgs.iter() {
+                if message.channel != current_channel {
+                    // Channel changed, need to add a 0x00 in between and then the new
+                    // channel
+                    out += CHANNEL_CHANGE_SEPERATOR.len() + message.channel.encoded_size()?;
+                    current_channel = message.channel;
                 }
+                let message_length = message.message.encoded_size()?;
+                out += message_length + (message_length as u64).encoded_size()?;
             }
-            #[allow(clippy::comparison_chain)]
-            Self::MessageBatch(ref mut messages) => {
-                write_uint24_le(body_len, buf);
-                let buf = buf.get_mut(3..).expect("Buffer should be over 3 bytes");
-                if messages.len() == 1 {
-                    if let Message::Open(_) = &messages[0].message {
-                        // This is a special case with 0x00, 0x01 intro bytes
-                        state.encode(&(0_u8), buf)?;
-                        state.encode(&(1_u8), buf)?;
-                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
-                    } else if let Message::Close(_) = &messages[0].message {
-                        // This is a special case with 0x00, 0x03 intro bytes
-                        state.encode(&(0_u8), buf)?;
-                        state.encode(&(3_u8), buf)?;
-                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
-                    } else {
-                        state.encode(&messages[0].channel, buf)?;
-                        state.add_start(messages[0].encode(&mut buf[state.start()..])?)?;
-                    }
-                } else if messages.len() > 1 {
-                    // Two intro bytes 0x00 0x00, then channel id, then lengths
-                    state.set_slice_to_buffer(&[0_u8, 0_u8], buf)?;
-                    let mut current_channel: u64 = messages[0].channel;
-                    state.encode(&current_channel, buf)?;
-                    for message in messages.iter_mut() {
-                        if message.channel != current_channel {
-                            // Channel changed, need to add a 0x00 in between and then the new
-                            // channel
-                            state.encode(&(0_u8), buf)?;
-                            state.encode(&message.channel, buf)?;
-                            current_channel = message.channel;
-                        }
-                        let message_length = message.encoded_len()?;
-                        state.encode(&message_length, buf)?;
-                        state.add_start(message.encode(&mut buf[state.start()..])?)?;
-                    }
-                }
-            }
-        };
-        Ok(len)
-    }
+            out
+        }
+    })
 }
 
 /// A protocol message.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub enum Message {
     Open(Open),
     Close(Close),
@@ -365,6 +134,114 @@ pub enum Message {
     LocalSignal((String, Vec<u8>)),
 }
 
+macro_rules! message_from {
+    ($($val:ident),+) => {
+        $(
+            impl From<$val> for Message {
+                fn from(value: $val) -> Self {
+                    Message::$val(value)
+                }
+            }
+        )*
+    }
+}
+message_from!(
+    Open,
+    Close,
+    Synchronize,
+    Request,
+    Cancel,
+    Data,
+    NoData,
+    Want,
+    Unwant,
+    Bitfield,
+    Range,
+    Extension
+);
+
+macro_rules! decode_message {
+    ($type:ty, $buf:expr) => {{
+        let (x, rest) = <$type>::decode($buf)?;
+        (Message::from(x), rest)
+    }};
+}
+
+impl CompactEncoding for Message {
+    fn encoded_size(&self) -> Result<usize, EncodingError> {
+        let typ_size = if let Self::Open(_) | Self::Close(_) = &self {
+            0
+        } else {
+            self.typ().encoded_size()?
+        };
+        let msg_size = match self {
+            Self::LocalSignal(_) => Ok(0),
+            Self::Open(x) => x.encoded_size(),
+            Self::Close(x) => x.encoded_size(),
+            Self::Synchronize(x) => x.encoded_size(),
+            Self::Request(x) => x.encoded_size(),
+            Self::Cancel(x) => x.encoded_size(),
+            Self::Data(x) => x.encoded_size(),
+            Self::NoData(x) => x.encoded_size(),
+            Self::Want(x) => x.encoded_size(),
+            Self::Unwant(x) => x.encoded_size(),
+            Self::Bitfield(x) => x.encoded_size(),
+            Self::Range(x) => x.encoded_size(),
+            Self::Extension(x) => x.encoded_size(),
+        }?;
+        Ok(typ_size + msg_size)
+    }
+
+    #[instrument(skip_all, fields(name = self.name()))]
+    fn encode<'a>(&self, buffer: &'a mut [u8]) -> Result<&'a mut [u8], EncodingError> {
+        debug!("Encoding {self:?}");
+        let rest = if let Self::Open(_) | Self::Close(_) = &self {
+            buffer
+        } else {
+            self.typ().encode(buffer)?
+        };
+        match self {
+            Self::Open(x) => x.encode(rest),
+            Self::Close(x) => x.encode(rest),
+            Self::Synchronize(x) => x.encode(rest),
+            Self::Request(x) => x.encode(rest),
+            Self::Cancel(x) => x.encode(rest),
+            Self::Data(x) => x.encode(rest),
+            Self::NoData(x) => x.encode(rest),
+            Self::Want(x) => x.encode(rest),
+            Self::Unwant(x) => x.encode(rest),
+            Self::Bitfield(x) => x.encode(rest),
+            Self::Range(x) => x.encode(rest),
+            Self::Extension(x) => x.encode(rest),
+            Self::LocalSignal(_) => unimplemented!("do not encode LocalSignal"),
+        }
+    }
+
+    fn decode(buffer: &[u8]) -> Result<(Self, &[u8]), EncodingError>
+    where
+        Self: Sized,
+    {
+        let (typ, rest) = u64::decode(buffer)?;
+        Ok(match typ {
+            0 => decode_message!(Synchronize, rest),
+            1 => decode_message!(Request, rest),
+            2 => decode_message!(Cancel, rest),
+            3 => decode_message!(Data, rest),
+            4 => decode_message!(NoData, rest),
+            5 => decode_message!(Want, rest),
+            6 => decode_message!(Unwant, rest),
+            7 => decode_message!(Bitfield, rest),
+            8 => decode_message!(Range, rest),
+            9 => decode_message!(Extension, rest),
+            _ => {
+                return Err(EncodingError::new(
+                    EncodingErrorKind::InvalidData,
+                    &format!("Invalid message type to decode: {typ}"),
+                ));
+            }
+        })
+    }
+}
 impl Message {
     /// Wire type of this message.
     pub(crate) fn typ(&self) -> u64 {
@@ -382,71 +259,23 @@ impl Message {
             value => unimplemented!("{} does not have a type", value),
         }
     }
-
-    /// Decode a message from a buffer based on type.
-    pub(crate) fn decode(buf: &[u8], typ: u64) -> Result<(Self, usize), EncodingError> {
-        let mut state = HypercoreState::from_buffer(buf);
-        let message = match typ {
-            0 => Ok(Self::Synchronize((*state).decode(buf)?)),
-            1 => Ok(Self::Request(state.decode(buf)?)),
-            2 => Ok(Self::Cancel((*state).decode(buf)?)),
-            3 => Ok(Self::Data(state.decode(buf)?)),
-            4 => Ok(Self::NoData((*state).decode(buf)?)),
-            5 => Ok(Self::Want((*state).decode(buf)?)),
-            6 => Ok(Self::Unwant((*state).decode(buf)?)),
-            7 => Ok(Self::Bitfield((*state).decode(buf)?)),
-            8 => Ok(Self::Range((*state).decode(buf)?)),
-            9 => Ok(Self::Extension((*state).decode(buf)?)),
-            _ => Err(EncodingError::new(
-                EncodingErrorKind::InvalidData,
-                &format!("Invalid message type to decode: {typ}"),
-            )),
-        }?;
-        Ok((message, state.start()))
-    }
-
-    /// Pre-encodes a message to state, returns length
-    pub(crate) fn preencode(&self, state: &mut HypercoreState) -> Result<usize, EncodingError> {
+    /// Get the name of the message
+    pub fn name(&self) -> &'static str {
         match self {
-            Self::Open(ref message) => state.0.preencode(message)?,
-            Self::Close(ref message) => state.0.preencode(message)?,
-            Self::Synchronize(ref message) => state.0.preencode(message)?,
-            Self::Request(ref message) => state.preencode(message)?,
-            Self::Cancel(ref message) => state.0.preencode(message)?,
-            Self::Data(ref message) => state.preencode(message)?,
-            Self::NoData(ref message) => state.0.preencode(message)?,
-            Self::Want(ref message) => state.0.preencode(message)?,
-            Self::Unwant(ref message) => state.0.preencode(message)?,
-            Self::Bitfield(ref message) => state.0.preencode(message)?,
-            Self::Range(ref message) => state.0.preencode(message)?,
-            Self::Extension(ref message) => state.0.preencode(message)?,
-            Self::LocalSignal(_) => 0,
-        };
-        Ok(state.end())
-    }
-
-    /// Encodes a message to a given buffer, using preencoded state, results size
-    pub(crate) fn encode(
-        &self,
-        state: &mut HypercoreState,
-        buf: &mut [u8],
-    ) -> Result<usize, EncodingError> {
-        match self {
-            Self::Open(ref message) => state.0.encode(message, buf)?,
-            Self::Close(ref message) => state.0.encode(message, buf)?,
-            Self::Synchronize(ref message) => state.0.encode(message, buf)?,
-            Self::Request(ref message) => state.encode(message, buf)?,
-            Self::Cancel(ref message) => state.0.encode(message, buf)?,
-            Self::Data(ref message) => state.encode(message, buf)?,
-            Self::NoData(ref message) => state.0.encode(message, buf)?,
-            Self::Want(ref message) => state.0.encode(message, buf)?,
-            Self::Unwant(ref message) => state.0.encode(message, buf)?,
-            Self::Bitfield(ref message) => state.0.encode(message, buf)?,
-            Self::Range(ref message) => state.0.encode(message, buf)?,
-            Self::Extension(ref message) => state.0.encode(message, buf)?,
-            Self::LocalSignal(_) => 0,
-        };
-        Ok(state.start())
+            Message::Open(_) => "Open",
+            Message::Close(_) => "Close",
+            Message::Synchronize(_) => "Synchronize",
+            Message::Request(_) => "Request",
+            Message::Cancel(_) => "Cancel",
+            Message::Data(_) => "Data",
+            Message::NoData(_) => "NoData",
+            Message::Want(_) => "Want",
+            Message::Unwant(_) => "Unwant",
+            Message::Bitfield(_) => "Bitfield",
+            Message::Range(_) => "Range",
+            Message::Extension(_) => "Extension",
+            Message::LocalSignal(_) => "LocalSignal",
+        }
     }
 }
 
@@ -479,7 +308,6 @@ impl fmt::Display for Message {
 pub(crate) struct ChannelMessage {
     pub(crate) channel: u64,
     pub(crate) message: Message,
-    state: Option<HypercoreState>,
 }
 
 impl PartialEq for ChannelMessage {
@@ -494,14 +322,21 @@ impl fmt::Debug for ChannelMessage {
     }
 }
 
+impl fmt::Display for ChannelMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ChannelMessage {{ channel {}, message {} }}",
+            self.channel,
+            self.message.name()
+        )
+    }
+}
+
 impl ChannelMessage {
     /// Create a new message.
     pub(crate) fn new(channel: u64, message: Message) -> Self {
-        Self {
-            channel,
-            message,
-            state: None,
-        }
+        Self { channel, message }
     }
 
     /// Consume self and return (channel, Message).
@@ -513,23 +348,24 @@ impl ChannelMessage {
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
+    #[instrument(skip_all, err)]
     pub(crate) fn decode_open_message(buf: &[u8]) -> io::Result<(Self, usize)> {
-        if buf.len() <= 5 {
+        debug!("Decode ChannelMessage::Open");
+        let og_len = buf.len();
+        if og_len <= 5 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received too short Open message",
             ));
         }
 
-        let mut state = State::new_with_start_and_end(0, buf.len());
-        let open_msg: Open = state.decode(buf)?;
+        let (open_msg, buf) = Open::decode(buf)?;
         Ok((
             Self {
                 channel: open_msg.channel,
                 message: Message::Open(open_msg),
-                state: None,
             },
-            state.start(),
+            og_len - buf.len(),
         ))
     }
 
@@ -538,107 +374,154 @@ impl ChannelMessage {
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
     pub(crate) fn decode_close_message(buf: &[u8]) -> io::Result<(Self, usize)> {
+        debug!("Decode ChannelMessage::Close");
+        let og_len = buf.len();
         if buf.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "received too short Close message",
             ));
         }
-        let mut state = State::new_with_start_and_end(0, buf.len());
-        let close_msg: Close = state.decode(buf)?;
+        let (close, buf) = Close::decode(buf)?;
         Ok((
             Self {
-                channel: close_msg.channel,
-                message: Message::Close(close_msg),
-                state: None,
+                channel: close.channel,
+                message: Message::Close(close),
             },
-            state.start(),
+            og_len - buf.len(),
         ))
     }
 
+    #[instrument(err, skip_all)]
+    pub(crate) fn decode_from_channel_and_message(
+        buf: &[u8],
+    ) -> Result<(Self, &[u8]), EncodingError> {
+        //<ChannelMessage as CompactEncoding>::decode(buf)
+        let (channel, buf) = u64::decode(buf)?;
+        let (message, buf) = <Message as CompactEncoding>::decode(buf)?;
+        debug!(
+            "Decode ChannelMessage{{ channel: {channel}, message: {} }}",
+            message.name()
+        );
+        Ok((Self { channel, message }, buf))
+    }
     /// Decode a normal channel message from a buffer.
     ///
     /// Note: `buf` has to have a valid length, and without the 3 LE
     /// bytes in it
-    pub(crate) fn decode(buf: &[u8], channel: u64) -> io::Result<(Self, usize)> {
+    #[instrument(err, skip(buf))]
+    pub(crate) fn decode_with_channel(buf: &[u8], channel: u64) -> io::Result<(Self, &[u8])> {
         if buf.len() <= 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "received empty message",
+                format!("received empty message [{buf:?}]"),
             ));
         }
-        let mut state = State::from_buffer(buf);
-        let typ: u64 = state.decode(buf)?;
-        let (message, length) = Message::decode(&buf[state.start()..], typ)?;
-        Ok((
-            Self {
-                channel,
-                message,
-                state: None,
-            },
-            state.start() + length,
-        ))
-    }
-
-    /// Performance optimization for letting calling encoded_len() already do
-    /// the preencode phase of compact_encoding.
-    fn prepare_state(&mut self) -> Result<(), EncodingError> {
-        if self.state.is_none() {
-            let state = if let Message::Open(_) = self.message {
-                // Open message doesn't have a type
-                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L41
-                let mut state = HypercoreState::new();
-                self.message.preencode(&mut state)?;
-                state
-            } else if let Message::Close(_) = self.message {
-                // Close message doesn't have a type
-                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L162
-                let mut state = HypercoreState::new();
-                self.message.preencode(&mut state)?;
-                state
-            } else {
-                // The header is the channel id uint followed by message type uint
-                // https://github.com/mafintosh/protomux/blob/43d5192f31e7a7907db44c11afef3195b7797508/index.js#L179
-                let mut state = HypercoreState::new();
-                let typ = self.message.typ();
-                (*state).preencode(&typ)?;
-                self.message.preencode(&mut state)?;
-                state
-            };
-            self.state = Some(state);
-        }
-        Ok(())
+        let (message, buf) = <Message as CompactEncoding>::decode(buf)?;
+        Ok((Self { channel, message }, buf))
     }
 }
 
-impl Encoder for ChannelMessage {
-    fn encoded_len(&mut self) -> Result<usize, EncodingError> {
-        self.prepare_state()?;
-        Ok(self.state.as_ref().unwrap().end())
+/// NB: currently this is just for a standalone channel message. ChannelMessages in a vec decode &
+/// encode differently
+impl CompactEncoding for ChannelMessage {
+    fn encoded_size(&self) -> Result<usize, EncodingError> {
+        let channel_size = if let Message::Open(_) | Message::Close(_) = &self.message {
+            0
+        } else {
+            self.channel.encoded_size()?
+        };
+
+        Ok(channel_size + self.message.encoded_size()?)
     }
 
-    fn encode(&mut self, buf: &mut [u8]) -> Result<usize, EncodingError> {
-        self.prepare_state()?;
-        let state = self.state.as_mut().unwrap();
-        if let Message::Open(_) = self.message {
-            // Open message is different in that the type byte is missing
-            self.message.encode(state, buf)?;
-        } else if let Message::Close(_) = self.message {
-            // Close message is different in that the type byte is missing
-            self.message.encode(state, buf)?;
+    fn encode<'a>(&self, buffer: &'a mut [u8]) -> Result<&'a mut [u8], EncodingError> {
+        let rest = if let Message::Open(_) | Message::Close(_) = &self.message {
+            buffer
         } else {
-            let typ = self.message.typ();
-            state.0.encode(&typ, buf)?;
-            self.message.encode(state, buf)?;
+            self.channel.encode(buffer)?
+        };
+        <Message as CompactEncoding>::encode(&self.message, rest)
+    }
+
+    fn decode(buffer: &[u8]) -> Result<(Self, &[u8]), EncodingError>
+    where
+        Self: Sized,
+    {
+        ChannelMessage::decode_from_channel_and_message(buffer)
+    }
+}
+
+impl VecEncodable for ChannelMessage {
+    #[instrument(skip_all, ret)]
+    fn vec_encoded_size(vec: &[Self]) -> Result<usize, EncodingError>
+    where
+        Self: Sized,
+    {
+        vec_channel_messages_encoded_size(vec)
+    }
+
+    #[instrument(skip_all, err)]
+    fn vec_encode<'a>(vec: &[Self], buffer: &'a mut [u8]) -> Result<&'a mut [u8], EncodingError>
+    where
+        Self: Sized,
+    {
+        let in_buf_len = buffer.len();
+        trace!(
+            "Vec<ChannelMessage>::encode to buf.len() = [{}]",
+            buffer.len()
+        );
+        let mut rest = buffer;
+        match vec {
+            [] => Ok(rest),
+            [msg] => {
+                rest = match msg.message {
+                    Message::Open(_) => write_array(&OPEN_MESSAGE_PREFIX, rest)?,
+                    Message::Close(_) => write_array(&CLOSE_MESSAGE_PREFIX, rest)?,
+                    _ => msg.channel.encode(rest)?,
+                };
+                msg.message.encode(rest)
+            }
+            msgs => {
+                rest = write_array(&MULTI_MESSAGE_PREFIX, rest)?;
+                let mut current_channel: u64 = msgs[0].channel;
+                rest = current_channel.encode(rest)?;
+                for msg in msgs {
+                    if msg.channel != current_channel {
+                        rest = write_array(&CHANNEL_CHANGE_SEPERATOR, rest)?;
+                        rest = msg.channel.encode(rest)?;
+                        current_channel = msg.channel;
+                    }
+                    let msg_len = msg.message.encoded_size()?;
+                    rest = (msg_len as u64).encode(rest)?;
+                    rest = msg.message.encode(rest)?;
+                }
+                trace!("wrote [{}] bytes to buffer", in_buf_len - rest.len());
+                Ok(rest)
+            }
         }
-        Ok(state.start())
+    }
+
+    fn vec_decode(buffer: &[u8]) -> Result<(Vec<Self>, &[u8]), EncodingError>
+    where
+        Self: Sized,
+    {
+        let mut combined_messages: Vec<ChannelMessage> = vec![];
+        let mut rest = buffer;
+        while !rest.is_empty() {
+            let (msgs, length) = decode_unframed_channel_messages(rest)
+                .map_err(|e| EncodingError::external(&format!("{e}")))?;
+            rest = &rest[length..];
+            combined_messages.extend(msgs);
+        }
+        Ok((combined_messages, rest))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hypercore::{
+    use hypercore_schema::{
         DataBlock, DataHash, DataSeek, DataUpgrade, Node, RequestBlock, RequestSeek, RequestUpgrade,
     };
 
@@ -646,19 +529,20 @@ mod tests {
         ($( $msg:expr ),*) => {
             $(
                 let channel = rand::random::<u8>() as u64;
-                let mut channel_message = ChannelMessage::new(channel, $msg);
-                let encoded_len = channel_message.encoded_len().expect("Failed to get encoded length");
-                let mut buf = vec![0u8; encoded_len];
-                let n = channel_message.encode(&mut buf[..]).expect("Failed to encode message");
-                let decoded = ChannelMessage::decode(&buf[..n], channel).expect("Failed to decode message").0.into_split();
-                assert_eq!(channel, decoded.0);
-                assert_eq!($msg, decoded.1);
+                let channel_message = ChannelMessage::new(channel, $msg);
+                let encoded_size = channel_message.encoded_size()?;
+                let mut buf = vec![0u8; encoded_size];
+                let rest = <ChannelMessage as CompactEncoding>::encode(&channel_message, &mut buf)?;
+                assert!(rest.is_empty());
+                let (decoded, rest) = <ChannelMessage as CompactEncoding>::decode(&buf)?;
+                assert!(rest.is_empty());
+                assert_eq!(decoded, channel_message);
             )*
         }
     }
 
     #[test]
-    fn message_encode_decode() {
+    fn message_encode_decode() -> Result<(), EncodingError> {
         message_enc_dec! {
             Message::Synchronize(Synchronize{
                 fork: 0,
@@ -685,7 +569,9 @@ mod tests {
                 upgrade: Some(RequestUpgrade {
                     start: 0,
                     length: 10
-                })
+                }),
+                manifest: false,
+                priority: 0
             }),
             Message::Cancel(Cancel {
                 request: 1,
@@ -739,5 +625,29 @@ mod tests {
                 message: vec![0x44, 20]
             })
         };
+        Ok(())
+    }
+
+    #[test]
+    fn enc_dec_vec_chan_message() -> Result<(), EncodingError> {
+        let one = Message::Synchronize(Synchronize {
+            fork: 0,
+            length: 4,
+            remote_length: 0,
+            downloading: true,
+            uploading: true,
+            can_upgrade: true,
+        });
+        let two = Message::Range(Range {
+            drop: false,
+            start: 0,
+            length: 4,
+        });
+        let msgs = vec![ChannelMessage::new(1, one), ChannelMessage::new(1, two)];
+        let buff = msgs.to_encoded_bytes()?;
+        let (result, rest) = <Vec<ChannelMessage> as CompactEncoding>::decode(&buff)?;
+        assert!(rest.is_empty());
+        assert_eq!(result, msgs);
+        Ok(())
     }
 }

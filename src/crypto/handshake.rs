@@ -1,15 +1,13 @@
-use super::curve::CurveResolver;
-use crate::util::wrap_uint24_le;
-use blake2::{
-    digest::{typenum::U32, FixedOutput, Update},
-    Blake2bMac,
-};
-use snow::resolvers::{DefaultResolver, FallbackResolver};
-use snow::{Builder, Error as SnowError, HandshakeState};
-use std::io::{Error, ErrorKind, Result};
+//! Handshake result and capability verification for hypercore replication.
+//!
+//! This module handles capability verification using the handshake hash from
+//! the underlying encrypted connection (e.g., from hyperswarm/hyperdht).
 
-const CIPHERKEYLEN: usize = 32;
-const HANDSHAKE_PATTERN: &str = "Noise_XX_Ed25519_ChaChaPoly_BLAKE2b";
+use blake2::{
+    Blake2bMac,
+    digest::{FixedOutput, Update, typenum::U32},
+};
+use std::io::{Error, ErrorKind, Result};
 
 // These the output of, see `hash_namespace` test below for how they are produced
 // https://github.com/hypercore-protocol/hypercore/blob/70b271643c4e4b1e5ecae5bb579966dfe6361ff3/lib/caps.js#L9
@@ -22,17 +20,48 @@ const REPLICATE_RESPONDER: [u8; 32] = [
     0x4E, 0x9, 0x26, 0x26, 0x2, 0x56, 0x86, 0x5A, 0xCC, 0xC0, 0xBF, 0x15, 0xBD, 0x79, 0x12, 0x7D,
 ];
 
+/// Result of a Noise handshake, used for capability verification.
+///
+/// When using hypercore-protocol with hyperswarm, the Noise handshake is performed
+/// at the transport layer (hyperdht). This struct holds the information needed
+/// for capability verification when opening channels.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct HandshakeResult {
+pub struct HandshakeResult {
     pub(crate) is_initiator: bool,
-    pub(crate) local_pubkey: Vec<u8>,
-    pub(crate) remote_pubkey: Vec<u8>,
+    /// Local public key (32 bytes)
+    pub local_pubkey: Vec<u8>,
+    /// Remote public key (32 bytes)
+    pub remote_pubkey: Vec<u8>,
     pub(crate) handshake_hash: Vec<u8>,
-    pub(crate) split_tx: [u8; CIPHERKEYLEN],
-    pub(crate) split_rx: [u8; CIPHERKEYLEN],
 }
 
 impl HandshakeResult {
+    /// Create a HandshakeResult for a pre-encrypted connection.
+    ///
+    /// This is used when the Noise handshake was performed at a lower layer
+    /// (e.g., hyperswarm/hyperdht) and we're reusing the encrypted channel.
+    /// The handshake_hash is used for capability verification.
+    ///
+    /// # Arguments
+    /// * `is_initiator` - Whether this peer initiated the connection
+    /// * `local_pubkey` - This peer's Noise public key
+    /// * `remote_pubkey` - The remote peer's Noise public key
+    /// * `handshake_hash` - The 64-byte handshake hash from the Noise handshake
+    pub fn from_pre_encrypted(
+        is_initiator: bool,
+        local_pubkey: [u8; 32],
+        remote_pubkey: [u8; 32],
+        handshake_hash: Vec<u8>,
+    ) -> Self {
+        Self {
+            is_initiator,
+            local_pubkey: local_pubkey.to_vec(),
+            remote_pubkey: remote_pubkey.to_vec(),
+            handshake_hash,
+        }
+    }
+
+    /// Compute capability for opening a channel with the given key.
     pub(crate) fn capability(&self, key: &[u8]) -> Option<Vec<u8>> {
         Some(replicate_capability(
             self.is_initiator,
@@ -41,6 +70,7 @@ impl HandshakeResult {
         ))
     }
 
+    /// Compute expected remote capability for the given key.
     pub(crate) fn remote_capability(&self, key: &[u8]) -> Option<Vec<u8>> {
         Some(replicate_capability(
             !self.is_initiator,
@@ -49,6 +79,7 @@ impl HandshakeResult {
         ))
     }
 
+    /// Verify a remote peer's capability for opening a channel.
     pub(crate) fn verify_remote_capability(
         &self,
         capability: Option<Vec<u8>>,
@@ -69,161 +100,8 @@ impl HandshakeResult {
     }
 }
 
-pub(crate) struct Handshake {
-    result: HandshakeResult,
-    state: HandshakeState,
-    payload: Vec<u8>,
-    tx_buf: Vec<u8>,
-    rx_buf: Vec<u8>,
-    complete: bool,
-    did_receive: bool,
-}
-
-impl Handshake {
-    pub(crate) fn new(is_initiator: bool) -> Result<Self> {
-        let (state, local_pubkey) = build_handshake_state(is_initiator).map_err(map_err)?;
-
-        let payload = vec![];
-        let result = HandshakeResult {
-            is_initiator,
-            local_pubkey,
-            ..Default::default()
-        };
-        Ok(Self {
-            state,
-            result,
-            payload,
-            tx_buf: vec![0u8; 512],
-            rx_buf: vec![0u8; 512],
-            complete: false,
-            did_receive: false,
-        })
-    }
-
-    pub(crate) fn start(&mut self) -> Result<Option<Vec<u8>>> {
-        if self.is_initiator() {
-            let tx_len = self.send()?;
-            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
-            Ok(Some(wrapped))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub(crate) fn complete(&self) -> bool {
-        self.complete
-    }
-
-    pub(crate) fn is_initiator(&self) -> bool {
-        self.result.is_initiator
-    }
-
-    fn recv(&mut self, msg: &[u8]) -> Result<usize> {
-        self.state
-            .read_message(msg, &mut self.rx_buf)
-            .map_err(map_err)
-    }
-    fn send(&mut self) -> Result<usize> {
-        self.state
-            .write_message(&self.payload, &mut self.tx_buf)
-            .map_err(map_err)
-    }
-
-    pub(crate) fn read(&mut self, msg: &[u8]) -> Result<Option<Vec<u8>>> {
-        // eprintln!("hs read len {}", msg.len());
-        if self.complete() {
-            return Err(Error::new(ErrorKind::Other, "Handshake read after finish"));
-        }
-
-        let _rx_len = self.recv(msg)?;
-
-        if !self.is_initiator() && !self.did_receive {
-            self.did_receive = true;
-            let tx_len = self.send()?;
-            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
-            return Ok(Some(wrapped));
-        }
-
-        let tx_buf = if self.is_initiator() {
-            let tx_len = self.send()?;
-            let wrapped = wrap_uint24_le(&self.tx_buf[..tx_len].to_vec());
-            Some(wrapped)
-        } else {
-            None
-        };
-
-        let split = self.state.dangerously_get_raw_split();
-        if self.is_initiator() {
-            self.result.split_tx = split.0;
-            self.result.split_rx = split.1;
-        } else {
-            self.result.split_tx = split.1;
-            self.result.split_rx = split.0;
-        }
-        self.result.remote_pubkey = self
-            .state
-            .get_remote_static()
-            .expect("Could not read remote static key after handshake")
-            .to_vec();
-        self.result.handshake_hash = self.state.get_handshake_hash().to_vec();
-        self.complete = true;
-        Ok(tx_buf)
-    }
-
-    pub(crate) fn into_result(self) -> Result<HandshakeResult> {
-        if !self.complete() {
-            Err(Error::new(ErrorKind::Other, "Handshake is not complete"))
-        } else {
-            Ok(self.result)
-        }
-    }
-}
-
-fn build_handshake_state(
-    is_initiator: bool,
-) -> std::result::Result<(HandshakeState, Vec<u8>), SnowError> {
-    use snow::params::{
-        BaseChoice, CipherChoice, DHChoice, HandshakeChoice, HandshakeModifierList,
-        HandshakePattern, HashChoice, NoiseParams,
-    };
-    // NB: HANDSHAKE_PATTERN.parse() doesn't work because the pattern has "Ed25519"
-    // instead of "25519".
-    let noise_params = NoiseParams::new(
-        HANDSHAKE_PATTERN.to_string(),
-        BaseChoice::Noise,
-        HandshakeChoice {
-            pattern: HandshakePattern::XX,
-            modifiers: HandshakeModifierList { list: vec![] },
-        },
-        DHChoice::Curve25519,
-        CipherChoice::ChaChaPoly,
-        HashChoice::Blake2b,
-    );
-    let builder: Builder<'_> = Builder::with_resolver(
-        noise_params,
-        Box::new(FallbackResolver::new(
-            Box::<CurveResolver>::default(),
-            Box::<DefaultResolver>::default(),
-        )),
-    );
-    let key_pair = builder.generate_keypair().unwrap();
-    let builder = builder.local_private_key(&key_pair.private);
-    let handshake_state = if is_initiator {
-        tracing::debug!("building initiator");
-        builder.build_initiator()?
-    } else {
-        tracing::debug!("building responder");
-        builder.build_responder()?
-    };
-    Ok((handshake_state, key_pair.public))
-}
-
-fn map_err(e: SnowError) -> Error {
-    Error::new(ErrorKind::PermissionDenied, format!("Handshake error: {e}"))
-}
-
 /// Create a hash used to indicate replication capability.
-/// See https://github.com/hypercore-protocol/hypercore/blob/70b271643c4e4b1e5ecae5bb579966dfe6361ff3/lib/caps.js#L11
+/// See JavaScript [here](https://github.com/hypercore-protocol/hypercore/blob/70b271643c4e4b1e5ecae5bb579966dfe6361ff3/lib/caps.js#L11).
 fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8]) -> Vec<u8> {
     let seed = if is_initiator {
         REPLICATE_INITIATOR
@@ -236,6 +114,6 @@ fn replicate_capability(is_initiator: bool, key: &[u8], handshake_hash: &[u8]) -
     hasher.update(&seed);
     hasher.update(key);
     let hash = hasher.finalize_fixed();
-    let capability = hash.as_slice().to_vec();
-    capability
+
+    hash.as_slice().to_vec()
 }

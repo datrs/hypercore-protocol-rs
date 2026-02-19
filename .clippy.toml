@@ -1,0 +1,2 @@
+# We want to know ASAP if we have a needless_pass_by_mut or needless_pass_by_value,  etc added to the public API
+avoid-breaking-exported-api = false

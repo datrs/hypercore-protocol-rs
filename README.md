@@ -72,10 +72,10 @@ node examples-nodejs/run.js node
 
 ## Development
 
-To test interoperability with Javascript, enable the `js_interop_tests` feature:
+To test interoperability with Javascript, enable the `js_tests` feature:
 
 ```bash
-cargo test --features js_interop_tests
+cargo test --features js_tests
 ```
 
 Run benches with:

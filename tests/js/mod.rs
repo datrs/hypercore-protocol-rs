@@ -1,15 +1,11 @@
 use anyhow::Result;
 use instant::Duration;
-use std::fs::{create_dir_all, remove_dir_all, remove_file};
-use std::path::Path;
-use std::process::Command;
-
-#[cfg(feature = "async-std")]
-use async_std::{
-    process,
-    task::{self, sleep},
+use std::{
+    fs::{create_dir_all, remove_dir_all, remove_file},
+    path::Path,
+    process::Command,
 };
-#[cfg(feature = "tokio")]
+
 use tokio::{process, task, time::sleep};
 
 use crate::_util::wait_for_localhost_port;
@@ -41,9 +37,9 @@ pub fn install() {
 }
 
 pub fn prepare_test_set(test_set: &str) -> (String, String, String) {
-    let path_result = format!("tests/js/work/{}/result.txt", test_set);
-    let path_writer = format!("tests/js/work/{}/writer", test_set);
-    let path_reader = format!("tests/js/work/{}/reader", test_set);
+    let path_result = format!("tests/js/work/{test_set}/result.txt");
+    let path_writer = format!("tests/js/work/{test_set}/writer");
+    let path_reader = format!("tests/js/work/{test_set}/reader");
     create_dir_all(&path_writer).expect("Unable to create work writer directory");
     create_dir_all(&path_reader).expect("Unable to create work reader directory");
     (path_result, path_writer, path_reader)
@@ -98,25 +94,10 @@ impl JavascriptServer {
             assert_eq!(
                 Some(0),
                 code,
-                "node server did not exit successfully, is_writer={}, port={}, data_count={}, data_size={}, data_char={}, test_set={}",
-                is_writer,
-                port,
-                data_count,
-                data_size,
-                data_char,
-                test_set,
+                "node server did not exit successfully, is_writer={is_writer}, port={port}, data_count={data_count}, data_size={data_size}, data_char={data_char}, test_set={test_set}",
             );
         }));
         wait_for_localhost_port(port).await;
-    }
-}
-
-impl Drop for JavascriptServer {
-    fn drop(&mut self) {
-        #[cfg(feature = "async-std")]
-        if let Some(handle) = self.handle.take() {
-            async_std::task::block_on(handle.cancel());
-        }
     }
 }
 
