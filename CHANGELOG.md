@@ -4,7 +4,10 @@ All notable changes to this Rust implementation of hypercore-protocol will be do
 
 ### unreleased
 
-* TODO: Add changes here as they happen
+BIG CHANGES:
+* Encryption and framing of streams has been moved out of this crate into `hypercore_handshake` and `uint24le_framing` respectively. This had big impacts on the public API. Now `Protocol::new` just takes a `impl CipherTrait` argument.
+* Remove dependence on `hypercore` instead we use `hypercore_schema`.
+* Bumped to edition 2024.
 
 ### 0.6.1
 
