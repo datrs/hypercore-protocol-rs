@@ -171,8 +171,8 @@ impl Protocol {
     ///
     /// Once the other side proofed that it also knows the `key`, the channel is emitted as
     /// `Event::Channel` on the protocol event stream.
-    pub async fn open(&self, key: Key) -> Result<()> {
-        self.command_tx.open(key).await
+    pub fn open(&self, key: Key) -> impl Future<Output = Result<()>> + use<> {
+        self.command_tx.open(key)
     }
 
     /// Iterator of all currently opened channels.
@@ -478,14 +478,15 @@ pub struct CommandTx(Sender<Command>);
 
 impl CommandTx {
     /// Send a protocol command
-    pub async fn send(&self, command: Command) -> Result<()> {
-        self.0.send(command).await.map_err(map_channel_err)
+    pub fn send(&self, command: Command) -> impl Future<Output = Result<()>> + use<> {
+        let sender = self.0.clone();
+        async move { sender.send(command).await.map_err(map_channel_err) }
     }
     /// Open a protocol channel.
     ///
     /// The channel will be emitted on the main protocol.
-    pub async fn open(&self, key: Key) -> Result<()> {
-        self.send(Command::Open(key)).await
+    pub fn open(&self, key: Key) -> impl Future<Output = Result<()>> + use<> {
+        self.send(Command::Open(key))
     }
 
     /// Close a protocol channel.
