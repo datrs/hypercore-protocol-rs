@@ -37,7 +37,8 @@ function startRust (mode, key, color, name) {
     color: color || 'blue',
     env: {
       ...process.env,
-      RUST_LOG_STYLE: 'always'
+      RUST_LOG_STYLE: 'always',
+      RUST_LOG: 'trace'
     }
   })
   return rust

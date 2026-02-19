@@ -1,32 +1,37 @@
-#![allow(dead_code, unused_imports)]
-
-use async_std::net::TcpStream;
-use async_std::prelude::*;
-use async_std::task;
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
-use hypercore_protocol::{schema::*, DiscoveryKey};
-use std::io;
-use test_log::test;
+use _util::{create_pair, drive_until_channel, event_channel, event_discovery_key, next_event};
+use futures_lite::StreamExt;
+use hypercore_protocol::{DiscoveryKey, Event, Message, discovery_key, schema::*};
+use std::{io, time::Duration};
+use tokio::task;
 
 mod _util;
-use _util::*;
 
-#[test(async_std::test)]
+#[tokio::test]
 async fn basic_protocol() -> anyhow::Result<()> {
-    // env_logger::init();
-    let (proto_a, proto_b) = create_pair_memory().await?;
+    let (mut proto_a, mut proto_b) = create_pair();
 
-    let next_a = next_event(proto_a);
-    let next_b = next_event(proto_b);
-    let (mut proto_a, event_a) = next_a.await;
-    let (proto_b, event_b) = next_b.await;
+    let next_a = tokio::task::spawn(async move {
+        let e1 = proto_a.next().await;
+        let e1 = e1.unwrap();
+        _ = tokio::time::timeout(Duration::from_millis(200), proto_a.next()).await;
+
+        (proto_a, e1)
+    });
+
+    let next_b = tokio::task::spawn(async move {
+        let e1 = proto_b.next().await;
+        let e1 = e1.unwrap();
+        (proto_b, e1)
+    });
+
+    let (proto_a, event_a) = next_a.await?;
+    let (proto_b, event_b) = next_b.await?;
 
     assert!(matches!(event_a, Ok(Event::Handshake(_))));
     assert!(matches!(event_b, Ok(Event::Handshake(_))));
 
-    assert_eq!(proto_a.public_key(), proto_b.remote_public_key());
-    assert_eq!(proto_b.public_key(), proto_a.remote_public_key());
+    assert_eq!(proto_a.public_key(), proto_b.remote_public_key().unwrap());
+    assert_eq!(proto_b.public_key(), proto_a.remote_public_key().unwrap());
 
     let key = [3u8; 32];
 
@@ -35,18 +40,18 @@ async fn basic_protocol() -> anyhow::Result<()> {
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
 
-    let (mut proto_b, event_b) = next_b.await;
+    let (proto_b, event_b) = next_b.await?;
     assert!(matches!(event_b, Ok(Event::DiscoveryKey(_))));
     assert_eq!(event_discovery_key(event_b.unwrap()), discovery_key(&key));
 
     proto_b.open(key).await?;
 
     let next_b = next_event(proto_b);
-    let (proto_b, event_b) = next_b.await;
+    let (proto_b, event_b) = next_b.await?;
     assert!(matches!(event_b, Ok(Event::Channel(_))));
     let mut channel_b = event_channel(event_b.unwrap());
 
-    let (proto_a, event_a) = next_a.await;
+    let (proto_a, event_a) = next_a.await?;
     assert!(matches!(event_a, Ok(Event::Channel(_))));
     let mut channel_a = event_channel(event_a.unwrap());
 
@@ -61,15 +66,14 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     let channel_event_b = channel_b.next().await;
     assert_eq!(channel_event_b, Some(want(0, 10)));
-    // eprintln!("channel_event_b: {:?}", channel_event_b);
 
     let channel_event_a = channel_a.next().await;
     assert_eq!(channel_event_a, Some(want(10, 5)));
 
     channel_a.close().await?;
 
-    let (_, event_a) = next_a.await;
-    let (_, event_b) = next_b.await;
+    let (_, event_a) = next_a.await?;
+    let (_, event_b) = next_b.await?;
 
     assert!(matches!(event_a, Ok(Event::Close(_))));
     assert!(matches!(event_b, Ok(Event::Close(_))));
@@ -78,9 +82,9 @@ async fn basic_protocol() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test(async_std::test)]
+#[tokio::test]
 async fn open_close_channels() -> anyhow::Result<()> {
-    let (mut proto_a, mut proto_b) = create_pair_memory().await?;
+    let (proto_a, proto_b) = create_pair();
 
     let key1 = [0u8; 32];
     let key2 = [1u8; 32];
@@ -91,8 +95,9 @@ async fn open_close_channels() -> anyhow::Result<()> {
     let next_a = drive_until_channel(proto_a);
     let next_b = drive_until_channel(proto_b);
 
-    let (mut proto_a, mut channel_a1) = next_a.await?;
-    let (mut proto_b, mut channel_b1) = next_b.await?;
+    let (proto_a, channel_a1) = next_a.await??;
+
+    let (proto_b, channel_b1) = next_b.await??;
 
     proto_a.open(key2).await?;
     proto_b.open(key2).await?;
@@ -100,8 +105,8 @@ async fn open_close_channels() -> anyhow::Result<()> {
     let next_a = drive_until_channel(proto_a);
     let next_b = drive_until_channel(proto_b);
 
-    let (proto_a, mut channel_a2) = next_a.await?;
-    let (proto_b, mut channel_b2) = next_b.await?;
+    let (proto_a, mut channel_a2) = next_a.await??;
+    let (proto_b, mut channel_b2) = next_b.await??;
 
     eprintln!(
         "got channels: {:?}",
@@ -119,8 +124,8 @@ async fn open_close_channels() -> anyhow::Result<()> {
 
     let next_a = next_event(proto_a);
     let next_b = next_event(proto_b);
-    let (mut proto_a, ev_a) = next_a.await;
-    let (mut proto_b, ev_b) = next_b.await;
+    let (mut proto_a, ev_a) = next_a.await?;
+    let (mut proto_b, ev_b) = next_b.await?;
     let ev_a = ev_a?;
     let ev_b = ev_b?;
     eprintln!("next a: {ev_a:?}");
@@ -165,7 +170,6 @@ async fn open_close_channels() -> anyhow::Result<()> {
     assert_eq!(msg_b, Some(want(0, 10)));
 
     eprintln!("all good!");
-
     Ok(())
 }
 

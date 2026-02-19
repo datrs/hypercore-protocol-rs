@@ -10,7 +10,7 @@ authors = [
 documentation = "https://docs.rs/hypercore-protocol"
 repository = "https://github.com/datrs/hypercore-protocol-rs"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 keywords = ["dat", "p2p", "replication", "hypercore", "protocol"]
 categories = [
   "asynchronous",
@@ -26,12 +26,10 @@ bench = false
 
 [dependencies]
 async-channel = "1"
-snow = { version = "0.9", features = ["risky-raw-split"] }
-bytes = "1"
+snow = { version = "0.10", features = ["risky-raw-split"] }
 rand = "0.8"
 blake2 = "0.10"
 hex = "0.4"
-async-trait = "0.1"
 tracing = "0.1"
 pretty-hash = "0.4"
 futures-timer = "3"
@@ -39,17 +37,22 @@ futures-lite = "1"
 sha2 = "0.10"
 curve25519-dalek = "4"
 crypto_secretstream = "0.2"
+futures = "0.3.31"
+compact-encoding = "2"
+thiserror = "2.0.12"
+hypercore_handshake = "0.6.0"
 
-[dependencies.hypercore]
-version = "0.14.0"
-default-features = false
+[dev-dependencies.hypercore]
+features = ["shared-core"]
+version = "0.16.0"
 
+[dependencies.hypercore_schema]
+version = "0.2.0"
 
 [dev-dependencies]
 async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
 async-compat = "0.2.1"
 tokio = { version = "1.27.0", features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
-env_logger = "0.7.1"
 anyhow = "1.0.28"
 instant = "0.1"
 criterion = { version = "0.4", features = ["async_std"] }
@@ -57,23 +60,26 @@ pretty-bytes = "0.2.2"
 duplexify = "1.1.0"
 sluice = "0.5.4"
 futures = "0.3.13"
-log = "0.4"
-test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+tracing-tree = "0.4.0"
+tokio-util = { version = "0.7.14", features = ["compat"] }
+uint24le_framing = { version = "0.2.0" }
+
+[dev-dependencies.rusty_nodejs_repl]
+version = "0.4.0"
+features = ["serde", "integration_utils"]
 
 [features]
-default = ["tokio", "sparse"]
 wasm-bindgen = [
   "futures-timer/wasm-bindgen"
 ]
-sparse = ["hypercore/sparse"]
-cache = ["hypercore/cache"]
-tokio = ["hypercore/tokio"]
-async-std = ["hypercore/async-std"]
 # Used only in interoperability tests under tests/js-interop which use the javascript version of hypercore
 # to verify that this crate works. To run them, use:
-# cargo test --features js_interop_tests
-js_interop_tests = []
+# cargo test --features js_tests
+js_tests = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [profile.bench]
 # debug = true

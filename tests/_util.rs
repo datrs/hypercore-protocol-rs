@@ -1,38 +1,46 @@
-use async_std::net::TcpStream;
-use async_std::prelude::*;
-use async_std::task::{self, JoinHandle};
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use hypercore_protocol::{Channel, DiscoveryKey, Duplex, Event, Protocol, ProtocolBuilder};
+#![allow(unused)]
+use async_compat::CompatExt;
+use futures_lite::StreamExt;
+use hypercore_handshake::{Cipher, state_machine::SecStream};
+use hypercore_protocol::{Channel, DiscoveryKey, Event, Protocol};
 use instant::Duration;
 use std::io;
+use tokio::task::JoinHandle;
+use uint24le_framing::Uint24LELengthPrefixedFraming;
 
-pub type MemoryProtocol = Protocol<Duplex<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>>;
-pub async fn create_pair_memory() -> io::Result<(MemoryProtocol, MemoryProtocol)> {
-    let (ar, bw) = sluice::pipe::pipe();
-    let (br, aw) = sluice::pipe::pipe();
+/// Create a connected pair of test streams.
+pub fn create_connected_streams() -> (Cipher, Cipher) {
+    let (left, right) = tokio::io::duplex(10_000);
+    let left = Uint24LELengthPrefixedFraming::new(left.compat());
+    let right = Uint24LELengthPrefixedFraming::new(right.compat());
 
-    let a = ProtocolBuilder::new(true);
-    let b = ProtocolBuilder::new(false);
-    let a = a.connect_rw(ar, aw);
-    let b = b.connect_rw(br, bw);
-    Ok((a, b))
+    let kp = hypercore_handshake::state_machine::hc_specific::generate_keypair().unwrap();
+
+    let initiator = Cipher::new_init(
+        Box::new(left),
+        SecStream::new_initiator_ik(&kp.public.clone().try_into().unwrap(), &[]).unwrap(),
+    );
+    let responder = Cipher::new_resp(
+        Box::new(right),
+        SecStream::new_responder_ik(&kp, &[]).unwrap(),
+    );
+    dbg!(responder.get_remote_static());
+
+    (initiator, responder)
 }
 
-pub type TcpProtocol = Protocol<TcpStream>;
-pub async fn create_pair_tcp() -> io::Result<(TcpProtocol, TcpProtocol)> {
-    let (stream_a, stream_b) = tcp::pair().await?;
-    let a = ProtocolBuilder::new(true).connect(stream_a);
-    let b = ProtocolBuilder::new(false).connect(stream_b);
-    Ok((a, b))
+/// Create a connected pair of protocols for testing.
+pub fn create_pair() -> (Protocol, Protocol) {
+    let (stream_a, stream_b) = create_connected_streams();
+
+    let proto_a = Protocol::new(Box::new(stream_a));
+    let proto_b = Protocol::new(Box::new(stream_b));
+
+    (proto_a, proto_b)
 }
 
-pub fn next_event<IO>(
-    mut proto: Protocol<IO>,
-) -> impl Future<Output = (Protocol<IO>, io::Result<Event>)>
-where
-    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
-    task::spawn(async move {
+pub fn next_event(mut proto: Protocol) -> JoinHandle<(Protocol, io::Result<Event>)> {
+    tokio::task::spawn(async move {
         let e1 = proto.next().await;
         let e1 = e1.unwrap();
         (proto, e1)
@@ -56,13 +64,8 @@ pub fn event_channel(event: Event) -> Channel {
 }
 
 /// Drive a protocol stream until the first channel arrives.
-pub fn drive_until_channel<IO>(
-    mut proto: Protocol<IO>,
-) -> JoinHandle<io::Result<(Protocol<IO>, Channel)>>
-where
-    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
-    task::spawn(async move {
+pub fn drive_until_channel(mut proto: Protocol) -> JoinHandle<io::Result<(Protocol, Channel)>> {
+    tokio::task::spawn(async move {
         while let Some(event) = proto.next().await {
             let event = event?;
             if let Event::Channel(channel) = event {
@@ -76,34 +79,15 @@ where
     })
 }
 
-pub mod tcp {
-    use async_std::net::{TcpListener, TcpStream};
-    use async_std::prelude::*;
-    use async_std::task;
-    use std::io::{Error, ErrorKind, Result};
-    pub async fn pair() -> Result<(TcpStream, TcpStream)> {
-        let address = "localhost:9999";
-        let listener = TcpListener::bind(&address).await?;
-        let mut incoming = listener.incoming();
-
-        let connect_task = task::spawn(async move { TcpStream::connect(&address).await });
-
-        let server_stream = incoming.next().await;
-        let server_stream =
-            server_stream.ok_or_else(|| Error::new(ErrorKind::Other, "Stream closed"))?;
-        let server_stream = server_stream?;
-        let client_stream = connect_task.await?;
-        Ok((server_stream, client_stream))
-    }
-}
-
-const RETRY_TIMEOUT: u64 = 100_u64;
-const NO_RESPONSE_TIMEOUT: u64 = 1000_u64;
+#[allow(unused)]
 pub async fn wait_for_localhost_port(port: u32) {
+    use async_std::net::TcpStream;
+    const RETRY_TIMEOUT: u64 = 100_u64;
+    const NO_RESPONSE_TIMEOUT: u64 = 1000_u64;
     loop {
         let timeout = async_std::future::timeout(
             Duration::from_millis(NO_RESPONSE_TIMEOUT),
-            TcpStream::connect(format!("localhost:{}", port)),
+            TcpStream::connect(format!("localhost:{port}")),
         )
         .await;
         if timeout.is_err() {

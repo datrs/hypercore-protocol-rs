@@ -1,19 +1,23 @@
-use crate::message::ChannelMessage;
-use crate::schema::*;
-use crate::util::{map_channel_err, pretty_hash};
-use crate::Message;
-use crate::{discovery_key, DiscoveryKey, Key};
+use crate::{
+    DiscoveryKey, Key, Message, discovery_key,
+    message::ChannelMessage,
+    schema::*,
+    util::{map_channel_err, pretty_hash},
+};
 use async_channel::{Receiver, Sender, TrySendError};
-use futures_lite::ready;
-use futures_lite::stream::Stream;
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{Error, ErrorKind, Result};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::task::Poll;
-use tracing::debug;
+use futures_lite::{ready, stream::Stream};
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{Error, ErrorKind, Result},
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::Poll,
+};
+use tracing::instrument;
 
 /// A protocol channel.
 ///
@@ -86,14 +90,13 @@ impl Channel {
     }
 
     /// Send a message over the channel.
-    pub async fn send(&mut self, message: Message) -> Result<()> {
+    pub async fn send(&self, message: Message) -> Result<()> {
         if self.closed() {
             return Err(Error::new(
                 ErrorKind::ConnectionAborted,
                 "Channel is closed",
             ));
         }
-        debug!("TX:\n{message:?}\n");
         let message = ChannelMessage::new(self.local_id as u64, message);
         self.outbound_tx
             .send(vec![message])
@@ -102,7 +105,7 @@ impl Channel {
     }
 
     /// Send a batch of messages over the channel.
-    pub async fn send_batch(&mut self, messages: &[Message]) -> Result<()> {
+    pub async fn send_batch(&self, messages: &[Message]) -> Result<()> {
         // In javascript this is cork()/uncork(), e.g.:
         //
         // https://github.com/holepunchto/hypercore/blob/c338b9aaa4442d35bc9d283d2c242b86a46de6d4/lib/replicator.js#L402-L418
@@ -122,11 +125,9 @@ impl Channel {
 
         let messages = messages
             .iter()
-            .map(|message| {
-                debug!("TX:\n{message:?}\n");
-                ChannelMessage::new(self.local_id as u64, message.clone())
-            })
+            .map(|message| ChannelMessage::new(self.local_id as u64, message.clone()))
             .collect();
+
         self.outbound_tx
             .send(messages)
             .await
@@ -151,7 +152,7 @@ impl Channel {
     }
 
     /// Send a close message and close this channel.
-    pub async fn close(&mut self) -> Result<()> {
+    pub async fn close(&self) -> Result<()> {
         if self.closed() {
             return Ok(());
         }
@@ -165,7 +166,7 @@ impl Channel {
 
     /// Signal the protocol to produce Event::LocalSignal. If you want to send a message
     /// to the channel level, see take_receiver() and local_sender().
-    pub async fn signal_local_protocol(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
+    pub async fn signal_local_protocol(&self, name: &str, data: Vec<u8>) -> Result<()> {
         self.send(Message::LocalSignal((name.to_string(), data)))
             .await?;
         Ok(())
@@ -249,6 +250,7 @@ impl ChannelHandle {
         self.remote_state.as_ref().map(|s| s.remote_id)
     }
 
+    #[instrument(skip_all, fields(local_id = local_id))]
     pub(crate) fn attach_local(&mut self, local_id: usize, key: Key) {
         let local_state = LocalState { local_id, key };
         self.local_state = Some(local_state);
@@ -276,6 +278,7 @@ impl ChannelHandle {
         Ok((&local_state.key, remote_state.remote_capability.as_ref()))
     }
 
+    #[instrument(skip_all)]
     pub(crate) fn open(&mut self, outbound_tx: Sender<Vec<ChannelMessage>>) -> Channel {
         let local_state = self
             .local_state
@@ -311,14 +314,14 @@ impl ChannelHandle {
         &mut self,
         message: Message,
     ) -> std::io::Result<()> {
-        if let Some(inbound_tx) = self.inbound_tx.as_mut() {
-            if let Err(err) = inbound_tx.try_send(message) {
-                match err {
-                    TrySendError::Full(e) => {
-                        return Err(error(format!("Sending to channel failed: {e}").as_str()))
-                    }
-                    TrySendError::Closed(_) => {}
+        if let Some(inbound_tx) = self.inbound_tx.as_mut()
+            && let Err(err) = inbound_tx.try_send(message)
+        {
+            match err {
+                TrySendError::Full(e) => {
+                    return Err(error(format!("Sending to channel failed: {e}").as_str()));
                 }
+                TrySendError::Closed(_) => {}
             }
         }
         Ok(())
@@ -433,6 +436,7 @@ impl ChannelMap {
         self.channels.remove(&hdkey);
     }
 
+    #[instrument(skip(self))]
     pub(crate) fn prepare_to_verify(&self, local_id: usize) -> Result<(&Key, Option<&Vec<u8>>)> {
         let channel_handle = self
             .get_local(local_id)
@@ -507,5 +511,5 @@ impl ChannelMap {
 }
 
 fn error(message: &str) -> Error {
-    Error::new(ErrorKind::Other, message)
+    Error::other(message)
 }

@@ -1,25 +1,28 @@
+#[path = "../src/test_utils.rs"]
+mod test_utils;
 use anyhow::Result;
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
-use env_logger::Env;
-use futures_lite::stream::StreamExt;
-use hypercore::{
-    Hypercore, HypercoreBuilder, PartialKeypair, RequestBlock, RequestUpgrade, Storage,
-    VerifyingKey,
+use async_std::{
+    net::{TcpListener, TcpStream},
+    prelude::*,
+    sync::{Arc, Mutex},
+    task,
 };
-use log::*;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::env;
-use std::fmt::Debug;
+use futures_lite::stream::StreamExt;
+use hypercore::{Hypercore, HypercoreBuilder, PartialKeypair, Storage, VerifyingKey};
 
-use hypercore_protocol::schema::*;
-use hypercore_protocol::{discovery_key, Channel, Event, Message, ProtocolBuilder};
+use hypercore_handshake::{
+    Cipher,
+    state_machine::{SecStream, hc_specific::generate_keypair},
+};
+use hypercore_schema::{RequestBlock, RequestUpgrade};
+use std::{collections::HashMap, convert::TryInto, env, fmt::Debug};
+use tracing::{error, info, instrument};
+use uint24le_framing::Uint24LELengthPrefixedFraming;
+
+use hypercore_protocol::{Channel, Event, Message, Protocol, discovery_key, schema::*};
 
 fn main() {
-    init_logger();
+    test_utils::log();
     if env::args().count() < 3 {
         usage();
     }
@@ -65,12 +68,11 @@ fn main() {
         hypercore_store.add(hypercore_wrapper);
         let hypercore_store = Arc::new(hypercore_store);
 
-        let result = match mode.as_ref() {
+        let _ = match mode.as_ref() {
             "server" => tcp_server(address, onconnection, hypercore_store).await,
             "client" => tcp_client(address, onconnection, hypercore_store).await,
             _ => panic!("{:?}", usage()),
         };
-        log_if_error(&result);
     });
 }
 
@@ -84,17 +86,28 @@ fn usage() {
 // or once when connected (if client).
 // Unfortunately, everything that touches the hypercore_store or a hypercore has to be generic
 // at the moment.
+#[instrument(skip_all, ret)]
 async fn onconnection(
     stream: TcpStream,
     is_initiator: bool,
     hypercore_store: Arc<HypercoreStore>,
 ) -> Result<()> {
     info!("onconnection, initiator: {}", is_initiator);
-    let mut protocol = ProtocolBuilder::new(is_initiator).connect(stream);
+
+    let framed = Uint24LELengthPrefixedFraming::new(stream);
+    let cipher = if is_initiator {
+        let ss = SecStream::new_initiator_xx(&[])?;
+        Cipher::new(Some(Box::new(framed)), ss.into())
+    } else {
+        let keypair = generate_keypair().unwrap();
+        let ss = SecStream::new_responder_xx(&keypair, &[])?;
+        Cipher::new(Some(Box::new(framed)), ss.into())
+    };
+    let mut protocol = Protocol::new(Box::new(cipher));
     info!("protocol created, polling for next()");
     while let Some(event) = protocol.next().await {
-        let event = event?;
         info!("protocol event {:?}", event);
+        let event = event?;
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
@@ -126,17 +139,17 @@ struct HypercoreStore {
     hypercores: HashMap<String, Arc<HypercoreWrapper>>,
 }
 impl HypercoreStore {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let hypercores = HashMap::new();
         Self { hypercores }
     }
 
-    pub fn add(&mut self, hypercore: HypercoreWrapper) {
+    fn add(&mut self, hypercore: HypercoreWrapper) {
         let hdkey = hex::encode(hypercore.discovery_key);
         self.hypercores.insert(hdkey, Arc::new(hypercore));
     }
 
-    pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<HypercoreWrapper>> {
+    fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<HypercoreWrapper>> {
         let hdkey = hex::encode(discovery_key);
         self.hypercores.get(&hdkey)
     }
@@ -151,7 +164,7 @@ struct HypercoreWrapper {
 }
 
 impl HypercoreWrapper {
-    pub fn from_memory_hypercore(hypercore: Hypercore) -> Self {
+    fn from_memory_hypercore(hypercore: Hypercore) -> Self {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
@@ -160,11 +173,11 @@ impl HypercoreWrapper {
         }
     }
 
-    pub fn key(&self) -> &[u8; 32] {
+    fn key(&self) -> &[u8; 32] {
         &self.key
     }
 
-    pub fn onpeer(&self, mut channel: Channel) {
+    fn onpeer(&self, mut channel: Channel) {
         let mut peer_state = PeerState::default();
         let mut hypercore = self.hypercore.clone();
         task::spawn(async move {
@@ -299,6 +312,8 @@ async fn onmessage(
                         start: info.length,
                         length: peer_state.remote_length - info.length,
                     }),
+                    manifest: false,
+                    priority: 0,
                 };
                 messages.push(Message::Request(msg));
             }
@@ -366,7 +381,9 @@ async fn onmessage(
                     println!();
                     println!("### Results");
                     println!();
-                    println!("Replication succeeded if this prints '0: hi', '1: ola', '2: hello' and '3: mundo':");
+                    println!(
+                        "Replication succeeded if this prints '0: hi', '1: ola', '2: hello' and '3: mundo':"
+                    );
                     println!();
                     for i in 0..new_info.contiguous_length {
                         println!(
@@ -405,6 +422,8 @@ async fn onmessage(
                     block: Some(request_block),
                     seek: None,
                     upgrade: None,
+                    manifest: false,
+                    priority: 0,
                 }));
             }
             channel.send_batch(&messages).await.unwrap();
@@ -414,20 +433,9 @@ async fn onmessage(
     Ok(())
 }
 
-/// Init EnvLogger, logging info, warn and error messages to stdout.
-pub fn init_logger() {
-    env_logger::from_env(Env::default().default_filter_or("info")).init();
-}
-
-/// Log a result if it's an error.
-pub fn log_if_error(result: &Result<()>) {
-    if let Err(err) = result.as_ref() {
-        log::error!("error: {}", err);
-    }
-}
-
 /// A simple async TCP server that calls an async function for each incoming connection.
-pub async fn tcp_server<F, C>(
+#[instrument(skip_all, ret)]
+async fn tcp_server<F, C>(
     address: String,
     onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
     context: C,
@@ -437,22 +445,22 @@ where
     C: Clone + Send + 'static,
 {
     let listener = TcpListener::bind(&address).await?;
-    log::info!("listening on {}", listener.local_addr()?);
+    tracing::info!("listening on {}", listener.local_addr()?);
     let mut incoming = listener.incoming();
     while let Some(Ok(stream)) = incoming.next().await {
         let context = context.clone();
         let peer_addr = stream.peer_addr().unwrap();
-        log::info!("new connection from {}", peer_addr);
+        tracing::info!("new connection from {}", peer_addr);
         task::spawn(async move {
-            let result = onconnection(stream, false, context).await;
-            log_if_error(&result);
-            log::info!("connection closed from {}", peer_addr);
+            let _ = onconnection(stream, false, context).await;
+            tracing::info!("connection closed from {}", peer_addr);
         });
     }
     Ok(())
 }
 
 /// A simple async TCP client that calls an async function when connected.
+#[instrument(skip_all, ret)]
 pub async fn tcp_client<F, C>(
     address: String,
     onconnection: impl Fn(TcpStream, bool, C) -> F + Send + Sync + Copy + 'static,
@@ -462,8 +470,8 @@ where
     F: Future<Output = Result<()>> + Send,
     C: Clone + Send + 'static,
 {
-    log::info!("attempting connection to {address}");
+    tracing::info!("attempting connection to {address}");
     let stream = TcpStream::connect(&address).await?;
-    log::info!("connected to {address}");
+    tracing::info!("connected to {address}");
     onconnection(stream, true, context).await
 }
