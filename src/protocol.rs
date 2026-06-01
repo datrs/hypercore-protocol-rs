@@ -189,7 +189,6 @@ impl Protocol {
             return_error!(this.poll_outbound_write(cx));
             return_error!(this.poll_inbound_read(cx));
             if this.io.handshake_hash().is_none() {
-                cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
         }
@@ -198,8 +197,6 @@ impl Protocol {
             if let Some(remote_pubkey) = this.io.remote_public_key() {
                 this.handshake_emitted = true;
                 return Poll::Ready(Ok(Event::Handshake(remote_pubkey)));
-            } else {
-                cx.waker().wake_by_ref();
             }
         }
 
