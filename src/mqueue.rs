@@ -94,7 +94,6 @@ impl MessageIo {
             match Sink::poll_flush(Pin::new(&mut self.stream), cx) {
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => {
-                    cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
                 Poll::Ready(Ok(())) => {}
@@ -102,7 +101,6 @@ impl MessageIo {
         }
 
         if pending {
-            cx.waker().wake_by_ref();
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -115,24 +113,29 @@ impl MessageIo {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Vec<ChannelMessage>>>> {
-        match Pin::new(&mut self.stream).poll_next(cx) {
-            Poll::Ready(Some(event)) => match event {
-                hypercore_handshake::CipherEvent::HandshakePayload(_x) => Poll::Pending,
-                hypercore_handshake::CipherEvent::Message(msg) => {
-                    match <Vec<ChannelMessage>>::decode(&msg) {
-                        Ok((messages, _rest)) => {
-                            for m in messages.iter() {
-                                trace!("RX ChannelMessage::{m}");
+        loop {
+            match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Some(event)) => match event {
+                    // Skip handshake payloads: loop so the next poll registers a waker.
+                    hypercore_handshake::CipherEvent::HandshakePayload(_x) => {}
+                    hypercore_handshake::CipherEvent::Message(msg) => {
+                        return match <Vec<ChannelMessage>>::decode(&msg) {
+                            Ok((messages, _rest)) => {
+                                for m in messages.iter() {
+                                    trace!("RX ChannelMessage::{m}");
+                                }
+                                Poll::Ready(Some(Ok(messages)))
                             }
-                            Poll::Ready(Some(Ok(messages)))
-                        }
-                        Err(e) => Poll::Ready(Some(Err(e.into()))),
+                            Err(e) => Poll::Ready(Some(Err(e.into()))),
+                        };
                     }
-                }
-                hypercore_handshake::CipherEvent::ErrStuff(e) => Poll::Ready(Some(Err(e))),
-            },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+                    hypercore_handshake::CipherEvent::ErrStuff(e) => {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                },
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }
