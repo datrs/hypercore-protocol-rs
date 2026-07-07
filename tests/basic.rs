@@ -176,3 +176,38 @@ async fn open_close_channels() -> anyhow::Result<()> {
 fn want(start: u64, length: u64) -> Message {
     Message::Want(Want { start, length })
 }
+
+/// Regression test: two `Open` messages queued before the first flush must not get batched
+/// into one multi-message write. `Vec<ChannelMessage>`'s multi-message encoding groups
+/// messages by channel number to save repeating it, but `Open`/`Close` don't have an outer
+/// channel number at all (it's embedded in their own payload, framed via a dedicated 2-byte
+/// prefix) — only the single-message path encodes them correctly. Unlike `open_close_channels`
+/// above (which fully establishes key1 before ever opening key2, so each `Open` is always
+/// flushed alone), this opens both keys back-to-back with no driving in between, so they're
+/// still queued together when the first flush happens.
+#[tokio::test]
+async fn two_opens_queued_before_first_flush() -> anyhow::Result<()> {
+    let (proto_a, proto_b) = create_pair();
+
+    let key1 = [4u8; 32];
+    let key2 = [5u8; 32];
+
+    proto_a.open(key1).await?;
+    proto_a.open(key2).await?;
+    proto_b.open(key1).await?;
+    proto_b.open(key2).await?;
+
+    let next_a = drive_until_channel(proto_a);
+    let next_b = drive_until_channel(proto_b);
+    let (proto_a, _channel_a1) = next_a.await??;
+    let (proto_b, _channel_b1) = next_b.await??;
+
+    let next_a = drive_until_channel(proto_a);
+    let next_b = drive_until_channel(proto_b);
+    let (proto_a, _channel_a2) = next_a.await??;
+    let (proto_b, _channel_b2) = next_b.await??;
+
+    assert_eq!(proto_a.channels().count(), 2);
+    assert_eq!(proto_b.channels().count(), 2);
+    Ok(())
+}
