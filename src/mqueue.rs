@@ -16,7 +16,7 @@ use futures::{Sink, Stream};
 use hypercore_handshake::{CipherTrait, state_machine::PUBLIC_KEYLEN};
 use tracing::{error, instrument, trace};
 
-use crate::message::ChannelMessage;
+use crate::message::{ChannelMessage, Message};
 
 /// Message IO layer that encodes/decodes `ChannelMessage` over a byte stream.
 ///
@@ -73,10 +73,24 @@ impl MessageIo {
                 break;
             }
 
-            // Batch all queued messages
+            // Batch queued messages, but never batch an `Open`/`Close` message together
+            // with anything else. `Vec<ChannelMessage>`'s multi-message wire encoding
+            // groups messages by channel number to avoid repeating it per message, but
+            // `Open`/`Close` don't have an outer channel number at all (it's embedded in
+            // their own payload, framed via a dedicated 2-byte prefix) — only the
+            // single-message path encodes them correctly. So an `Open`/`Close` at the
+            // front of the queue is sent alone; a batch otherwise stops right before one.
             let mut messages = vec![];
-            while let Some(msg) = self.write_queue.pop_front() {
-                messages.push(msg);
+            while let Some(front) = self.write_queue.front() {
+                let front_is_open_or_close =
+                    matches!(front.message, Message::Open(_) | Message::Close(_));
+                if front_is_open_or_close && !messages.is_empty() {
+                    break;
+                }
+                messages.push(self.write_queue.pop_front().expect("front just checked"));
+                if front_is_open_or_close {
+                    break;
+                }
             }
 
             let buf = match messages.to_encoded_bytes() {

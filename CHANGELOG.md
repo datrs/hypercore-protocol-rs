@@ -2,12 +2,17 @@
 
 All notable changes to this Rust implementation of hypercore-protocol will be documented here.
 
-### unreleased
+### 7.0.1
+
+* Rewrite serveral async methods to return owned futures and fix a busy loop ([PR 148](https://github.com/datrs/hypercore-protocol-rs/pull/24)).
+
+### 7.0.0
 
 BIG CHANGES:
 * Encryption and framing of streams has been moved out of this crate into `hypercore_handshake` and `uint24le_framing` respectively. This had big impacts on the public API. Now `Protocol::new` just takes a `impl CipherTrait` argument.
-* Remove dependence on `hypercore` instead we use `hypercore_schema`.
+* Remove dependence on `hypercore` instead we use `hypercore_schema` (so hypercore related features have been removed).
 * Bumped to edition 2024.
+* Dropped support for async-std (and its feature flag)
 
 ### 0.6.1
 

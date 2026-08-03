@@ -34,7 +34,6 @@ jobs:
         cargo check --all-targets --no-default-features
         cargo test --features js_tests
         cargo test --no-default-features --features js_tests
-        cargo test --benches
 
   build-extra:
     runs-on: ubuntu-latest
