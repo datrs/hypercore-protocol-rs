@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Removed
+
+
+
+## [0.7.2] - 2026-08-03
+
+### Added
+
+### Changed
+
 * Fix `Open`/`Close` messages corrupting multi-message batches.
 
 ### Removed
@@ -73,7 +83,8 @@ Support hypercore v0.13.0 which [removed generic parameters from Hypercore and S
 initial release
 
 <!-- next-url -->
-[Unreleased]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/datrs/hypercore-protocol-rs/compare/v0.6.0...v0.6.1
